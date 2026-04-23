@@ -1,0 +1,91 @@
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Docker
+docker-compose.yml
+.dockerignore
+
+# Documentation
+README.md
+*.md
+docs/
+
+# Environment files — never bake secrets into the image
+.env
+.env.*
+!.env.example
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+.installed.cfg
+*.egg
+*.coverage
+.pytest_cache/
+.tox/
+.hypothesis/
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv/
+
+# IDE / OS
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Node
+frontend/node_modules/
+frontend/.npm
+frontend/.eslintcache
+frontend/coverage/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# Test results
+.coverage
+htmlcov/
+coverage/
+
+# Temporary
+tmp/
+temp/
+*.tmp
+*.bak
+*.backup
+
+# Large binary / data files (not needed in the image)
+*.pt
+*.pth
+*.onnx
+*.db
+*.csv
+*.xlsx
+*.mp4
+*.avi
+*.mov
+test_data_water_pipe/
+reference_code/
+datavision_hf_models/
+certificate/
+generate_proper_ssl.sh
+results.csv
+training_val_logs.txt

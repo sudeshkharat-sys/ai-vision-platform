@@ -1,0 +1,209 @@
+services:
+
+  # ── PostgreSQL ────────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:17-alpine
+    container_name: aivision-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_HOST_AUTH_METHOD: md5
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - aivision-network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 512M
+
+  # ── Redis (Celery broker + result backend) ────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: aivision-redis
+    command: redis-server --appendonly yes
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - aivision-network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 128M
+
+  # ── Backend (FastAPI + uvicorn) ───────────────────────────────────────────────
+  # GPU access is enabled via the NVIDIA Container Toolkit (nvidia-ctk).
+  # The T4 GPU is exposed to both backend and celery for inference / training.
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        REACT_APP_API_URL: /api/v1
+        REACT_APP_BASE_URL: ""
+    container_name: aivision-backend
+    environment:
+      # PostgreSQL
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: ${POSTGRES_PORT:-5432}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      DB_POOL_SIZE: ${DB_POOL_SIZE:-10}
+      DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-20}
+      # Redis / Celery
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/2
+      # File storage
+      UPLOAD_DIR: /app/data/uploads
+      MODEL_DIR: /app/data/models
+      # HuggingFace model paths (mount from host or set to download location)
+      GROUNDING_DINO_PATH: ${GROUNDING_DINO_PATH:-/app/data/models/grounding-dino-base}
+      SAM2_PATH: ${SAM2_PATH:-/app/data/models/sam2-hiera-large}
+      SIGLIP_PATH: ${SIGLIP_PATH:-/app/data/models/siglip-so400m-patch14-384}
+      # Training defaults
+      SEED_LEARNING_RATE: ${SEED_LEARNING_RATE:-0.005}
+    ports:
+      - "8000:8000"          # Direct API access (also used internally by Nginx)
+    volumes:
+      - uploads_data:/app/data/uploads
+      - ./data/models:/app/data/models
+      - frontend_build:/app/frontend/build  # Shared with Nginx
+      - ./logs:/app/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\" || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    networks:
+      - aivision-network
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  # ── Celery Worker (async tasks: training, auto-annotate, video processing) ────
+  celery:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: aivision-celery
+    command: >
+      python3 -m celery -A app.tasks.celery_app worker
+      --loglevel=info
+      --pool=solo
+      -Q celery
+    environment:
+      # PostgreSQL
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: ${POSTGRES_PORT:-5432}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      # Redis / Celery
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/2
+      # File storage
+      UPLOAD_DIR: /app/data/uploads
+      MODEL_DIR: /app/data/models
+      GROUNDING_DINO_PATH: ${GROUNDING_DINO_PATH:-/app/data/models/grounding-dino-base}
+      SAM2_PATH: ${SAM2_PATH:-/app/data/models/sam2-hiera-large}
+      SIGLIP_PATH: ${SIGLIP_PATH:-/app/data/models/siglip-so400m-patch14-384}
+      SEED_LEARNING_RATE: ${SEED_LEARNING_RATE:-0.005}
+    volumes:
+      - uploads_data:/app/data/uploads
+      - ./data/models:/app/data/models
+      - ./logs:/app/logs
+    depends_on:
+      backend:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - aivision-network
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  # ── Nginx (reverse proxy + SSL termination + static frontend) ─────────────────
+  # Port 3001 → HTTP frontend (no SSL, for internal/dev access)
+  # Port 80   → HTTP to HTTPS redirect
+  # Port 443  → HTTPS: serves frontend static files + proxies /api/v1 → backend:8000
+  nginx:
+    build:
+      context: .
+      dockerfile: Dockerfile.nginx
+    container_name: aivision-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+      - "3001:3001"          # Direct HTTP frontend access
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./ssl:/etc/nginx/ssl:ro            # fullchain.pem, key.pem, ca-chain.crt
+      - frontend_build:/usr/share/nginx/html:ro   # Shared with backend
+      - uploads_data:/var/www/uploads:ro
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - aivision-network
+    restart: unless-stopped
+
+networks:
+  aivision-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  uploads_data:
+    driver: local
+  frontend_build:
+    driver: local

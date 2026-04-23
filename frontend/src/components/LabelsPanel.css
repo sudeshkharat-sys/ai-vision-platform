@@ -1,0 +1,502 @@
+/* ══════════════════════════════════════════════════════
+   LabelsPanel — Edit Labels modal
+   Accent: crimson (#dc143c)
+   Prefix: lp-
+   ══════════════════════════════════════════════════════ */
+
+/* ── Overlay ─────────────────────────────────────────── */
+.lp-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.4);
+    backdrop-filter: blur(4px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1100;
+    padding: 24px;
+}
+
+/* ── Panel ───────────────────────────────────────────── */
+.lp-panel {
+    background: #ffffff;
+    border: 1px solid #e5e5e5;
+    border-radius: 16px;
+    width: 100%;
+    max-width: 480px;
+    max-height: 80vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    box-shadow:
+        0 0 0 1px rgba(220, 20, 60, 0.04),
+        0 24px 64px rgba(0, 0, 0, 0.15);
+}
+
+/* ── Header ──────────────────────────────────────────── */
+.lp-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 20px 24px 16px;
+    background: #ffffff;
+    border-bottom: 1px solid #e5e5e5;
+    flex-shrink: 0;
+}
+
+.lp-header-left {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.lp-header-icon {
+    font-size: 24px;
+    line-height: 1;
+    color: #dc143c;
+    display: flex;
+    align-items: center;
+}
+
+.lp-title {
+    margin: 0;
+    font-size: 16px;
+    font-weight: 700;
+    color: #1a1a1a;
+    letter-spacing: -0.01em;
+}
+
+.lp-subtitle {
+    margin: 2px 0 0;
+    font-size: 12px;
+    color: #666666;
+}
+
+.lp-close {
+    background: #f5f5f5;
+    border: 1px solid #e5e5e5;
+    border-radius: 8px;
+    color: #666666;
+    font-size: 14px;
+    width: 32px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: all 0.15s;
+    flex-shrink: 0;
+}
+
+.lp-close:hover {
+    background: rgba(220, 20, 60, 0.08);
+    border-color: rgba(220, 20, 60, 0.3);
+    color: #dc143c;
+}
+
+/* ── Body ────────────────────────────────────────────── */
+.lp-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 20px 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.lp-body::-webkit-scrollbar { width: 4px; }
+.lp-body::-webkit-scrollbar-track { background: transparent; }
+.lp-body::-webkit-scrollbar-thumb { background: #e5e5e5; border-radius: 2px; }
+
+/* ── Stats row ───────────────────────────────────────── */
+.lp-stats-row {
+    display: flex;
+    gap: 12px;
+}
+
+.lp-stat-chip {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    background: rgba(220, 20, 60, 0.06);
+    border: 1px solid rgba(220, 20, 60, 0.14);
+    border-radius: 10px;
+    padding: 10px 20px;
+    min-width: 80px;
+}
+
+.lp-stat-num {
+    font-size: 20px;
+    font-weight: 700;
+    color: #dc143c;
+    line-height: 1;
+}
+
+.lp-stat-label {
+    font-size: 11px;
+    color: #666666;
+    margin-top: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+/* ── Error banner ────────────────────────────────────── */
+.lp-error {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    background: rgba(220, 20, 60, 0.06);
+    border: 1px solid rgba(220, 20, 60, 0.2);
+    border-radius: 8px;
+    padding: 10px 14px;
+    font-size: 13px;
+    color: #dc143c;
+}
+
+.lp-error-dismiss {
+    background: none;
+    border: none;
+    color: #dc143c;
+    cursor: pointer;
+    font-size: 12px;
+    padding: 2px 4px;
+    line-height: 1;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+}
+
+/* ── Delete confirmation card ────────────────────────── */
+.lp-confirm-card {
+    background: rgba(220, 38, 38, 0.04);
+    border: 1px solid rgba(220, 38, 38, 0.18);
+    border-radius: 12px;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    animation: lp-slide-down 0.15s ease;
+}
+
+@keyframes lp-slide-down {
+    from { opacity: 0; transform: translateY(-6px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+
+.lp-confirm-title {
+    margin: 0;
+    font-size: 14px;
+    color: #1a1a1a;
+}
+
+.lp-confirm-title strong {
+    color: #dc143c;
+}
+
+.lp-confirm-sub {
+    margin: 0;
+    font-size: 12px;
+    color: #666666;
+}
+
+.lp-confirm-check {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    color: #666666;
+    cursor: pointer;
+    user-select: none;
+}
+
+.lp-confirm-check input[type="checkbox"] {
+    accent-color: #dc143c;
+    width: 15px;
+    height: 15px;
+    cursor: pointer;
+    flex-shrink: 0;
+}
+
+.lp-confirm-check strong {
+    color: #d97706;
+}
+
+.lp-confirm-btns {
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+}
+
+/* ── Label list ──────────────────────────────────────── */
+.lp-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    flex: 1;
+}
+
+.lp-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 32px 16px;
+    color: #999999;
+    text-align: center;
+    gap: 6px;
+}
+
+.lp-empty-icon {
+    font-size: 32px;
+    opacity: 0.4;
+    display: block;
+    margin-bottom: 4px;
+    color: #dc143c;
+}
+
+.lp-empty-sub {
+    font-size: 12px;
+    color: #666666;
+}
+
+/* ── Label row ───────────────────────────────────────── */
+.lp-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: #ffffff;
+    border: 1px solid #e5e5e5;
+    border-radius: 10px;
+    padding: 10px 12px;
+    transition: background 0.12s, border-color 0.12s;
+    min-height: 46px;
+}
+
+.lp-row:hover {
+    background: #f5f5f5;
+    border-color: #d0d0d0;
+}
+
+.lp-row--editing {
+    background: rgba(220, 20, 60, 0.04);
+    border-color: rgba(220, 20, 60, 0.25) !important;
+}
+
+.lp-row--deleting {
+    background: rgba(220, 38, 38, 0.04);
+    border-color: rgba(220, 38, 38, 0.18) !important;
+}
+
+.lp-dot {
+    width: 11px;
+    height: 11px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    box-shadow: 0 0 5px rgba(0, 0, 0, 0.15);
+}
+
+.lp-name {
+    flex: 1;
+    font-size: 14px;
+    color: #1a1a1a;
+    font-weight: 500;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.lp-count {
+    font-size: 12px;
+    color: #666666;
+    background: #f5f5f5;
+    border: 1px solid #e5e5e5;
+    border-radius: 5px;
+    padding: 1px 7px;
+    min-width: 28px;
+    text-align: center;
+    flex-shrink: 0;
+}
+
+/* ── Rename input ────────────────────────────────────── */
+.lp-rename-input {
+    flex: 1;
+    background: #f5f5f5;
+    border: 1px solid rgba(220, 20, 60, 0.35);
+    border-radius: 6px;
+    color: #1a1a1a;
+    font-size: 14px;
+    font-weight: 500;
+    padding: 4px 8px;
+    outline: none;
+    min-width: 0;
+}
+
+.lp-rename-input:focus {
+    border-color: #dc143c;
+    box-shadow: 0 0 0 2px rgba(220, 20, 60, 0.12);
+}
+
+/* ── Row action buttons ──────────────────────────────── */
+.lp-row-actions {
+    display: flex;
+    gap: 3px;
+    flex-shrink: 0;
+}
+
+.lp-icon-btn {
+    background: none;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    color: #999999;
+    font-size: 13px;
+    width: 28px;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: all 0.12s;
+    flex-shrink: 0;
+}
+
+.lp-icon-btn:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+}
+
+.lp-icon-btn:not(:disabled):hover {
+    background: #f5f5f5;
+    border-color: #e5e5e5;
+    color: #666666;
+}
+
+.lp-icon-btn--save:not(:disabled) {
+    color: #16a34a;
+}
+.lp-icon-btn--save:not(:disabled):hover {
+    background: rgba(22, 163, 74, 0.08);
+    border-color: rgba(22, 163, 74, 0.3);
+}
+
+.lp-icon-btn--cancel:not(:disabled) {
+    color: #dc143c;
+}
+.lp-icon-btn--cancel:not(:disabled):hover {
+    background: rgba(220, 20, 60, 0.08);
+    border-color: rgba(220, 20, 60, 0.3);
+}
+
+.lp-icon-btn--edit:not(:disabled):hover {
+    background: rgba(220, 20, 60, 0.08);
+    border-color: rgba(220, 20, 60, 0.3);
+    color: #dc143c;
+}
+
+.lp-icon-btn--del:not(:disabled):hover {
+    background: rgba(220, 38, 38, 0.08);
+    border-color: rgba(220, 38, 38, 0.3);
+    color: #dc2626;
+}
+
+/* ── Add row ─────────────────────────────────────────── */
+.lp-add-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    background: rgba(220, 20, 60, 0.04);
+    border: 1px solid rgba(220, 20, 60, 0.18);
+    border-radius: 10px;
+    padding: 10px 12px;
+    animation: lp-slide-down 0.15s ease;
+}
+
+.lp-add-input {
+    flex: 1;
+    background: #f5f5f5;
+    border: 1px solid rgba(220, 20, 60, 0.25);
+    border-radius: 6px;
+    color: #1a1a1a;
+    font-size: 14px;
+    padding: 6px 10px;
+    outline: none;
+    min-width: 0;
+}
+
+.lp-add-input::placeholder { color: #999999; }
+
+.lp-add-input:focus {
+    border-color: #dc143c;
+    box-shadow: 0 0 0 2px rgba(220, 20, 60, 0.12);
+}
+
+.lp-add-btn {
+    width: 100%;
+    background: rgba(220, 20, 60, 0.06);
+    border: 1px dashed rgba(220, 20, 60, 0.25);
+    border-radius: 10px;
+    color: #dc143c;
+    font-size: 14px;
+    font-weight: 500;
+    padding: 12px;
+    cursor: pointer;
+    transition: all 0.15s;
+    text-align: center;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+}
+
+.lp-add-btn:hover {
+    background: rgba(220, 20, 60, 0.10);
+    border-color: rgba(220, 20, 60, 0.4);
+    border-style: solid;
+}
+
+/* ── Generic buttons ─────────────────────────────────── */
+.lp-btn {
+    padding: 7px 16px;
+    border-radius: 7px;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.12s;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+
+.lp-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+.lp-btn--primary {
+    background: #dc143c;
+    border: 1px solid #dc143c;
+    color: #ffffff;
+}
+.lp-btn--primary:not(:disabled):hover {
+    background: #b8102e;
+    border-color: #b8102e;
+}
+
+.lp-btn--ghost {
+    background: #f5f5f5;
+    border: 1px solid #e5e5e5;
+    color: #666666;
+}
+.lp-btn--ghost:not(:disabled):hover {
+    background: #ebebeb;
+    color: #1a1a1a;
+}
+
+.lp-btn--danger {
+    background: rgba(220, 38, 38, 0.08);
+    border: 1px solid rgba(220, 38, 38, 0.3);
+    color: #dc2626;
+}
+.lp-btn--danger:not(:disabled):hover {
+    background: rgba(220, 38, 38, 0.15);
+    border-color: #dc2626;
+}
