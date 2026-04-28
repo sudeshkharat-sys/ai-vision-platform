@@ -149,3 +149,4 @@ backend/data/*
 temp_dataset_*
 runs/
 venv/
+resources/
