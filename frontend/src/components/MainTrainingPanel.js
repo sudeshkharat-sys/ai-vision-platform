@@ -4,7 +4,7 @@ import {
     LineChart, Line, XAxis, YAxis, CartesianGrid,
     Tooltip, Legend, ResponsiveContainer,
 } from 'recharts';
-import { Brain, X, RefreshCw, Download, Inbox, Square, ChevronLeft, Copy } from 'lucide-react';
+import { Brain, X, RefreshCw, Download, Inbox, Square, ChevronLeft, Copy, Upload, Save } from 'lucide-react';
 import { YOLO_MODEL_GROUPS, DEFAULT_MAIN_MODEL } from '../constants/yoloModels';
 import './MainTrainingPanel.css';
 import logoImg from '../logo.png';
@@ -191,6 +191,7 @@ const MainTrainingPanel = ({ project, onClose }) => {
 
     // Config state
     const [selectedModel, setSelectedModel]     = useState(DEFAULT_MAIN_MODEL);
+    const [baseModel, setBaseModel]             = useState('');
     const [epochs, setEpochs]                   = useState(60);
     const [useSeedWeights, setUseSeedWeights]   = useState(true);
     const [imgsz, setImgsz]                     = useState(640);
@@ -199,12 +200,32 @@ const MainTrainingPanel = ({ project, onClose }) => {
     const [clahePreview, setClahePreview]       = useState(null);
     const [previewLoading, setPreviewLoading]   = useState(false);
 
+    // Saved models state
+    const [savedModels, setSavedModels]         = useState([]);
+    const [saveModal, setSaveModal]             = useState(null);
+    const [saveName, setSaveName]               = useState('');
+    const [saving, setSaving]                   = useState(false);
+    const [uploadModal, setUploadModal]         = useState(false);
+    const [uploadFile, setUploadFile]           = useState(null);
+    const [uploadName, setUploadName]           = useState('');
+    const [uploading, setUploading]             = useState(false);
+    const savePromptedRef                       = useRef(new Set());
+
     const logsEndRef = useRef(null);
     const pollRef    = useRef({});
     const jobsRef    = useRef(jobs);
     const queueRef   = useRef([]);
 
     useEffect(() => { jobsRef.current = jobs; }, [jobs]);
+
+    // ── Saved models ──────────────────────────────────────────────
+    const loadSavedModels = useCallback(() => {
+        axios.get(`${API_URL}/pipeline/saved-models/${project.id}`)
+            .then(res => setSavedModels(res.data.models || []))
+            .catch(() => {});
+    }, [project.id]);
+
+    const fmtSize = (mb) => mb == null ? '' : mb >= 1024 ? `${(mb/1024).toFixed(1)}GB` : `${mb}MB`;
 
     // ── Load stats + model status ──────────────────────────────────
     const loadData = useCallback(() => {
@@ -313,11 +334,12 @@ const MainTrainingPanel = ({ project, onClose }) => {
 
     useEffect(() => {
         loadData();
+        loadSavedModels();
         loadPersistedJobs(startPolling);
         const polls = pollRef.current;
         return () => { Object.values(polls).forEach(clearInterval); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [loadData, loadPersistedJobs]);
+    }, [loadData, loadSavedModels, loadPersistedJobs]);
 
     // auto-scroll log
     useEffect(() => {
@@ -392,6 +414,7 @@ const MainTrainingPanel = ({ project, onClose }) => {
                         newLogs = [...newLogs, '✅  Main training complete!',
                             result?.model_path ? `📦  Model: ${result.model_path}` : ''].filter(Boolean);
                         loadData();
+                        loadSavedModels();
                         setTimeout(() => dispatchQueued(), 100);
                         const finalMeta = result?.history?.length
                             ? { ...j.epochMeta, history: result.history, epoch: result.history.length }
@@ -405,6 +428,18 @@ const MainTrainingPanel = ({ project, onClose }) => {
                             },
                             finished_at: new Date().toISOString(),
                         }).catch(() => {});
+                        if (!savePromptedRef.current.has(taskId)) {
+                            savePromptedRef.current.add(taskId);
+                            setTimeout(() => {
+                                setSavedModels(prev => {
+                                    const mainCount = prev.filter(m => m.type === 'main').length;
+                                    const slug = project.name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '').slice(0, 20);
+                                    setSaveName(`${slug}_main_v${String(mainCount + 1).padStart(2, '0')}`);
+                                    return prev;
+                                });
+                                setSaveModal({ type: 'main' });
+                            }, 600);
+                        }
                         return { ...j, status: 'SUCCESS', result, logs: newLogs, epochMeta: finalMeta };
                     }
 
@@ -439,7 +474,7 @@ const MainTrainingPanel = ({ project, onClose }) => {
         if (!next) return;
         try {
             const res = await axios.post(`${API_URL}/pipeline/train-main/${next.projectId}`, {
-                model_name: next.modelName, epochs: next.epochs,
+                model_name: next.modelName, base_model: next.baseModel || '', epochs: next.epochs,
                 use_seed_weights: next.useSeedWeights, imgsz: next.imgsz,
                 preprocess: next.preprocess, batch: next.batch,
             });
@@ -496,7 +531,7 @@ const MainTrainingPanel = ({ project, onClose }) => {
             };
             queueRef.current.push({
                 jobId: placeholder.id, projectId: project.id,
-                modelName: selectedModel, epochs, useSeedWeights, imgsz, preprocess, batch,
+                modelName: selectedModel, baseModel, epochs, useSeedWeights, imgsz, preprocess, batch,
             });
             setJobs(prev => [...prev, placeholder]);
             setActiveJobId(placeholder.id);
@@ -506,7 +541,7 @@ const MainTrainingPanel = ({ project, onClose }) => {
 
         try {
             const res = await axios.post(`${API_URL}/pipeline/train-main/${project.id}`, {
-                model_name: selectedModel, epochs, use_seed_weights: useSeedWeights, imgsz, preprocess, batch,
+                model_name: selectedModel, base_model: baseModel, epochs, use_seed_weights: useSeedWeights, imgsz, preprocess, batch,
             });
             const taskId = res.data.task_id;
             const job = makeJob(taskId, selectedModel);
@@ -529,6 +564,39 @@ const MainTrainingPanel = ({ project, onClose }) => {
         } finally {
             setLaunching(false);
         }
+    };
+
+    // ── Save trained model ─────────────────────────────────────────
+    const handleSave = async () => {
+        if (!saveName.trim()) return;
+        setSaving(true);
+        try {
+            await axios.post(`${API_URL}/pipeline/save-trained-model/${project.id}`, {
+                source_type: saveModal.type,
+                name: saveName.trim(),
+                model_type: saveModal.type,
+            });
+            loadSavedModels();
+            setSaveModal(null);
+        } catch { /* ignore */ } finally { setSaving(false); }
+    };
+
+    // ── Upload model ───────────────────────────────────────────────
+    const handleUpload = async () => {
+        if (!uploadFile || !uploadName.trim()) return;
+        setUploading(true);
+        try {
+            const fd = new FormData();
+            fd.append('file', uploadFile);
+            fd.append('name', uploadName.trim());
+            await axios.post(`${API_URL}/pipeline/upload-model/${project.id}`, fd, {
+                headers: { 'Content-Type': 'multipart/form-data' },
+            });
+            loadSavedModels();
+            setUploadModal(false);
+            setUploadFile(null);
+            setUploadName('');
+        } catch { /* ignore */ } finally { setUploading(false); }
     };
 
     // ── Derived ────────────────────────────────────────────────────
@@ -643,24 +711,69 @@ const MainTrainingPanel = ({ project, onClose }) => {
                             <section className="mtp-section">
                                 <p className="mtp-section-title">Training Config</p>
 
-                                {/* YOLO architecture */}
+                                {/* Base model selector */}
                                 <div className="mtp-model-row">
-                                    <label className="mtp-model-label">YOLO Architecture</label>
-                                    <select
-                                        className="mtp-model-select"
-                                        value={selectedModel}
-                                        onChange={e => setSelectedModel(e.target.value)}
-                                    >
-                                        {YOLO_MODEL_GROUPS.map(group => (
-                                            <optgroup key={group.family} label={`${group.family}${group.note ? ` (${group.note})` : ''}`}>
-                                                {group.models.map(m => (
-                                                    <option key={m.value} value={m.value}>
-                                                        {m.label}  [{m.params}]
-                                                    </option>
+                                    <label className="mtp-model-label">
+                                        Base Model
+                                        <span className="mtp-model-hint"> (starting weights)</span>
+                                    </label>
+                                    <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                                        <select
+                                            className="mtp-model-select"
+                                            style={{ flex: 1 }}
+                                            value={baseModel || selectedModel}
+                                            onChange={e => {
+                                                const val = e.target.value;
+                                                const isSaved = savedModels.some(m => m.name === val);
+                                                if (isSaved) { setBaseModel(val); }
+                                                else { setBaseModel(''); setSelectedModel(val); }
+                                            }}
+                                        >
+                                            {savedModels.filter(m => m.type === 'seed').length > 0 && (
+                                                <optgroup label="── Your Seed Models ──">
+                                                    {savedModels.filter(m => m.type === 'seed').map(m => (
+                                                        <option key={m.name} value={m.name}>{m.stem} ({fmtSize(m.file_size_mb)})</option>
+                                                    ))}
+                                                </optgroup>
+                                            )}
+                                            {savedModels.filter(m => m.type === 'main').length > 0 && (
+                                                <optgroup label="── Your Main Models ──">
+                                                    {savedModels.filter(m => m.type === 'main').map(m => (
+                                                        <option key={m.name} value={m.name}>{m.stem} ({fmtSize(m.file_size_mb)})</option>
+                                                    ))}
+                                                </optgroup>
+                                            )}
+                                            {savedModels.filter(m => m.type === 'uploaded').length > 0 && (
+                                                <optgroup label="── Uploaded Models ──">
+                                                    {savedModels.filter(m => m.type === 'uploaded').map(m => (
+                                                        <option key={m.name} value={m.name}>{m.stem} ({fmtSize(m.file_size_mb)})</option>
+                                                    ))}
+                                                </optgroup>
+                                            )}
+                                            <optgroup label="── YOLO Defaults ──">
+                                                {YOLO_MODEL_GROUPS.map(group => (
+                                                    <optgroup key={group.family} label={`  ${group.family}${group.note ? ` (${group.note})` : ''}`}>
+                                                        {group.models.map(m => (
+                                                            <option key={m.value} value={m.value}>{m.label}  [{m.params}]</option>
+                                                        ))}
+                                                    </optgroup>
                                                 ))}
                                             </optgroup>
-                                        ))}
-                                    </select>
+                                        </select>
+                                        <button
+                                            onClick={() => setUploadModal(true)}
+                                            title="Upload a .pt model file"
+                                            style={{ whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: 4, padding: '6px 10px', fontSize: 12, background: '#f5f5f5', border: '1px solid #e0e0e0', borderRadius: 6, cursor: 'pointer', color: '#444' }}
+                                        >
+                                            <Upload size={13} /> Upload
+                                        </button>
+                                    </div>
+                                    {baseModel && (
+                                        <div className="mtp-info" style={{ marginTop: 6, fontSize: 11 }}>
+                                            Using saved model: <strong>{baseModel}</strong>
+                                            <button onClick={() => setBaseModel('')} style={{ marginLeft: 8, background: 'none', border: 'none', color: '#dc143c', cursor: 'pointer', fontSize: 11 }}>✕ Use YOLO default</button>
+                                        </div>
+                                    )}
                                 </div>
 
                                 {/* Fine-tune from seed toggle */}
@@ -1021,6 +1134,75 @@ const MainTrainingPanel = ({ project, onClose }) => {
                     )}
                 </div>
             </div>
+
+            {/* ── Save model modal ── */}
+            {saveModal && (
+                <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <div style={{ background: '#fff', borderRadius: 12, padding: 28, width: 380, boxShadow: '0 20px 60px rgba(0,0,0,0.2)' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
+                            <Save size={20} color="#dc143c" />
+                            <h3 style={{ margin: 0, fontSize: 16, fontWeight: 600 }}>Training Complete — Save Model?</h3>
+                        </div>
+                        <p style={{ fontSize: 13, color: '#666', marginBottom: 16 }}>
+                            Save this model to reuse as base weights for future training runs. Only save if results are satisfactory.
+                        </p>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 16 }}>
+                            <input
+                                style={{ flex: 1, padding: '8px 10px', border: '1px solid #ddd', borderRadius: 6, fontSize: 13 }}
+                                value={saveName}
+                                onChange={e => setSaveName(e.target.value)}
+                                placeholder="model name"
+                                autoFocus
+                            />
+                            <span style={{ fontSize: 13, color: '#888' }}>.pt</span>
+                        </div>
+                        <div style={{ display: 'flex', gap: 8 }}>
+                            <button onClick={handleSave} disabled={saving || !saveName.trim()}
+                                style={{ flex: 1, padding: '9px 0', background: '#dc143c', color: '#fff', border: 'none', borderRadius: 7, fontSize: 13, fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
+                                <Save size={14} /> {saving ? 'Saving…' : 'Save'}
+                            </button>
+                            <button onClick={() => setSaveModal(null)}
+                                style={{ flex: 1, padding: '9px 0', background: '#f5f5f5', color: '#444', border: '1px solid #e0e0e0', borderRadius: 7, fontSize: 13, cursor: 'pointer' }}>
+                                Discard
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* ── Upload model modal ── */}
+            {uploadModal && (
+                <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <div style={{ background: '#fff', borderRadius: 12, padding: 28, width: 400, boxShadow: '0 20px 60px rgba(0,0,0,0.2)' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
+                            <Upload size={20} color="#dc143c" />
+                            <h3 style={{ margin: 0, fontSize: 16, fontWeight: 600 }}>Upload Custom Model</h3>
+                        </div>
+                        <div style={{ background: '#fff8e1', border: '1px solid #ffd54f', borderRadius: 7, padding: '10px 12px', fontSize: 12, color: '#7a5c00', marginBottom: 16 }}>
+                            ⚠️ Make sure your project classes match the uploaded model's classes before training.
+                        </div>
+                        <input type="file" accept=".pt"
+                            onChange={e => { const f = e.target.files[0]; setUploadFile(f); if (f) setUploadName(f.name.replace(/\.pt$/i, '')); }}
+                            style={{ display: 'block', marginBottom: 12, fontSize: 13 }}
+                        />
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 16 }}>
+                            <input style={{ flex: 1, padding: '8px 10px', border: '1px solid #ddd', borderRadius: 6, fontSize: 13 }}
+                                value={uploadName} onChange={e => setUploadName(e.target.value)} placeholder="model name" />
+                            <span style={{ fontSize: 13, color: '#888' }}>.pt</span>
+                        </div>
+                        <div style={{ display: 'flex', gap: 8 }}>
+                            <button onClick={handleUpload} disabled={uploading || !uploadFile || !uploadName.trim()}
+                                style={{ flex: 1, padding: '9px 0', background: '#dc143c', color: '#fff', border: 'none', borderRadius: 7, fontSize: 13, fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
+                                <Upload size={14} /> {uploading ? 'Uploading…' : 'Upload'}
+                            </button>
+                            <button onClick={() => { setUploadModal(false); setUploadFile(null); setUploadName(''); }}
+                                style={{ flex: 1, padding: '9px 0', background: '#f5f5f5', color: '#444', border: '1px solid #e0e0e0', borderRadius: 7, fontSize: 13, cursor: 'pointer' }}>
+                                Cancel
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 };

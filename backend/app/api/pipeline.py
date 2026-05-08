@@ -1,9 +1,9 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from typing import List, Optional
 from datetime import datetime
-import base64, io, cv2, numpy as np
+import base64, io, cv2, numpy as np, json, re, shutil
 from ..tasks.training import train_seed_model, train_main_model
 from ..tasks.auto_annotate import auto_annotate_remaining
 from ..tasks.ai_prompt import detect_with_prompt, bulk_detect_with_prompt
@@ -82,8 +82,141 @@ async def get_available_models():
 
 # ── Training ──────────────────────────────────────────────────────
 
+# ── Saved models helpers ──────────────────────────────────────────
+
+def _saved_models_dir(project_id: str):
+    d = settings.model_dir / project_id / "saved"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+def _load_models_meta(project_id: str) -> dict:
+    f = settings.model_dir / project_id / "saved" / "_meta.json"
+    if f.exists():
+        try:
+            return json.loads(f.read_text())
+        except Exception:
+            return {}
+    return {}
+
+def _save_models_meta(project_id: str, meta: dict):
+    f = settings.model_dir / project_id / "saved" / "_meta.json"
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(json.dumps(meta, indent=2))
+
+def _safe_model_name(name: str) -> str:
+    name = re.sub(r'[^\w\-.]', '_', name.strip())
+    if not name.endswith('.pt'):
+        name += '.pt'
+    return name
+
+
+@router.get("/saved-models/{project_id}")
+async def list_saved_models(
+    project_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    await get_owned_project(project_id, current_user, db)
+    saved_dir = _saved_models_dir(project_id)
+    meta = _load_models_meta(project_id)
+    models = []
+    for f in sorted(saved_dir.glob("*.pt")):
+        stat = f.stat()
+        m = meta.get(f.name, {})
+        models.append({
+            "name": f.name,
+            "stem": f.stem,
+            "type": m.get("type", "uploaded"),
+            "file_size_mb": round(stat.st_size / (1024 * 1024), 2),
+            "created_at": m.get("created_at", datetime.fromtimestamp(stat.st_mtime).isoformat()),
+        })
+    return {"models": models}
+
+
+class SaveTrainedModelRequest(BaseModel):
+    source_type: str   # "seed" or "main"
+    name: str          # user-given name (without .pt)
+    model_type: str    # "seed" or "main"
+
+
+@router.post("/save-trained-model/{project_id}")
+async def save_trained_model(
+    project_id: str,
+    body: SaveTrainedModelRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    await get_owned_project(project_id, current_user, db)
+    name = _safe_model_name(body.name)
+    source = settings.model_dir / project_id / f"{body.source_type}_best.pt"
+    if not source.exists():
+        raise HTTPException(status_code=404, detail="Source model not found — train first")
+    dest = _saved_models_dir(project_id) / name
+    shutil.copy(source, dest)
+    meta = _load_models_meta(project_id)
+    meta[name] = {"type": body.model_type, "created_at": datetime.utcnow().isoformat()}
+    _save_models_meta(project_id, meta)
+    return {"name": name, "saved": True}
+
+
+@router.post("/upload-model/{project_id}")
+async def upload_model(
+    project_id: str,
+    file: UploadFile = File(...),
+    name: str = Form(...),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    await get_owned_project(project_id, current_user, db)
+    name = _safe_model_name(name)
+    content = await file.read()
+    if len(content) < 100:
+        raise HTTPException(status_code=400, detail="Invalid or empty model file")
+    dest = _saved_models_dir(project_id) / name
+    dest.write_bytes(content)
+    meta = _load_models_meta(project_id)
+    meta[name] = {"type": "uploaded", "created_at": datetime.utcnow().isoformat()}
+    _save_models_meta(project_id, meta)
+    return {"name": name, "uploaded": True, "size_mb": round(len(content) / (1024 * 1024), 2)}
+
+
+@router.delete("/saved-models/{project_id}/{model_name}")
+async def delete_saved_model(
+    project_id: str,
+    model_name: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    await get_owned_project(project_id, current_user, db)
+    target = _saved_models_dir(project_id) / model_name
+    if not target.exists():
+        raise HTTPException(status_code=404, detail="Model not found")
+    target.unlink()
+    meta = _load_models_meta(project_id)
+    meta.pop(model_name, None)
+    _save_models_meta(project_id, meta)
+    return {"deleted": True}
+
+
+@router.get("/download-saved-model/{project_id}/{model_name}")
+async def download_saved_model(
+    project_id: str,
+    model_name: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    await get_owned_project(project_id, current_user, db)
+    target = _saved_models_dir(project_id) / model_name
+    if not target.exists():
+        raise HTTPException(status_code=404, detail="Model not found")
+    return FileResponse(str(target), media_type="application/octet-stream", filename=model_name)
+
+
+# ── Training ──────────────────────────────────────────────────────
+
 class TrainSeedRequest(BaseModel):
     model_name: str = "yolo11s.pt"
+    base_model: str = ""   # if set: filename of a saved model to use as base weights
     epochs: int = 100
     imgsz: int = 640
     preprocess: bool = True
@@ -99,14 +232,20 @@ async def start_seed_training(
 ):
     await get_owned_project(project_id, current_user, db)
     req = body or TrainSeedRequest()
+    resolved = req.model_name
+    if req.base_model:
+        p = _saved_models_dir(project_id) / req.base_model
+        if p.exists():
+            resolved = str(p)
     task = train_seed_model.delay(
-        project_id, req.model_name, req.epochs, req.imgsz, req.preprocess, req.batch
+        project_id, resolved, req.epochs, req.imgsz, req.preprocess, req.batch
     )
     return {"task_id": task.id, "status": "queued"}
 
 
 class TrainMainRequest(BaseModel):
     model_name: str = "yolo11s.pt"
+    base_model: str = ""   # if set: filename of a saved model to use as base weights
     epochs: int = 150
     use_seed_weights: bool = True
     imgsz: int = 640
@@ -123,8 +262,13 @@ async def start_main_training(
 ):
     await get_owned_project(project_id, current_user, db)
     req = body or TrainMainRequest()
+    resolved = req.model_name
+    if req.base_model:
+        p = _saved_models_dir(project_id) / req.base_model
+        if p.exists():
+            resolved = str(p)
     task = train_main_model.delay(
-        project_id, req.model_name, req.epochs,
+        project_id, resolved, req.epochs,
         req.use_seed_weights, req.imgsz, req.preprocess, req.batch
     )
     return {"task_id": task.id, "status": "queued"}

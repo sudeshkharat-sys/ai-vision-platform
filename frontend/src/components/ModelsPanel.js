@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
-import { Eye, Leaf, Target, X, RefreshCw, Brain, HardDrive, TrendingUp, Calendar, Download, RotateCcw, Info, Check, Circle } from 'lucide-react';
+import { Eye, Leaf, Target, X, RefreshCw, Brain, HardDrive, TrendingUp, Calendar, Download, RotateCcw, Info, Check, Circle, Trash2, Upload } from 'lucide-react';
 import './ModelsPanel.css';
 import logoImg from '../logo.png';
 
@@ -265,21 +265,34 @@ function ModelCard({ type, data, onTrain, onDownload, downloading }) {
    Main Panel
    ───────────────────────────────────────────────────────────────── */
 const ModelsPanel = ({ project, onClose, onGoToTrain }) => {
-    const [details, setDetails]     = useState(null);
-    const [loading, setLoading]     = useState(true);
-    const [error, setError]         = useState(null);
-    const [downloading, setDownloading] = useState(null); // 'seed' | 'main' | null
+    const [details, setDetails]         = useState(null);
+    const [loading, setLoading]         = useState(true);
+    const [error, setError]             = useState(null);
+    const [downloading, setDownloading] = useState(null);
+    const [savedModels, setSavedModels] = useState([]);
+    const [deleting, setDeleting]       = useState(null);
+
+    const fmtSizeMb = (mb) => mb == null ? '—' : mb >= 1024 ? `${(mb/1024).toFixed(1)} GB` : `${mb} MB`;
+    const fmtDateShort = (iso) => iso ? new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—';
+
+    const loadSavedModels = useCallback(() => {
+        axios.get(`${API_URL}/pipeline/saved-models/${project.id}`)
+            .then(res => setSavedModels(res.data.models || []))
+            .catch(() => {});
+    }, [project.id]);
 
     const load = useCallback(() => {
         setLoading(true);
         setError(null);
-        axios.get(`${API_URL}/pipeline/model-details/${project.id}`)
-            .then(res => setDetails(res.data))
+        Promise.all([
+            axios.get(`${API_URL}/pipeline/model-details/${project.id}`),
+        ])
+            .then(([detRes]) => setDetails(detRes.data))
             .catch(() => setError('Could not load model details.'))
             .finally(() => setLoading(false));
     }, [project.id]);
 
-    useEffect(() => { load(); }, [load]);
+    useEffect(() => { load(); loadSavedModels(); }, [load, loadSavedModels]);
 
     const handleDownload = async (type) => {
         setDownloading(type);
@@ -290,22 +303,42 @@ const ModelsPanel = ({ project, onClose, onGoToTrain }) => {
             );
             const url  = URL.createObjectURL(new Blob([res.data]));
             const link = document.createElement('a');
-            link.href        = url;
-            link.download    = `${type}_best.pt`;
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-            URL.revokeObjectURL(url);
-        } catch {
-            setError(`Failed to download ${type} model.`);
-        } finally {
-            setDownloading(null);
-        }
+            link.href = url; link.download = `${type}_best.pt`;
+            document.body.appendChild(link); link.click();
+            document.body.removeChild(link); URL.revokeObjectURL(url);
+        } catch { setError(`Failed to download ${type} model.`); }
+        finally { setDownloading(null); }
+    };
+
+    const handleDownloadSaved = async (modelName) => {
+        setDownloading(modelName);
+        try {
+            const res = await axios.get(
+                `${API_URL}/pipeline/download-saved-model/${project.id}/${modelName}`,
+                { responseType: 'blob' }
+            );
+            const url  = URL.createObjectURL(new Blob([res.data]));
+            const link = document.createElement('a');
+            link.href = url; link.download = modelName;
+            document.body.appendChild(link); link.click();
+            document.body.removeChild(link); URL.revokeObjectURL(url);
+        } catch { setError(`Failed to download ${modelName}.`); }
+        finally { setDownloading(null); }
+    };
+
+    const handleDeleteSaved = async (modelName) => {
+        if (!window.confirm(`Delete "${modelName}"? This cannot be undone.`)) return;
+        setDeleting(modelName);
+        try {
+            await axios.delete(`${API_URL}/pipeline/saved-models/${project.id}/${modelName}`);
+            loadSavedModels();
+        } catch { setError(`Failed to delete ${modelName}.`); }
+        finally { setDeleting(null); }
     };
 
     const handleTrain = (type) => {
         onClose();
-        onGoToTrain(type);  // 'seed' | 'main'
+        onGoToTrain(type);
     };
 
     return (
@@ -322,7 +355,7 @@ const ModelsPanel = ({ project, onClose, onGoToTrain }) => {
                         </div>
                     </div>
                     <div className="mp-header-actions">
-                        <button className="mp-btn-refresh" onClick={load} title="Refresh">
+                        <button className="mp-btn-refresh" onClick={() => { load(); loadSavedModels(); }} title="Refresh">
                             <RefreshCw size={15} />
                         </button>
                         <button className="mp-btn-close" onClick={onClose}><X size={18} /></button>
@@ -361,6 +394,51 @@ const ModelsPanel = ({ project, onClose, onGoToTrain }) => {
                             />
                         </div>
                     ) : null}
+
+                    {/* ── Saved / Named Models ── */}
+                    {savedModels.length > 0 && (
+                        <div style={{ marginTop: 24 }}>
+                            <h3 style={{ fontSize: 14, fontWeight: 600, color: '#333', marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
+                                <HardDrive size={16} color="#dc143c" /> Saved Models
+                                <span style={{ fontSize: 11, fontWeight: 400, color: '#888' }}>— available as base weights for retraining</span>
+                            </h3>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                                {['seed', 'main', 'uploaded'].map(type => {
+                                    const group = savedModels.filter(m => m.type === type);
+                                    if (!group.length) return null;
+                                    const label = { seed: 'Seed Models', main: 'Main Models', uploaded: 'Uploaded Models' }[type];
+                                    const color = { seed: '#dc143c', main: '#b8102e', uploaded: '#6366f1' }[type];
+                                    return (
+                                        <div key={type}>
+                                            <p style={{ fontSize: 11, fontWeight: 600, color, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 6 }}>{label}</p>
+                                            {group.map(m => (
+                                                <div key={m.name} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', background: '#fafafa', border: '1px solid #eee', borderRadius: 8, marginBottom: 6 }}>
+                                                    <div style={{ flex: 1, minWidth: 0 }}>
+                                                        <p style={{ margin: 0, fontSize: 13, fontWeight: 500, color: '#222', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.stem}</p>
+                                                        <p style={{ margin: 0, fontSize: 11, color: '#888', marginTop: 2 }}>{fmtSizeMb(m.file_size_mb)} · {fmtDateShort(m.created_at)}</p>
+                                                    </div>
+                                                    <button
+                                                        onClick={() => handleDownloadSaved(m.name)}
+                                                        disabled={downloading === m.name}
+                                                        style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '5px 10px', fontSize: 12, background: '#fff', border: '1px solid #ddd', borderRadius: 6, cursor: 'pointer', color: '#444' }}
+                                                    >
+                                                        {downloading === m.name ? '…' : <><Download size={12} /> Download</>}
+                                                    </button>
+                                                    <button
+                                                        onClick={() => handleDeleteSaved(m.name)}
+                                                        disabled={deleting === m.name}
+                                                        style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '5px 10px', fontSize: 12, background: '#fff5f5', border: '1px solid #fecaca', borderRadius: 6, cursor: 'pointer', color: '#dc2626' }}
+                                                    >
+                                                        {deleting === m.name ? '…' : <><Trash2 size={12} /> Delete</>}
+                                                    </button>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    )}
 
                     {/* Tips */}
                     {!loading && details && (
