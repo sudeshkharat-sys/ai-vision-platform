@@ -208,12 +208,14 @@ const TrainingPanel = ({ project, onClose }) => {
 
     // Saved models state
     const [savedModels, setSavedModels] = useState([]);
-    const [saveModal, setSaveModal]     = useState(null);   // { type: 'seed' }
+    const [saveModal, setSaveModal]     = useState(null);
     const [saveName, setSaveName]       = useState('');
+    const [saveNameError, setSaveNameError] = useState('');
     const [saving, setSaving]           = useState(false);
     const [uploadModal, setUploadModal] = useState(false);
     const [uploadFile, setUploadFile]   = useState(null);
     const [uploadName, setUploadName]   = useState('');
+    const [uploadNameError, setUploadNameError] = useState('');
     const [uploading, setUploading]     = useState(false);
     const savePromptedRef               = useRef(new Set());
 
@@ -561,31 +563,42 @@ const TrainingPanel = ({ project, onClose }) => {
 
     // ── Save trained model ─────────────────────────────
     const handleSave = async () => {
-        if (!saveName.trim()) return;
+        const name = saveName.trim();
+        if (!name) return;
+        const normalized = name.endsWith('.pt') ? name : `${name}.pt`;
+        if (savedModels.some(m => m.name === normalized)) {
+            setSaveNameError(`"${name}" already exists. Choose a different name.`);
+            return;
+        }
+        setSaveNameError('');
         setSaving(true);
         try {
             await axios.post(`${API_URL}/pipeline/save-trained-model/${project.id}`, {
                 source_type: saveModal.type,
-                name: saveName.trim(),
+                name,
                 model_type: saveModal.type,
             });
             loadSavedModels();
             setSaveModal(null);
-        } catch {
-            /* silently ignore — model still exists as seed_best.pt */
-        } finally {
-            setSaving(false);
-        }
+        } catch { /* model still exists as seed_best.pt */ }
+        finally { setSaving(false); }
     };
 
     // ── Upload model ────────────────────────────────────
     const handleUpload = async () => {
-        if (!uploadFile || !uploadName.trim()) return;
+        const name = uploadName.trim();
+        if (!uploadFile || !name) return;
+        const normalized = name.endsWith('.pt') ? name : `${name}.pt`;
+        if (savedModels.some(m => m.name === normalized)) {
+            setUploadNameError(`"${name}" already exists. Choose a different name.`);
+            return;
+        }
+        setUploadNameError('');
         setUploading(true);
         try {
             const fd = new FormData();
             fd.append('file', uploadFile);
-            fd.append('name', uploadName.trim());
+            fd.append('name', name);
             await axios.post(`${API_URL}/pipeline/upload-model/${project.id}`, fd, {
                 headers: { 'Content-Type': 'multipart/form-data' },
             });
@@ -593,11 +606,8 @@ const TrainingPanel = ({ project, onClose }) => {
             setUploadModal(false);
             setUploadFile(null);
             setUploadName('');
-        } catch {
-            /* ignore */
-        } finally {
-            setUploading(false);
-        }
+        } catch { /* ignore */ }
+        finally { setUploading(false); }
     };
 
     // ── Derived ────────────────────────────────────────
@@ -730,14 +740,20 @@ const TrainingPanel = ({ project, onClose }) => {
                                             {savedModels.filter(m => m.type === 'seed').length > 0 && (
                                                 <optgroup label="── Your Seed Models ──">
                                                     {savedModels.filter(m => m.type === 'seed').map(m => (
-                                                        <option key={m.name} value={m.name}>{m.stem} ({fmtSize(m.file_size_mb)})</option>
+                                                        <option key={m.name} value={m.name}
+                                                            title={`${m.stem}\nSize: ${fmtSize(m.file_size_mb)}\nCreated: ${m.created_at ? new Date(m.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—'}`}>
+                                                            {m.stem} ({fmtSize(m.file_size_mb)})
+                                                        </option>
                                                     ))}
                                                 </optgroup>
                                             )}
                                             {savedModels.filter(m => m.type === 'uploaded').length > 0 && (
                                                 <optgroup label="── Uploaded Models ──">
                                                     {savedModels.filter(m => m.type === 'uploaded').map(m => (
-                                                        <option key={m.name} value={m.name}>{m.stem} ({fmtSize(m.file_size_mb)})</option>
+                                                        <option key={m.name} value={m.name}
+                                                            title={`${m.stem}\nSize: ${fmtSize(m.file_size_mb)}\nCreated: ${m.created_at ? new Date(m.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—'}`}>
+                                                            {m.stem} ({fmtSize(m.file_size_mb)})
+                                                        </option>
                                                     ))}
                                                 </optgroup>
                                             )}
@@ -1103,15 +1119,18 @@ const TrainingPanel = ({ project, onClose }) => {
                         <p style={{ fontSize: 13, color: '#666', marginBottom: 16 }}>
                             Save this model to reuse as base weights for future training runs. Only save if results are satisfactory.
                         </p>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 16 }}>
-                            <input
-                                style={{ flex: 1, padding: '8px 10px', border: '1px solid #ddd', borderRadius: 6, fontSize: 13 }}
-                                value={saveName}
-                                onChange={e => setSaveName(e.target.value)}
-                                placeholder="model name"
-                                autoFocus
-                            />
-                            <span style={{ fontSize: 13, color: '#888' }}>.pt</span>
+                        <div style={{ marginBottom: 16 }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                <input
+                                    style={{ flex: 1, padding: '8px 10px', border: `1px solid ${saveNameError ? '#dc2626' : '#ddd'}`, borderRadius: 6, fontSize: 13 }}
+                                    value={saveName}
+                                    onChange={e => { setSaveName(e.target.value); setSaveNameError(''); }}
+                                    placeholder="model name"
+                                    autoFocus
+                                />
+                                <span style={{ fontSize: 13, color: '#888' }}>.pt</span>
+                            </div>
+                            {saveNameError && <p style={{ margin: '5px 0 0', fontSize: 12, color: '#dc2626' }}>{saveNameError}</p>}
                         </div>
                         <div style={{ display: 'flex', gap: 8 }}>
                             <button
@@ -1122,7 +1141,7 @@ const TrainingPanel = ({ project, onClose }) => {
                                 <Save size={14} /> {saving ? 'Saving…' : 'Save'}
                             </button>
                             <button
-                                onClick={() => setSaveModal(null)}
+                                onClick={() => { setSaveModal(null); setSaveNameError(''); }}
                                 style={{ flex: 1, padding: '9px 0', background: '#f5f5f5', color: '#444', border: '1px solid #e0e0e0', borderRadius: 7, fontSize: 13, cursor: 'pointer' }}
                             >
                                 Discard
@@ -1153,14 +1172,17 @@ const TrainingPanel = ({ project, onClose }) => {
                             }}
                             style={{ display: 'block', marginBottom: 12, fontSize: 13 }}
                         />
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 16 }}>
-                            <input
-                                style={{ flex: 1, padding: '8px 10px', border: '1px solid #ddd', borderRadius: 6, fontSize: 13 }}
-                                value={uploadName}
-                                onChange={e => setUploadName(e.target.value)}
-                                placeholder="model name"
-                            />
-                            <span style={{ fontSize: 13, color: '#888' }}>.pt</span>
+                        <div style={{ marginBottom: 16 }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                <input
+                                    style={{ flex: 1, padding: '8px 10px', border: `1px solid ${uploadNameError ? '#dc2626' : '#ddd'}`, borderRadius: 6, fontSize: 13 }}
+                                    value={uploadName}
+                                    onChange={e => { setUploadName(e.target.value); setUploadNameError(''); }}
+                                    placeholder="model name"
+                                />
+                                <span style={{ fontSize: 13, color: '#888' }}>.pt</span>
+                            </div>
+                            {uploadNameError && <p style={{ margin: '5px 0 0', fontSize: 12, color: '#dc2626' }}>{uploadNameError}</p>}
                         </div>
                         <div style={{ display: 'flex', gap: 8 }}>
                             <button
@@ -1171,7 +1193,7 @@ const TrainingPanel = ({ project, onClose }) => {
                                 <Upload size={14} /> {uploading ? 'Uploading…' : 'Upload'}
                             </button>
                             <button
-                                onClick={() => { setUploadModal(false); setUploadFile(null); setUploadName(''); }}
+                                onClick={() => { setUploadModal(false); setUploadFile(null); setUploadName(''); setUploadNameError(''); }}
                                 style={{ flex: 1, padding: '9px 0', background: '#f5f5f5', color: '#444', border: '1px solid #e0e0e0', borderRadius: 7, fontSize: 13, cursor: 'pointer' }}
                             >
                                 Cancel
