@@ -1,0 +1,6 @@
+FROM nginx:alpine
+
+# Pre-create the uploads mount point so Docker can bind the uploads_data
+# volume on top of the read-only frontend_build volume without hitting
+# "read-only file system" errors at container init time.
+RUN mkdir -p /usr/share/nginx/html/uploads

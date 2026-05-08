@@ -1,0 +1,227 @@
+services:
+  # PostgreSQL Database (Alpine 17)
+  postgres:
+    image: postgres:17-alpine
+    container_name: traceability-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_HOST_AUTH_METHOD: md5
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - traceability-network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 512M
+
+  # Neo4j Graph Database (2025.12.1 optimized for 32GB RAM Ubuntu VM)
+  # MEMORY ALLOCATION: App 12GB + Neo4j 10GB + OpenSearch 6GB + Postgres 2GB + OS 2GB = 32GB
+  # Adjusted to give OpenSearch sufficient memory for document embeddings
+  neo4j:
+    image: neo4j:2025.12.1
+    container_name: traceability-neo4j
+    environment:
+      NEO4J_AUTH: ${NEO4J_USERNAME}/${NEO4J_PASSWORD}
+      # Memory configuration - Balanced for data loading and query performance
+      # Page cache: 5GB - for caching graph data and indexes
+      NEO4J_server_memory_pagecache_size: 5G
+      # Heap: 3-4GB - for transaction processing and query execution
+      NEO4J_server_memory_heap_initial__size: 3G
+      NEO4J_server_memory_heap_max__size: 4G
+      # APOC Plugin configuration
+      NEO4J_PLUGINS: '["apoc"]'
+      NEO4J_dbms_security_procedures_unrestricted: apoc.*
+      NEO4J_dbms_security_procedures_allowlist: apoc.*
+    ports:
+      - "7474:7474"  # HTTP
+      - "7687:7687"  # Bolt
+    volumes:
+      - neo4j_data:/data
+      - neo4j_logs:/logs
+      - neo4j_import:/var/lib/neo4j/import
+      - neo4j_plugins:/plugins
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:7474 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - traceability-network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 10G
+        reservations:
+          memory: 6G
+
+  # OpenSearch Vector Database
+  # MEMORY: Increased to 4GB for handling large document embeddings (234 PDFs)
+  # Previous 512MB was causing OOM during bulk indexing
+  opensearch:
+    image: opensearchproject/opensearch:2.11.0
+    container_name: traceability-opensearch
+    environment:
+      - discovery.type=single-node
+      - bootstrap.memory_lock=true # along with the memlock settings below, disables swapping
+      - "OPENSEARCH_JAVA_OPTS=-Xms2g -Xmx4g" # Increased heap: 2GB initial, 4GB max (was 512m)
+      - OPENSEARCH_INITIAL_ADMIN_PASSWORD=${OPENSEARCH_PASSWORD}
+      - "plugins.security.disabled=true" # DISABLE SSL/Security for internal Docker network
+    ports:
+      - "9200:9200"
+      - "9600:9600"
+    volumes:
+      - opensearch_data:/usr/share/opensearch/data
+    networks:
+      - traceability-network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 6G  # Container limit (includes heap + off-heap)
+        reservations:
+          memory: 3G
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+
+  # Application (FastAPI + React)
+  # Memory limit: 12GB for data loading with large CSV files and PDF processing
+  # Balanced allocation with OpenSearch for optimal embedding pipeline performance
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: traceability-app
+    deploy:
+      resources:
+        limits:
+          memory: 32G
+        reservations:
+          memory: 24G
+    environment:
+      # Azure OpenAI (Set these in .env file)
+      AZURE_API_KEY: ${AZURE_API_KEY}
+      AZURE_CHAT_ENDPOINT: ${AZURE_CHAT_ENDPOINT}
+      AZURE_EMBEDDING_ENDPOINT: ${AZURE_EMBEDDING_ENDPOINT}
+      AZURE_GPT5_ENDPOINT: ${AZURE_GPT5_ENDPOINT:-}
+
+      # Neo4j Configuration
+      NEO4J_URL: ${NEO4J_URL}
+      NEO4J_USERNAME: ${NEO4J_USERNAME}
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD}
+      NEO4J_DATABASE: ${NEO4J_DATABASE}
+
+      # OpenSearch Configuration
+      OPENSEARCH_URL: http://opensearch:9200
+      OPENSEARCH_USERNAME: ${OPENSEARCH_USERNAME}
+      OPENSEARCH_PASSWORD: ${OPENSEARCH_PASSWORD}
+      OPENSEARCH_INDEX_NAME: ${OPENSEARCH_INDEX_NAME}
+      OPENSEARCH_USE_SSL: "false"
+      OPENSEARCH_VERIFY_CERTS: "false"
+
+      # PostgreSQL Configuration
+      POSTGRES_HOST: ${POSTGRES_HOST}
+      POSTGRES_PORT: ${POSTGRES_PORT}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+
+      # Application Settings
+      SERVER_HOST: ${SERVER_HOST:-0.0.0.0}
+      SERVER_PORT: ${SERVER_PORT:-5000}
+      SERVER_RELOAD: ${SERVER_RELOAD:-true}
+      SERVER_LOG_LEVEL: ${SERVER_LOG_LEVEL:-debug}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000,http://localhost:5000,https://mai-quality-bot-uat.m-devsecops.com}
+      SESSION_SECRET: ${SESSION_SECRET:-change-me-in-production}
+      MAX_CHAT_HISTORY: ${MAX_CHAT_HISTORY:-10}
+      QUERY_TIMEOUT_SECONDS: ${QUERY_TIMEOUT_SECONDS:-30}
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./logs:/app/logs
+      - ./.env:/app/app/config/.env:ro
+      - ../csv_output:/app/csv_output:ro
+      - ./documents:/app/documents:ro
+      - /home/maiuser/.cache/docling/models:/app/docling_models:ro # Mount local models using home expansion
+      - frontend-build:/app/frontend/build
+      - ./uploads:/app/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+      opensearch:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import requests; requests.get('http://localhost:5000/health')\" || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - traceability-network
+    restart: unless-stopped
+
+  # Nginx Reverse Proxy
+  nginx:
+    image: nginx:alpine
+    container_name: traceability-nginx
+    ports:
+      - "80:80"    # HTTP
+      - "443:443"  # HTTPS
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./ssl:/etc/nginx/ssl:ro  # Mount SSL certificates
+      - frontend-build:/usr/share/nginx/html  # Removed :ro to allow sub-mounts
+      - ./documents:/usr/share/nginx/html/documents:ro # Mount documents for PDF serving
+      - ./uploads:/usr/share/nginx/html/uploads:ro # Mount uploads for persistent image serving
+    depends_on:
+      - app
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - traceability-network
+    restart: unless-stopped
+
+networks:
+  traceability-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+    driver: local
+  neo4j_data:
+    driver: local
+  neo4j_logs:
+    driver: local
+  neo4j_import:
+    driver: local
+  neo4j_plugins:
+    driver: local
+  opensearch_data:
+    driver: local
+  frontend-build:
+    driver: local
