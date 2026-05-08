@@ -757,15 +757,13 @@ const TrainingPanel = ({ project, onClose }) => {
                                                     ))}
                                                 </optgroup>
                                             )}
-                                            <optgroup label="── YOLO Defaults ──">
-                                                {YOLO_MODEL_GROUPS.map(group => (
-                                                    <optgroup key={group.family} label={`  ${group.family}${group.note ? ` (${group.note})` : ''}`}>
-                                                        {group.models.map(m => (
-                                                            <option key={m.value} value={m.value}>{m.label}  [{m.params}]</option>
-                                                        ))}
-                                                    </optgroup>
-                                                ))}
-                                            </optgroup>
+                                            {YOLO_MODEL_GROUPS.map((group, gi) => (
+                                                <optgroup key={group.family} label={`${gi === 0 ? '── YOLO Defaults ── ' : ''}${group.family}${group.note ? ` (${group.note})` : ''}`}>
+                                                    {group.models.map(m => (
+                                                        <option key={m.value} value={m.value}>{m.label}  [{m.params}]</option>
+                                                    ))}
+                                                </optgroup>
+                                            ))}
                                         </select>
                                         <button
                                             className="tp-upload-model-btn"
