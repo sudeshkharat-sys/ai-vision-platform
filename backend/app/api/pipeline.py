@@ -576,6 +576,22 @@ async def get_task_status(
     return response
 
 
+@router.get("/worker-status")
+async def get_worker_status():
+    """Check whether at least one Celery worker is online. No auth — only reveals worker liveness."""
+    try:
+        import asyncio
+        loop = asyncio.get_event_loop()
+        pong = await loop.run_in_executor(
+            None,
+            lambda: celery_app.control.inspect(timeout=2.0).ping(),
+        )
+        online = bool(pong)
+    except Exception:
+        online = False
+    return {"online": online}
+
+
 # ── Persistent job records ────────────────────────────────────────
 
 def _sanitize_floats(obj):

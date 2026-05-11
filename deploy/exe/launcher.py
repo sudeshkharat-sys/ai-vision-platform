@@ -107,6 +107,24 @@ def wait_for_backend(port: int, timeout: int = 120) -> bool:
     return False
 
 
+def wait_for_celery_worker(api_port: int, timeout: int = 60) -> bool:
+    """Poll /pipeline/worker-status until a worker responds or timeout expires."""
+    import urllib.request
+    import json
+    url = f"http://127.0.0.1:{api_port}/pipeline/worker-status"
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            with urllib.request.urlopen(url, timeout=3) as resp:
+                data = json.loads(resp.read())
+                if data.get("online"):
+                    return True
+        except Exception:
+            pass
+        time.sleep(2)
+    return False
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -191,6 +209,13 @@ def main() -> None:
     print("\n[Step 5/5] Starting Celery worker...")
     celery = CeleryWorker()
     celery.start(log_dir=BASE_DIR / "logs")
+
+    print("[celery] Waiting for worker to become ready...")
+    if not wait_for_celery_worker(api_port):
+        print("[WARNING] Celery worker did not respond within 60 s.")
+        print("          Jobs submitted now may queue until the worker is ready.")
+    else:
+        print("[celery] Worker ready.")
 
     # ------------------------------------------------------------------
     # All services up

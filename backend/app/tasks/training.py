@@ -415,6 +415,8 @@ def train_seed_model(
     3. Training  — YOLO model.train()
     4. Cleanup   — copy seed_best.pt, remove temp dataset
     """
+    self.update_state(state="STARTED", meta={"phase": "initialising"})
+
     db = StateDBConnector()
 
     # ── Phase 1: DB reads ────────────────────────────────────────
@@ -545,6 +547,8 @@ def train_main_model(
     3. Training  — YOLO model.train()
     4. Cleanup   — copy main_best.pt, remove temp dataset
     """
+    self.update_state(state="STARTED", meta={"phase": "initialising"})
+
     db = StateDBConnector()
 
     # ── Phase 1: DB reads ────────────────────────────────────────
