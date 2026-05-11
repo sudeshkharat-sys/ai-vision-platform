@@ -17,26 +17,27 @@ class CeleryWorker:
         print("[celery] Starting worker...")
 
         if hasattr(sys, "_MEIPASS"):
+            # PyInstaller EXE: re-launch the EXE itself in worker mode.
+            # The launcher detects _AIVISION_CELERY_WORKER and hands off to
+            # the Celery CLI before any other code runs.
             backend_path = str(Path(sys._MEIPASS) / "backend")
-            python_exe = self._find_python_for_exe()
+            cmd = [sys.executable]
+            extra_env = {"_AIVISION_CELERY_WORKER": "1"}
         else:
             backend_path = str(Path(__file__).parent.parent.parent / "backend")
-            python_exe = sys.executable
+            cmd = [sys.executable, "-m", "celery",
+                   "-A", "app.tasks.celery_app", "worker",
+                   "--loglevel=info", "--pool=solo", "-Q", "celery"]
+            extra_env = {}
 
-        env = {**os.environ, "PYTHONPATH": backend_path}
+        env = {**os.environ, "PYTHONPATH": backend_path, **extra_env}
 
         log_file_path = None
         if log_dir is not None:
             log_file_path = Path(log_dir) / "celery.log"
 
         self.process = subprocess.Popen(
-            [
-                python_exe, "-m", "celery",
-                "-A", "app.tasks.celery_app", "worker",
-                "--loglevel=info",
-                "--pool=solo",
-                "-Q", "celery",
-            ],
+            cmd,
             cwd=backend_path,
             env=env,
             stdout=subprocess.PIPE,
@@ -45,7 +46,6 @@ class CeleryWorker:
         )
 
         # Drain stdout in a background thread so the pipe never blocks.
-        # Output goes to a log file if one was configured, otherwise to console.
         self._log_thread = threading.Thread(
             target=self._drain_output,
             args=(self.process, log_file_path),
@@ -68,7 +68,6 @@ class CeleryWorker:
 
         print("[celery] Worker started.")
 
-    # ------------------------------------------------------------------
     def stop(self) -> None:
         if self.process and self.process.poll() is None:
             print("[celery] Stopping worker...")
@@ -79,36 +78,9 @@ class CeleryWorker:
                 self.process.kill()
             print("[celery] Worker stopped.")
 
-    # ------------------------------------------------------------------
-    @staticmethod
-    def _find_python_for_exe() -> str:
-        """Locate a usable Python interpreter when running inside a PyInstaller bundle.
-
-        PyInstaller's sys.executable is the compiled EXE — not a Python interpreter —
-        so we must find a real python.exe to spawn the Celery worker subprocess.
-        Search order:
-          1. python.exe bundled inside _MEIPASS (explicit bundle strategy)
-          2. python.exe / python3.exe next to the running EXE
-          3. 'python' on PATH
-        """
-        meipass = Path(sys._MEIPASS)
-
-        candidates = [
-            meipass / "python.exe",
-            meipass / "python3.exe",
-            Path(sys.executable).parent / "python.exe",
-            Path(sys.executable).parent / "python3.exe",
-        ]
-        for candidate in candidates:
-            if candidate.exists():
-                return str(candidate)
-
-        # Fall back to whatever 'python' resolves to on PATH.
-        return "python"
-
     @staticmethod
     def _drain_output(process: subprocess.Popen, log_file_path: Path | None) -> None:
-        """Read process stdout line-by-line until EOF, writing to log file or stdout."""
+        """Read process stdout until EOF; write to log file or console."""
         if log_file_path:
             log_file_path.parent.mkdir(parents=True, exist_ok=True)
             with open(log_file_path, "a", encoding="utf-8", errors="replace") as f:

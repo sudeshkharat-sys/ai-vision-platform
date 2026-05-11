@@ -18,14 +18,41 @@ credentials.
 
 from __future__ import annotations
 
-import configparser
 import os
+import sys
+from pathlib import Path
+
+# ---------------------------------------------------------------------------
+# PyInstaller EXE — Celery worker self-spawn mode
+#
+# When the EXE needs a Celery worker it re-launches itself with
+# _AIVISION_CELERY_WORKER=1.  We detect that here, before any heavy
+# imports, and hand control directly to the Celery CLI.
+# ---------------------------------------------------------------------------
+if os.environ.get("_AIVISION_CELERY_WORKER"):
+    _backend = (
+        str(Path(sys._MEIPASS) / "backend")
+        if hasattr(sys, "_MEIPASS")
+        else str(Path(__file__).parent.parent.parent / "backend")
+    )
+    if _backend not in sys.path:
+        sys.path.insert(0, _backend)
+    sys.argv = [
+        "celery", "-A", "app.tasks.celery_app", "worker",
+        "--loglevel=info", "--pool=solo", "-Q", "celery",
+    ]
+    from celery.__main__ import main as _celery_main
+    _celery_main()
+    raise SystemExit(0)
+
+# ---------------------------------------------------------------------------
+# Normal launcher startup from here on
+# ---------------------------------------------------------------------------
+import configparser
 import signal
 import socket
-import sys
 import time
 import webbrowser
-from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # Resolve base directory
