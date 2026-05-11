@@ -190,7 +190,7 @@ def main() -> None:
     # ------------------------------------------------------------------
     print("\n[Step 5/5] Starting Celery worker...")
     celery = CeleryWorker()
-    celery.start()
+    celery.start(log_dir=BASE_DIR / "logs")
 
     # ------------------------------------------------------------------
     # All services up
