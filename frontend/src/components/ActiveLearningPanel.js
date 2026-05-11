@@ -301,7 +301,18 @@ const ActiveLearningPanel = ({ project, onClose, onAnnotationsUpdated, onAnnotat
                 let isNoWorker = false;
                 if (status === 'PENDING') {
                     pendingTicks++;
-                    if (pendingTicks >= NO_WORKER_TICKS) isNoWorker = true;
+                    if (pendingTicks >= NO_WORKER_TICKS) {
+                        let workerOnline = false;
+                        try {
+                            const wr = await axios.get(`${API_URL}/pipeline/worker-status`);
+                            workerOnline = !!wr.data?.online;
+                        } catch (_) {}
+                        if (workerOnline) {
+                            pendingTicks = Math.floor(NO_WORKER_TICKS / 2);
+                        } else {
+                            isNoWorker = true;
+                        }
+                    }
                 } else if (status === 'STARTED') {
                     pendingTicks = 0;
                 }

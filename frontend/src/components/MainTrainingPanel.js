@@ -338,28 +338,45 @@ const MainTrainingPanel = ({ project, onClose }) => {
                 const res = await axios.get(`${API_URL}/pipeline/task-status/${taskId}`);
                 const { status, result, meta, error } = res.data;
 
+                if (status === 'PENDING') {
+                    pendingTicks++;
+                    if (pendingTicks >= NO_WORKER_TICKS) {
+                        let workerOnline = false;
+                        try {
+                            const wr = await axios.get(`${API_URL}/pipeline/worker-status`);
+                            workerOnline = !!wr.data?.online;
+                        } catch (_) {}
+
+                        if (workerOnline) {
+                            pendingTicks = Math.floor(NO_WORKER_TICKS / 2);
+                        } else {
+                            clearInterval(pollRef.current[taskId]);
+                            delete pollRef.current[taskId];
+                            setJobs(prev => prev.map(j => {
+                                if (j.taskId !== taskId) return j;
+                                return { ...j, status: 'NO_WORKER', logs: [...j.logs,
+                                    '❌  No Celery worker detected.',
+                                    '👉  Start a worker — see instructions below.'] };
+                            }));
+                            setTimeout(() => dispatchQueued(), 100);
+                            return;
+                        }
+                    }
+                    const msg = `⏳  Waiting for worker… (${pendingTicks * 3}s)`;
+                    setJobs(prev => prev.map(j => {
+                        if (j.taskId !== taskId) return j;
+                        const newLogs = [...j.logs];
+                        const last = newLogs[newLogs.length - 1];
+                        return { ...j, status: 'PENDING', logs: last?.startsWith('⏳')
+                            ? [...newLogs.slice(0, -1), msg]
+                            : [...newLogs, msg] };
+                    }));
+                    return;
+                }
+
                 setJobs(prev => prev.map(j => {
                     if (j.taskId !== taskId) return j;
                     let newLogs = [...j.logs];
-
-                    if (status === 'PENDING') {
-                        pendingTicks++;
-                        if (pendingTicks >= NO_WORKER_TICKS) {
-                            clearInterval(pollRef.current[taskId]);
-                            delete pollRef.current[taskId];
-                            newLogs = [...newLogs,
-                                '❌  No Celery worker detected after 45s.',
-                                '👉  Start a worker — see instructions below.'];
-                            setTimeout(() => dispatchQueued(), 100);
-                            return { ...j, status: 'NO_WORKER', logs: newLogs };
-                        }
-                        const msg = `⏳  Waiting for worker… (${pendingTicks * 3}s)`;
-                        const last = newLogs[newLogs.length - 1];
-                        newLogs = last?.startsWith('⏳')
-                            ? [...newLogs.slice(0, -1), msg]
-                            : [...newLogs, msg];
-                        return { ...j, status: 'PENDING', logs: newLogs };
-                    }
 
                     if (status === 'STARTED') {
                         pendingTicks = 0;
