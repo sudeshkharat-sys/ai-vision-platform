@@ -116,6 +116,8 @@ hiddenimports += [
     "asyncpg",
     "asyncpg.pgproto.pgproto",
     "psycopg2",
+    "celery.__main__",
+    "celery.bin.celery",
     "celery.app.amqp",
     "celery.backends.redis",
     "celery.loaders.app",
