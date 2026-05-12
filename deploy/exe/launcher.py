@@ -270,11 +270,20 @@ def main() -> None:
 
     # Keep the main thread alive
     while True:
-        time.sleep(1)
+        time.sleep(3)
         if not uvicorn_thread.is_alive():
             print("[ERROR] Uvicorn thread exited unexpectedly. Shutting down.")
             _shutdown(pg, redis, celery)
             sys.exit(1)
+
+        # Auto-restart Celery worker if it crashed (e.g. after YOLO training)
+        if celery.process and celery.process.poll() is not None:
+            print(f"[celery] Worker stopped (exit code {celery.process.returncode}). Restarting...")
+            try:
+                celery.start(log_dir=BASE_DIR / "logs")
+                print("[celery] Worker restarted.")
+            except Exception as e:
+                print(f"[celery] Restart failed: {e}")
 
 
 def _shutdown(pg: PostgresManager, redis: RedisManager, celery: CeleryWorker | None) -> None:
