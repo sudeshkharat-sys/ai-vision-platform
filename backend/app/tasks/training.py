@@ -1,5 +1,7 @@
 from .celery_app import celery_app
 from ultralytics import YOLO
+import matplotlib
+matplotlib.use('Agg')  # non-interactive backend — prevents hanging on Windows without a display
 import os
 import shutil
 import time
@@ -477,27 +479,22 @@ def train_seed_model(
         weight_decay=0.001,  # stronger L2 regularisation to reduce overfitting
         patience=20,         # early stopping — model converges fast on small datasets
         label_smoothing=0.1, # reduces overconfidence on small datasets
-        # --- augmentation (tuned for bright-feature inspection) -----------
-        # Key insight: the OK/NOT-OK signal is the *visibility of the white
-        # plastic clip*.  Heavy brightness / saturation jitter destroys that
-        # signal.  We intentionally keep HSV jitter low so the model learns
-        # from the actual colour cue rather than fighting augmentation noise.
-        hsv_h=0.015,         # minimal hue jitter (lighting colour shifts)
-        hsv_s=0.3,           # reduced from 0.7 — preserve white-clip colour signature
-        hsv_v=0.2,           # reduced from 0.4 — preserve clip brightness contrast
-        degrees=10,          # slight rotation — clips appear at various angles
-        translate=0.1,       # random translation ± 10 %
-        scale=0.4,           # random scale ± 40 %
-        fliplr=0.5,          # horizontal flip (structurally valid for pipe clips)
-        flipud=0.1,          # occasional vertical flip
-        mosaic=0.5,          # reduced from 1.0 — avoid mixing OK+NOT-OK contexts
-        close_mosaic=15,     # disable mosaic for last 15 epochs to stabilise
-        mixup=0.0,           # disabled — pixel blending corrupts the binary signal
-        copy_paste=0.05,     # minimal copy-paste
-        # ------------------------------------------------------------------
+        hsv_h=0.015,
+        hsv_s=0.3,
+        hsv_v=0.2,
+        degrees=10,
+        translate=0.1,
+        scale=0.4,
+        fliplr=0.5,
+        flipud=0.1,
+        mosaic=0.5,
+        close_mosaic=15,
+        mixup=0.0,
+        copy_paste=0.05,
         project=str(settings.model_dir / project_id),
         name="seed_model",
         verbose=False,
+        plots=False,         # skip matplotlib plots — prevents hanging on Windows EXE
         workers=0,           # Celery workers are daemonic — cannot spawn DataLoader subprocesses
     )
 
@@ -506,7 +503,7 @@ def train_seed_model(
     target_path = settings.model_dir / project_id / "seed_best.pt"
     target_path.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy(best_model_path, target_path)
-    shutil.rmtree(dataset_path)
+    shutil.rmtree(dataset_path, ignore_errors=True)  # ignore_errors — Windows may lock files briefly
 
     final_metrics = epoch_history[-1] if epoch_history else {}
 
@@ -641,6 +638,7 @@ def train_main_model(
         project=str(settings.model_dir / project_id),
         name="main_model",
         verbose=False,
+        plots=False,         # skip matplotlib plots — prevents hanging on Windows EXE
         workers=0,           # Celery workers are daemonic — cannot spawn DataLoader subprocesses
     )
 
@@ -649,7 +647,7 @@ def train_main_model(
     target_path = settings.model_dir / project_id / "main_best.pt"
     target_path.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy(best_model_path, target_path)
-    shutil.rmtree(dataset_path)
+    shutil.rmtree(dataset_path, ignore_errors=True)  # ignore_errors — Windows may lock files briefly
 
     final_metrics = epoch_history[-1] if epoch_history else {}
 
