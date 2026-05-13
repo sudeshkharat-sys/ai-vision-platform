@@ -3,7 +3,7 @@ import axios from 'axios';
 import { Stage, Layer, Rect, Text, Image as KonvaImg, Group } from 'react-konva';
 import useImage from 'use-image';
 import './ReviewPanel.css';
-import { Check, X, Sparkles, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Check, X, Sparkles, ChevronLeft, ChevronRight, Trash2 } from 'lucide-react';
 import logoImg from '../logo.png';
 
 import { API_URL, BASE_URL } from '../config';
@@ -59,36 +59,33 @@ const ClassPicker = ({ classes, onConfirm, onCancel }) => {
 };
 
 export default function ReviewPanel({ project, images, onClose, onAnnotationsUpdated, filterImageIds }) {
-    // If filterImageIds is provided (e.g. from AL suggestions), show only those images.
-    // Otherwise show the normal annotated/annotating review queue.
-    const reviewImages = filterImageIds?.size > 0
+    // Track images deleted locally so the list updates immediately
+    const [localDeletedIds, setLocalDeletedIds] = useState(new Set());
+
+    const reviewImages = (filterImageIds?.size > 0
         ? images.filter(img => filterImageIds.has(String(img.id)))
-        : images.filter(img => img.status === 'annotated' || img.status === 'annotating');
+        : images.filter(img => img.status === 'annotated' || img.status === 'annotating')
+    ).filter(img => !localDeletedIds.has(img.id));
 
     const [currentIdx, setCurrentIdx] = useState(0);
     const [annotations, setAnnotations] = useState([]);
     const [loading, setLoading] = useState(false);
-    // Track which image IDs the user has explicitly acted on
     const [reviewedIds, setReviewedIds] = useState(new Set());
     const [canvasSize, setCanvasSize] = useState({ w: 700, h: 480 });
     const [isDrawing, setIsDrawing] = useState(false);
     const [newAnnotation, setNewAnnotation] = useState(null);
     const [pendingAnnotation, setPendingAnnotation] = useState(null);
     const [statusMsg, setStatusMsg] = useState(null);
-    // Actual displayed dimensions after EXIF orientation is applied by the browser
     const [loadedImageSize, setLoadedImageSize] = useState(null);
     const stageWrapRef = useRef(null);
 
     const currentImage = reviewImages[currentIdx] || null;
 
-    // Flash a short status message
     const showStatus = useCallback((msg) => {
         setStatusMsg(msg);
         setTimeout(() => setStatusMsg(null), 1800);
     }, []);
 
-    // Measure the rp-stage-wrap container directly to avoid image cropping
-    // rp-stage-wrap has padding: 12px on all sides, so subtract 24px each axis
     const measureCanvas = useCallback(() => {
         if (stageWrapRef.current) {
             const r = stageWrapRef.current.getBoundingClientRect();
@@ -104,7 +101,6 @@ export default function ReviewPanel({ project, images, onClose, onAnnotationsUpd
         return () => window.removeEventListener('resize', measureCanvas);
     }, [measureCanvas]);
 
-    // Re-measure when image changes so stageWrapRef is populated
     useEffect(() => {
         measureCanvas();
     }, [currentImage?.id, measureCanvas]);
@@ -113,12 +109,10 @@ export default function ReviewPanel({ project, images, onClose, onAnnotationsUpd
         setLoadedImageSize({ width: w, height: h });
     }, []);
 
-    // Reset loaded size when navigating to a different image
     useEffect(() => {
         setLoadedImageSize(null);
     }, [currentImage?.id]);
 
-    // Load annotations when current image changes
     useEffect(() => {
         if (!currentImage) return;
         setLoading(true);
@@ -193,6 +187,36 @@ export default function ReviewPanel({ project, images, onClose, onAnnotationsUpd
         }
     }, [annotations, markReviewed, showStatus]);
 
+    // Wipe all annotations from this image and reset it to pending
+    const handleWipeImage = useCallback(async () => {
+        if (!currentImage) return;
+        if (!window.confirm(`Clear all annotations from "${currentImage.filename}"?\nThe image stays but resets to pending.`)) return;
+        try {
+            await axios.post(`${API_URL}/images/${currentImage.id}/wipe`);
+            setAnnotations([]);
+            markReviewed();
+            onAnnotationsUpdated?.();
+            showStatus('Annotations cleared');
+        } catch {
+            showStatus('Failed to wipe image');
+        }
+    }, [currentImage, markReviewed, onAnnotationsUpdated, showStatus]);
+
+    // Permanently delete this image from the project
+    const handleDeleteImage = useCallback(async () => {
+        if (!currentImage) return;
+        if (!window.confirm(`Delete "${currentImage.filename}" permanently?\nThis cannot be undone.`)) return;
+        try {
+            await axios.delete(`${API_URL}/images/${currentImage.id}`);
+            setLocalDeletedIds(prev => new Set([...prev, currentImage.id]));
+            setCurrentIdx(prev => Math.max(0, Math.min(prev, reviewImages.length - 2)));
+            onAnnotationsUpdated?.();
+            showStatus('Image deleted');
+        } catch {
+            showStatus('Failed to delete image');
+        }
+    }, [currentImage, reviewImages.length, onAnnotationsUpdated, showStatus]);
+
     // Keyboard shortcuts
     useEffect(() => {
         const handler = (e) => {
@@ -210,7 +234,6 @@ export default function ReviewPanel({ project, images, onClose, onAnnotationsUpd
         return () => window.removeEventListener('keydown', handler);
     }, [pendingAnnotation, navigate, handleAcceptAll, handleRejectAll, onClose, onAnnotationsUpdated]);
 
-    // Canvas drawing
     const handleMouseDown = (e) => {
         if (pendingAnnotation) return;
         const pos = e.target.getStage().getPointerPosition();
@@ -264,7 +287,6 @@ export default function ReviewPanel({ project, images, onClose, onAnnotationsUpd
         setPendingAnnotation(null);
     };
 
-    // Use browser-reported natural dimensions (EXIF-corrected) once loaded
     const imgW = loadedImageSize?.width  || currentImage?.width  || 1;
     const imgH = loadedImageSize?.height || currentImage?.height || 1;
 
@@ -278,7 +300,6 @@ export default function ReviewPanel({ project, images, onClose, onAnnotationsUpd
     const drawnBox = pendingAnnotation || newAnnotation;
     const progressPct = reviewImages.length > 0 ? (reviewedIds.size / reviewImages.length) * 100 : 0;
 
-    // ── Empty state ─────────────────────────────────────────────
     if (reviewImages.length === 0) {
         return (
             <div className="rp-overlay">
@@ -296,7 +317,7 @@ export default function ReviewPanel({ project, images, onClose, onAnnotationsUpd
         <div className="rp-overlay">
             <div className="rp-shell">
 
-                {/* ── Header ── */}
+                {/* Header */}
                 <div className="rp-header">
                     <div className="rp-header-left">
                         <span className="rp-header-icon"><Sparkles size={20} /></span>
@@ -323,7 +344,7 @@ export default function ReviewPanel({ project, images, onClose, onAnnotationsUpd
                     </button>
                 </div>
 
-                {/* ── Body ── */}
+                {/* Body */}
                 <div className="rp-body">
 
                     {/* Image strip (left) */}
@@ -432,7 +453,6 @@ export default function ReviewPanel({ project, images, onClose, onAnnotationsUpd
                                                                 dash={isAuto ? [6 / scale, 3 / scale] : undefined}
                                                                 fill={fill}
                                                             />
-                                                            {/* Label pill */}
                                                             <Rect
                                                                 x={bx} y={by - lh}
                                                                 width={labelW} height={lh}
@@ -441,14 +461,13 @@ export default function ReviewPanel({ project, images, onClose, onAnnotationsUpd
                                                             />
                                                             <Text
                                                                 x={bx + padX} y={by - lh + padY}
-                                                                text={`${ann.class_name}${isAuto ? ' ✦' : ''}`}
+                                                                text={`${ann.class_name}${isAuto ? ' ❆' : ''}`}
                                                                 fontSize={fs}
                                                                 fontFamily="sans-serif"
                                                                 fill="#fff"
                                                                 fontStyle="bold"
                                                             />
 
-                                                            {/* Inline accept/reject on canvas for auto boxes */}
                                                             {isAuto && (
                                                                 <Group
                                                                     x={bx + bw - 44 / scale}
@@ -504,7 +523,7 @@ export default function ReviewPanel({ project, images, onClose, onAnnotationsUpd
                             )}
                         </div>
 
-                        {/* Annotation review panel (right) */}
+                        {/* Annotation panel (right) */}
                         <div className="rp-ann-panel">
                             <div className="rp-ann-panel-header">
                                 <span className="rp-ann-panel-title">Annotations</span>
@@ -552,14 +571,23 @@ export default function ReviewPanel({ project, images, onClose, onAnnotationsUpd
                                                     </button>
                                                 </div>
                                             ) : (
-                                                <span className="rp-verified-tag">verified</span>
+                                                <div className="rp-ann-row-actions">
+                                                    <span className="rp-verified-tag">verified</span>
+                                                    <button
+                                                        className="rp-row-btn remove"
+                                                        title="Delete this annotation"
+                                                        onClick={() => handleRejectAnnotation(ann.id)}
+                                                    >
+                                                        <X size={14} />
+                                                    </button>
+                                                </div>
                                             )}
                                         </div>
                                     );
                                 })}
                             </div>
 
-                            {/* Bulk actions */}
+                            {/* Bulk annotation actions */}
                             <div className="rp-bulk">
                                 <button
                                     className="rp-bulk-btn rp-bulk-accept"
@@ -578,11 +606,29 @@ export default function ReviewPanel({ project, images, onClose, onAnnotationsUpd
                                     <X size={14} /> Reject All Auto
                                 </button>
                             </div>
+
+                            {/* Image-level actions */}
+                            <div className="rp-image-actions">
+                                <button
+                                    className="rp-bulk-btn rp-bulk-wipe"
+                                    onClick={handleWipeImage}
+                                    title="Clear all annotations, reset image to pending"
+                                >
+                                    Wipe Image
+                                </button>
+                                <button
+                                    className="rp-bulk-btn rp-bulk-delete-img"
+                                    onClick={handleDeleteImage}
+                                    title="Permanently delete this image and all its annotations"
+                                >
+                                    <Trash2 size={13} /> Delete Image
+                                </button>
+                            </div>
                         </div>
                     </div>
                 </div>
 
-                {/* ── Footer ── */}
+                {/* Footer */}
                 <div className="rp-footer">
                     <div className="rp-footer-shortcuts">
                         <span className="rp-kbd">← →</span> Navigate
