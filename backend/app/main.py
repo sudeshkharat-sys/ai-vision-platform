@@ -26,10 +26,23 @@ def _find_frontend_build() -> Path | None:
     return None
 
 
+def _purge_celery_queue() -> None:
+    """Delete stale queued tasks from Redis on startup so old jobs don't replay."""
+    try:
+        import redis
+        r = redis.from_url(settings.celery_broker_url)
+        r.delete("celery")
+        r.close()
+    except Exception:
+        pass
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
+    _purge_celery_queue()
     yield
+
 
 app = FastAPI(title="AI Vision Platform", lifespan=lifespan)
 
