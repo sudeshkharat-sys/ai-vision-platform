@@ -385,12 +385,13 @@
   border-radius: 8px;
   flex-shrink: 0;
 }
-.src-auto     { background: rgba(220, 20, 60, 0.10); color: #dc143c; }
+.src-auto      { background: rgba(220, 20, 60, 0.10); color: #dc143c; }
 .src-ai_prompt { background: rgba(184, 16, 46, 0.10);  color: #b8102e; }
-.src-manual   { background: rgba(22, 163, 74, 0.10);  color: #16a34a; }
+.src-manual    { background: rgba(22, 163, 74, 0.10);  color: #16a34a; }
 
 .rp-ann-row-actions {
   display: flex;
+  align-items: center;
   gap: 3px;
   flex-shrink: 0;
 }
@@ -427,7 +428,7 @@
   flex-shrink: 0;
 }
 
-/* ── Bulk actions ─────────────────────────────────────────── */
+/* ── Bulk annotation actions ──────────────────────────────── */
 .rp-bulk {
   padding: 10px;
   border-top: 1px solid #e5e5e5;
@@ -436,6 +437,17 @@
   gap: 6px;
   flex-shrink: 0;
 }
+
+/* ── Image-level actions (wipe / delete) ──────────────────── */
+.rp-image-actions {
+  padding: 8px 10px 10px;
+  border-top: 1px solid #f0f0f0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
 .rp-bulk-btn {
   width: 100%;
   padding: 8px;
@@ -469,6 +481,22 @@
 }
 .rp-bulk-reject:not(:disabled):hover {
   background: rgba(220, 20, 60, 0.12);
+}
+.rp-bulk-wipe {
+  background: rgba(234, 88, 12, 0.07);
+  border-color: rgba(234, 88, 12, 0.20);
+  color: #ea580c;
+}
+.rp-bulk-wipe:hover {
+  background: rgba(234, 88, 12, 0.14);
+}
+.rp-bulk-delete-img {
+  background: rgba(127, 29, 29, 0.06);
+  border-color: rgba(127, 29, 29, 0.18);
+  color: #7f1d1d;
+}
+.rp-bulk-delete-img:hover {
+  background: rgba(127, 29, 29, 0.13);
 }
 
 /* ── Footer ───────────────────────────────────────────────── */
