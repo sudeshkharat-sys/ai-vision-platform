@@ -1,8 +1,9 @@
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, delete as sql_delete
 from ..database import get_db
 from ..models.image import Image
+from ..models.annotation import Annotation
 from ..models.user import User
 from ..schemas.base import ImageResponse
 from ..config import settings
@@ -97,3 +98,43 @@ async def mark_image_empty(
     await db.commit()
     await db.refresh(image)
     return image
+
+
+@router.post("/{image_id}/wipe")
+async def wipe_image(
+    image_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Clear all annotations from an image and reset its status to pending."""
+    image = await get_owned_image(image_id, current_user, db)
+    await db.execute(sql_delete(Annotation).where(Annotation.image_id == image_id))
+    image.status = "pending"
+    await db.commit()
+    return {"status": "wiped", "id": image_id}
+
+
+@router.delete("/{image_id}")
+async def delete_image(
+    image_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete an image, all its annotations, and the file from disk."""
+    image = await get_owned_image(image_id, current_user, db)
+
+    # Delete all annotations for this image
+    await db.execute(sql_delete(Annotation).where(Annotation.image_id == image_id))
+
+    # Remove the file from disk
+    try:
+        file_path = settings.upload_dir.parent / image.filepath.lstrip("/")
+        if file_path.exists():
+            file_path.unlink()
+    except Exception:
+        pass
+
+    # Delete the image record
+    await db.delete(image)
+    await db.commit()
+    return {"status": "deleted", "id": image_id}
