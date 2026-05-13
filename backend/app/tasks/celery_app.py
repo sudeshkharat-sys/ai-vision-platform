@@ -1,4 +1,6 @@
 from celery import Celery
+from celery.signals import worker_process_init
+from celery.app import trace
 from ..config import settings
 
 celery_app = Celery(
@@ -23,3 +25,9 @@ celery_app.conf.update(
     worker_prefetch_multiplier=1,
     task_track_started=True,   # ← emit STARTED state so UI shows "Running"
 )
+
+
+@worker_process_init.connect
+def _init_worker_optimizations(**kwargs):
+    """Populate _loc in each spawned worker process (Windows uses spawn, not fork)."""
+    trace.setup_worker_optimizations(celery_app)
