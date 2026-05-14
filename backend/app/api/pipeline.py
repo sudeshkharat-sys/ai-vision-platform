@@ -32,35 +32,29 @@ router = APIRouter(prefix="/pipeline", tags=["pipeline"])
 # ── Available YOLO models ─────────────────────────────────────────
 
 YOLO_MODELS = [
-    # YOLO26 (latest Ultralytics — edge-optimised, NMS-free)
     {"value": "yolo26n.pt", "label": "YOLO26 Nano — fastest edge",    "family": "YOLO26"},
     {"value": "yolo26s.pt", "label": "YOLO26 Small",                  "family": "YOLO26"},
     {"value": "yolo26m.pt", "label": "YOLO26 Medium",                 "family": "YOLO26"},
     {"value": "yolo26l.pt", "label": "YOLO26 Large",                  "family": "YOLO26"},
     {"value": "yolo26x.pt", "label": "YOLO26 XL — best accuracy",    "family": "YOLO26"},
-    # YOLO12 (attention-centric, NeurIPS 2025)
     {"value": "yolo12n.pt", "label": "YOLO12 Nano",                   "family": "YOLO12"},
     {"value": "yolo12s.pt", "label": "YOLO12 Small",                  "family": "YOLO12"},
     {"value": "yolo12m.pt", "label": "YOLO12 Medium",                 "family": "YOLO12"},
     {"value": "yolo12l.pt", "label": "YOLO12 Large",                  "family": "YOLO12"},
     {"value": "yolo12x.pt", "label": "YOLO12 XL",                     "family": "YOLO12"},
-    # YOLO11
     {"value": "yolo11n.pt", "label": "YOLO11 Nano — fastest",        "family": "YOLO11"},
     {"value": "yolo11s.pt", "label": "YOLO11 Small",                  "family": "YOLO11"},
     {"value": "yolo11m.pt", "label": "YOLO11 Medium",                 "family": "YOLO11"},
     {"value": "yolo11l.pt", "label": "YOLO11 Large",                  "family": "YOLO11"},
     {"value": "yolo11x.pt", "label": "YOLO11 XL — best accuracy",    "family": "YOLO11"},
-    # YOLOv10
     {"value": "yolov10n.pt", "label": "YOLOv10 Nano",                 "family": "YOLOv10"},
     {"value": "yolov10s.pt", "label": "YOLOv10 Small",                "family": "YOLOv10"},
     {"value": "yolov10m.pt", "label": "YOLOv10 Medium",               "family": "YOLOv10"},
     {"value": "yolov10b.pt", "label": "YOLOv10 Base",                 "family": "YOLOv10"},
     {"value": "yolov10l.pt", "label": "YOLOv10 Large",                "family": "YOLOv10"},
     {"value": "yolov10x.pt", "label": "YOLOv10 XL",                   "family": "YOLOv10"},
-    # YOLOv9
     {"value": "yolov9c.pt", "label": "YOLOv9 C",                      "family": "YOLOv9"},
     {"value": "yolov9e.pt", "label": "YOLOv9 E — high accuracy",      "family": "YOLOv9"},
-    # YOLOv8
     {"value": "yolov8n.pt", "label": "YOLOv8 Nano",                   "family": "YOLOv8"},
     {"value": "yolov8s.pt", "label": "YOLOv8 Small",                  "family": "YOLOv8"},
     {"value": "yolov8m.pt", "label": "YOLOv8 Medium",                 "family": "YOLOv8"},
@@ -71,7 +65,6 @@ YOLO_MODELS = [
 
 @router.get("/available-models")
 async def get_available_models():
-    """Return the list of supported YOLO model weights for the UI dropdowns."""
     families: dict = {}
     for m in YOLO_MODELS:
         families.setdefault(m["family"], []).append(
@@ -136,10 +129,6 @@ async def get_clahe_preview(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """
-    Return a before/after CLAHE preview using the first annotated image in the
-    project.  Both images are returned as base64-encoded JPEG data URIs.
-    """
     await get_owned_project(project_id, current_user, db)
 
     result = await db.execute(
@@ -242,7 +231,6 @@ async def trigger_ai_prompt(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Detect objects in a single image using a text prompt."""
     await get_owned_project(body.project_id, current_user, db)
     task = detect_with_prompt.delay(
         body.project_id, body.image_id, body.prompt, body.clear_existing
@@ -256,7 +244,6 @@ async def trigger_ai_bulk_prompt(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Detect objects in multiple images using a text prompt."""
     await get_owned_project(body.project_id, current_user, db)
     task = bulk_detect_with_prompt.delay(
         body.project_id, body.prompt, body.image_ids
@@ -270,7 +257,6 @@ async def get_pending_images(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Return pending images AND annotated-but-empty images."""
     await get_owned_project(project_id, current_user, db)
 
     pending_q = await db.execute(
@@ -315,7 +301,6 @@ async def get_model_status(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Check whether trained seed/main models exist for this project."""
     await get_owned_project(project_id, current_user, db)
     seed_path = settings.model_dir / project_id / "seed_best.pt"
     main_path = settings.model_dir / project_id / "main_best.pt"
@@ -334,7 +319,6 @@ async def get_model_details(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Return rich details about trained models for a project."""
     await get_owned_project(project_id, current_user, db)
 
     seed_path = settings.model_dir / project_id / "seed_best.pt"
@@ -382,7 +366,6 @@ async def download_model(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Stream the trained model weights file as a download."""
     await get_owned_project(project_id, current_user, db)
 
     if model_type not in ("seed", "main"):
@@ -429,7 +412,6 @@ async def start_scoring(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Score all pending images by uncertainty — returns ranked list."""
     await get_owned_project(project_id, current_user, db)
     req = body or ScoreImagesRequest()
     task = score_unlabeled_images.delay(
@@ -445,7 +427,6 @@ async def start_curriculum_annotate(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Smart auto-annotation with confidence tiers."""
     await get_owned_project(project_id, current_user, db)
     req = body or CurriculumAnnotateRequest()
     task = curriculum_auto_annotate.delay(
@@ -462,7 +443,6 @@ async def start_suggest_review(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Get the top-N most uncertain images that need human annotation."""
     await get_owned_project(project_id, current_user, db)
     req = body or SuggestReviewRequest()
     task = suggest_for_review.delay(project_id, req.budget, req.strategy)
@@ -517,7 +497,6 @@ async def cancel_task(
     db: AsyncSession = Depends(get_db),
 ):
     """Revoke a Celery task and mark the DB job record as stopped."""
-    # Verify the job belongs to the current user's project before cancelling
     result = await db.execute(select(TrainingJob).where(TrainingJob.id == task_id))
     job = result.scalar_one_or_none()
     if job:
@@ -531,6 +510,15 @@ async def cancel_task(
             raise HTTPException(status_code=403, detail="Access denied")
 
     celery_app.control.revoke(task_id, terminate=True, signal="SIGTERM")
+
+    # Purge the queue so stale tasks don't replay on next startup
+    try:
+        import redis as _redis
+        r = _redis.from_url(settings.celery_broker_url)
+        r.delete("celery")
+        r.close()
+    except Exception:
+        pass
 
     try:
         if job:
@@ -555,7 +543,6 @@ async def get_task_status(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Return Celery task progress. Auth required; task_id is opaque so no ownership re-check needed."""
     result = AsyncResult(task_id, app=celery_app)
     response = {
         "task_id": task_id,
@@ -610,7 +597,7 @@ class JobCreateRequest(BaseModel):
 class JobUpdateRequest(BaseModel):
     status: Optional[str] = None
     result_meta: Optional[dict] = None
-    finished_at: Optional[str] = None  # ISO-8601 string
+    finished_at: Optional[str] = None
 
 
 @router.post("/jobs")
@@ -619,7 +606,6 @@ async def create_job(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Persist a newly-submitted Celery job so it survives page reloads."""
     await get_owned_project(body.project_id, current_user, db)
     job = TrainingJob(
         id=body.task_id,
@@ -642,7 +628,6 @@ async def list_jobs(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Return all persisted jobs for a project, oldest first."""
     await get_owned_project(project_id, current_user, db)
 
     q = select(TrainingJob).where(TrainingJob.project_id == project_id)
@@ -675,13 +660,11 @@ async def update_job(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Update status and/or result_meta for a job."""
     result = await db.execute(select(TrainingJob).where(TrainingJob.id == task_id))
     job = result.scalar_one_or_none()
     if not job:
         raise HTTPException(status_code=404, detail=f"Job {task_id} not found")
 
-    # Verify job belongs to the current user's project
     proj_result = await db.execute(
         select(Project).where(
             Project.id == job.project_id,
