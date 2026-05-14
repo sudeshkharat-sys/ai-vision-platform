@@ -926,11 +926,12 @@
 
 /* ── Stop button ── */
 .tp-stop-btn {
+  width: 100%;
   padding: 12px 22px;
   background: transparent;
   border: 1.5px solid #dc2626;
   color: #dc2626;
-  border-radius: 8px;
+  border-radius: 10px;
   font-size: 14px;
   font-weight: 600;
   cursor: pointer;
@@ -938,6 +939,7 @@
   white-space: nowrap;
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 6px;
 }
 .tp-stop-btn:hover { background: rgba(220,38,38,0.08); }
@@ -997,3 +999,20 @@
   min-width: 36px;
   text-align: right;
 }
+
+/* ── Job delete button ── */
+.tp-job-delete {
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: #999999;
+  cursor: pointer;
+  padding: 2px;
+  border-radius: 3px;
+  display: flex;
+  align-items: center;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.tp-job-item:hover .tp-job-delete { opacity: 1; }
+.tp-job-delete:hover { color: #dc143c; background: #fee2e2; }
