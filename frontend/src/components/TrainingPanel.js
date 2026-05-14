@@ -14,7 +14,7 @@ const POLL_INTERVAL = 3000;
 const MAX_PARALLEL = 1;
 const NO_WORKER_TICKS = 15; // ~45s
 
-// ── Split preview (mirrors backend _split_images logic) ────────────────────
+// ── Split preview (mirrors backend _split_images logic) ──────────────
 function computeSplitPreview(n) {
     if (n < 1) return null;
     if (n < 5)  return { train: n, val: n, test: 0, mirror: true };
@@ -28,7 +28,7 @@ function computeSplitPreview(n) {
     return { train, val, test, mirror: false };
 }
 
-// ── Helpers ─────────────────────────────────────────────────────
+// ── Helpers ───────────────────────────────────────────
 const makeJob = (taskId) => ({
     id: Date.now(),
     taskId,
@@ -60,7 +60,7 @@ const fmtEta = (sec) => {
     return m > 0 ? `${m}m ${s}s` : `${s}s`;
 };
 
-// ── Tiny chart tooltip ────────────────────────────────────────────────────
+// ── Tiny chart tooltip ─────────────────────────────────
 const ChartTooltip = ({ active, payload, label }) => {
     if (!active || !payload?.length) return null;
     return (
@@ -75,7 +75,7 @@ const ChartTooltip = ({ active, payload, label }) => {
     );
 };
 
-// ── Loss chart ─────────────────────────────────────────────────────
+// ── Loss chart ─────────────────────────────────────────
 const LossChart = ({ history }) => {
     if (!history?.length) return null;
     const hasBox = history.some(h => h.box_loss != null);
@@ -101,7 +101,7 @@ const LossChart = ({ history }) => {
     );
 };
 
-// ── mAP chart ─────────────────────────────────────────────────────
+// ── mAP chart ─────────────────────────────────────────
 const MapChart = ({ history }) => {
     if (!history?.length) return null;
     const hasMap50 = history.some(h => h['mAP50'] != null || h['mAP50(B)'] != null);
@@ -133,7 +133,7 @@ const MapChart = ({ history }) => {
     );
 };
 
-// ── PreprocessingProgress ─────────────────────────────────────────────────
+// ── PreprocessingProgress ──────────────────────────────
 const PreprocessingProgress = ({ meta }) => {
     if (!meta || meta.phase !== 'preprocessing') return null;
     const { current = 0, total = 0, split = '', pct = 0 } = meta;
@@ -158,7 +158,7 @@ const PreprocessingProgress = ({ meta }) => {
     );
 };
 
-// ── EpochProgress ──────────────────────────────────────────────────────
+// ── EpochProgress ──────────────────────────────────────
 const EpochProgress = ({ meta }) => {
     if (!meta || meta.epoch == null) return null;
     const { epoch, total_epochs, eta_seconds } = meta;
@@ -193,7 +193,7 @@ const TrainingPanel = ({ project, onClose }) => {
     const [imgsz, setImgsz]             = useState(640);
     const [batch, setBatch]             = useState(-1);
     const [preprocess, setPreprocess]   = useState(true);
-    const [clahePreview, setClahePreview] = useState(null);
+    const [clahePreview, setClahePreview] = useState(null);   // { original, enhanced, filename }
     const [previewLoading, setPreviewLoading] = useState(false);
 
     const logsEndRef = useRef(null);
@@ -203,7 +203,7 @@ const TrainingPanel = ({ project, onClose }) => {
 
     useEffect(() => { jobsRef.current = jobs; }, [jobs]);
 
-    // ── Stats ───────────────────────────────────────────────────
+    // ── Stats ─────────────────────────────────────────
     const loadStats = useCallback(() => {
         setStatsLoading(true);
         axios.get(`${API_URL}/pipeline/training-stats/${project.id}`)
@@ -212,7 +212,7 @@ const TrainingPanel = ({ project, onClose }) => {
             .finally(() => setStatsLoading(false));
     }, [project.id]);
 
-    // ── CLAHE preview ────────────────────────────────────────────────
+    // ── CLAHE preview ──────────────────────────────────
     const loadClahePreview = useCallback(() => {
         setPreviewLoading(true);
         axios.get(`${API_URL}/pipeline/clahe-preview/${project.id}`)
@@ -221,7 +221,7 @@ const TrainingPanel = ({ project, onClose }) => {
             .finally(() => setPreviewLoading(false));
     }, [project.id]);
 
-    // ── Load persisted jobs from DB on mount ────────────────────────
+    // ── Load persisted jobs from DB on mount ──────────
     const loadPersistedJobs = useCallback((resumePollingFn) => {
         axios.get(`${API_URL}/pipeline/jobs/${project.id}?job_type=seed_training`)
             .then(async res => {
@@ -238,6 +238,8 @@ const TrainingPanel = ({ project, onClose }) => {
                     startedAt: new Date(j.created_at),
                 }));
 
+                // ── Reconcile ALL active jobs in parallel BEFORE rendering ──
+                // Single setJobs call after all checks complete — no flicker.
                 const reconciled = await Promise.all(loaded.map(async (job) => {
                     if (job.status !== 'PENDING' && job.status !== 'STARTED') return job;
 
@@ -268,6 +270,7 @@ const TrainingPanel = ({ project, onClose }) => {
                             return { ...job, status: 'FAILURE', error, logs: newLogs };
 
                         } else if (celery === 'PENDING' && job.status === 'STARTED') {
+                            // DB says "started" but Celery shows PENDING — result expired.
                             const newLogs = [...job.logs,
                                 '⚠️  Task result expired (panel was closed before it finished).',
                                 '    The training run may have completed — check for a saved model.',
@@ -280,15 +283,18 @@ const TrainingPanel = ({ project, onClose }) => {
                             return { ...job, status: 'FAILURE', logs: newLogs };
 
                         } else {
+                            // Genuinely still running — start the normal poll loop
                             resumePollingFn(job.taskId);
                             return job;
                         }
                     } catch {
+                        // Can't reach status endpoint — resume polling so it retries
                         resumePollingFn(job.taskId);
                         return job;
                     }
                 }));
 
+                // Single state update — no flicker
                 setJobs(reconciled);
                 setActiveJobId(reconciled[reconciled.length - 1].id);
             })
@@ -297,6 +303,7 @@ const TrainingPanel = ({ project, onClose }) => {
 
     useEffect(() => {
         loadStats();
+        // Pass startPolling via argument to avoid stale-closure dependency issues
         loadPersistedJobs(startPolling);
         const polls = pollRef.current;
         return () => { Object.values(polls).forEach(clearInterval); };
@@ -308,15 +315,15 @@ const TrainingPanel = ({ project, onClose }) => {
         if (logsEndRef.current) logsEndRef.current.scrollIntoView({ behavior: 'smooth' });
     }, [jobs, activeJobId]);
 
-    // ── Helpers ─────────────────────────────────────────────────
+    // ── Helpers ───────────────────────────────────────
     const runningCount = () =>
         jobsRef.current.filter(j => j.status === 'PENDING' || j.status === 'STARTED').length;
 
-    // ── Polling ─────────────────────────────────────────────────
+    // ── Polling ───────────────────────────────────────
     const startPolling = useCallback((taskId) => {
         if (pollRef.current[taskId]) clearInterval(pollRef.current[taskId]);
         let pendingTicks = 0;
-        let startedPersisted = false;
+        let startedPersisted = false; // only PATCH 'started' once
 
         pollRef.current[taskId] = setInterval(async () => {
             try {
@@ -381,6 +388,7 @@ const TrainingPanel = ({ project, onClose }) => {
                         const finalMeta = result?.history?.length
                             ? { ...j.epochMeta, history: result.history, epoch: result.history.length }
                             : j.epochMeta;
+                        // Persist final state
                         axios.patch(`${API_URL}/pipeline/jobs/${taskId}`, {
                             status: 'success',
                             result_meta: {
@@ -397,6 +405,7 @@ const TrainingPanel = ({ project, onClose }) => {
                         delete pollRef.current[taskId];
                         newLogs = [...newLogs, `❌  Failed: ${error || 'Unknown error'}`];
                         setTimeout(() => dispatchQueued(), 100);
+                        // Persist final state
                         axios.patch(`${API_URL}/pipeline/jobs/${taskId}`, {
                             status: 'failure',
                             result_meta: {
@@ -415,7 +424,7 @@ const TrainingPanel = ({ project, onClose }) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [loadStats]);
 
-    // ── Dispatch queued job ──────────────────────────────────────────
+    // ── Dispatch queued job ────────────────────────────
     const dispatchQueued = useCallback(async () => {
         if (runningCount() >= MAX_PARALLEL) return;
         const next = queueRef.current.shift();
@@ -432,6 +441,7 @@ const TrainingPanel = ({ project, onClose }) => {
                     ? { ...j, taskId, status: 'PENDING', logs }
                     : j
             ));
+            // Persist newly-dispatched job to DB
             axios.post(`${API_URL}/pipeline/jobs`, {
                 task_id: taskId, project_id: next.projectId, job_type: 'seed_training',
                 result_meta: { logs, startedAt: new Date().toISOString(), modelName: next.modelName },
@@ -446,25 +456,28 @@ const TrainingPanel = ({ project, onClose }) => {
         }
     }, [startPolling]);
 
-    // ── Stop running job ──────────────────────────────────────────
+    // ── Stop running job ──────────────────────────────
     const handleStop = async () => {
-        const job = activeJob || jobs.find(j => j.status === 'PENDING' || j.status === 'STARTED');
-        if (!job?.taskId) return;
-        try {
-            await axios.post(`${API_URL}/pipeline/cancel/${job.taskId}`);
-        } catch { /* ignore network errors — UI update is local */ }
-        if (pollRef.current[job.taskId]) {
-            clearInterval(pollRef.current[job.taskId]);
-            delete pollRef.current[job.taskId];
+        const activeJobs = jobs.filter(j => (j.status === 'PENDING' || j.status === 'STARTED') && j.taskId);
+        for (const job of activeJobs) {
+            try { await axios.post(`${API_URL}/pipeline/cancel/${job.taskId}`); } catch {}
+            if (pollRef.current[job.taskId]) {
+                clearInterval(pollRef.current[job.taskId]);
+                delete pollRef.current[job.taskId];
+            }
         }
-        setJobs(prev => prev.map(j =>
-            j.taskId === job.taskId
-                ? { ...j, status: 'REVOKED', logs: [...j.logs, '🛑  Stopped by user.'] }
-                : j
-        ));
+        queueRef.current = [];
+        setJobs(prev => prev
+            .filter(j => j.status !== 'QUEUED')
+            .map(j =>
+                (j.status === 'PENDING' || j.status === 'STARTED')
+                    ? { ...j, status: 'REVOKED', logs: [...j.logs, '🛑  Stopped by user.'] }
+                    : j
+            )
+        );
     };
 
-    // ── Delete job from list ─────────────────────────────────────────
+    // ── Delete job from list ───────────────────────────
     const handleDeleteJob = async (job) => {
         if ((job.status === 'PENDING' || job.status === 'STARTED') && job.taskId) {
             try { await axios.post(`${API_URL}/pipeline/cancel/${job.taskId}`); } catch {}
@@ -481,7 +494,7 @@ const TrainingPanel = ({ project, onClose }) => {
         });
     };
 
-    // ── Launch training ────────────────────────────────────────────
+    // ── Launch training ────────────────────────────────
     const handleTrain = async () => {
         setLaunching(true);
         setView('jobs');
@@ -507,6 +520,7 @@ const TrainingPanel = ({ project, onClose }) => {
             const job = makeJob(taskId);
             setJobs(prev => [...prev, job]);
             setActiveJobId(job.id);
+            // Persist to DB so jobs survive page reload
             axios.post(`${API_URL}/pipeline/jobs`, {
                 task_id: taskId, project_id: project.id, job_type: 'seed_training',
                 result_meta: { logs: job.logs, startedAt: job.startedAt.toISOString(), modelName: selectedModel },
@@ -525,9 +539,9 @@ const TrainingPanel = ({ project, onClose }) => {
         }
     };
 
-    // ── Derived ──────────────────────────────────────────────────
+    // ── Derived ────────────────────────────────────────
     const activeJob  = jobs.find(j => j.id === activeJobId) || jobs[jobs.length - 1] || null;
-    const anyRunning = jobs.some(j => j.status === 'PENDING' || j.status === 'STARTED');
+    const anyRunning = jobs.some(j => j.status === 'PENDING' || j.status === 'STARTED' || j.status === 'QUEUED');
     const readyToTrain = stats?.ready_to_train;
 
     const btnLabel = () => {
@@ -610,9 +624,11 @@ const TrainingPanel = ({ project, onClose }) => {
                                         {stats.pending_images > 0 && readyToTrain && (
                                             <div className="tp-info" style={{ display: 'flex', alignItems: 'center', gap: 6 }}><Info size={16} /> {stats.pending_images} unannotated image{stats.pending_images !== 1 ? 's' : ''} — more annotations improve accuracy.</div>
                                         )}
+                                        {/* ── Split preview ── */}
                                         {(() => {
                                             const sp = computeSplitPreview(stats.annotated_images);
                                             if (!sp) return null;
+                                            const total = sp.train + (sp.mirror ? 0 : sp.val) + sp.test;
                                             return (
                                                 <div className="tp-split-preview">
                                                     <span className="tp-split-preview-label">Expected split</span>
@@ -632,6 +648,7 @@ const TrainingPanel = ({ project, onClose }) => {
                             <section className="tp-section">
                                 <p className="tp-section-title">Training Config</p>
 
+                                {/* ── Model selector ── */}
                                 <div className="tp-model-row">
                                     <label className="tp-model-label">YOLO Architecture</label>
                                     <select
@@ -651,6 +668,7 @@ const TrainingPanel = ({ project, onClose }) => {
                                     </select>
                                 </div>
 
+                                {/* ── Epochs ── */}
                                 <div className="tp-model-row">
                                     <label className="tp-model-label">
                                         Epochs
@@ -667,6 +685,7 @@ const TrainingPanel = ({ project, onClose }) => {
                                     </div>
                                 </div>
 
+                                {/* ── Image Size ── */}
                                 <div className="tp-model-row">
                                     <label className="tp-model-label">
                                         Image Size
@@ -679,6 +698,7 @@ const TrainingPanel = ({ project, onClose }) => {
                                     </select>
                                 </div>
 
+                                {/* ── Batch Size ── */}
                                 <div className="tp-model-row">
                                     <label className="tp-model-label">
                                         Batch Size
@@ -696,6 +716,7 @@ const TrainingPanel = ({ project, onClose }) => {
                                     </div>
                                 )}
 
+                                {/* ── Static info rows ── */}
                                 <div className="tp-config-rows" style={{ marginTop: 12 }}>
                                     {[
                                         ['Classes', project.classes?.length > 0 ? project.classes.join(', ') : 'dynamic'],
@@ -709,6 +730,7 @@ const TrainingPanel = ({ project, onClose }) => {
                                     ))}
                                 </div>
 
+                                {/* ── CLAHE preprocessing toggle ── */}
                                 <div className="tp-toggle-row" style={{ marginTop: 12 }}>
                                     <label className="tp-toggle-label">
                                         <input
@@ -728,6 +750,7 @@ const TrainingPanel = ({ project, onClose }) => {
                                     </label>
                                 </div>
 
+                                {/* ── Before / After preview ── */}
                                 {preprocess && (
                                     <div style={{ marginTop: 10 }}>
                                         {clahePreview ? (
@@ -829,6 +852,7 @@ const TrainingPanel = ({ project, onClose }) => {
                                 {/* Right: job detail */}
                                 {activeJob && (
                                     <div className="tp-job-detail">
+                                        {/* Status row */}
                                         <div className="tp-job-detail-header">
                                             {(() => {
                                                 const info = STATUS_LABEL[activeJob.status] || { label: activeJob.status, cls: 'badge--pending' };
@@ -840,6 +864,7 @@ const TrainingPanel = ({ project, onClose }) => {
                                             )}
                                         </div>
 
+                                        {/* Task ID */}
                                         {activeJob.taskId && (
                                             <div className="tp-job-taskid">
                                                 <span className="tp-job-taskid-label">Task ID</span>
@@ -847,20 +872,24 @@ const TrainingPanel = ({ project, onClose }) => {
                                             </div>
                                         )}
 
+                                        {/* Queued */}
                                         {activeJob.status === 'QUEUED' && (
                                             <div className="tp-info" style={{ marginBottom: 12 }}>
                                                 ⏳ Queued — will start when a slot opens (max {MAX_PARALLEL} parallel).
                                             </div>
                                         )}
 
+                                        {/* ── Preprocessing Progress ── */}
                                         {activeJob.status === 'STARTED' && (
                                             <PreprocessingProgress meta={activeJob.epochMeta} />
                                         )}
 
+                                        {/* ── Epoch Progress ── */}
                                         {(activeJob.status === 'STARTED' || activeJob.status === 'SUCCESS') && (
                                             <EpochProgress meta={activeJob.epochMeta} />
                                         )}
 
+                                        {/* ── Dataset Split ── */}
                                         {(() => {
                                             const split = activeJob.epochMeta?.split || activeJob.result?.split;
                                             if (!split) return null;
@@ -869,15 +898,26 @@ const TrainingPanel = ({ project, onClose }) => {
                                                 <div className="tp-split-row">
                                                     <span className="tp-split-label">Dataset split</span>
                                                     <div className="tp-split-badges">
-                                                        <span className="tp-split-badge tp-split-badge--train">Train&nbsp;{split.train}</span>
-                                                        <span className="tp-split-badge tp-split-badge--val">Val&nbsp;{split.val}</span>
-                                                        {split.test > 0 && <span className="tp-split-badge tp-split-badge--test">Test&nbsp;{split.test}</span>}
-                                                        <span className="tp-split-badge tp-split-badge--total">Total&nbsp;{total}</span>
+                                                        <span className="tp-split-badge tp-split-badge--train">
+                                                            Train&nbsp;{split.train}
+                                                        </span>
+                                                        <span className="tp-split-badge tp-split-badge--val">
+                                                            Val&nbsp;{split.val}
+                                                        </span>
+                                                        {split.test > 0 && (
+                                                            <span className="tp-split-badge tp-split-badge--test">
+                                                                Test&nbsp;{split.test}
+                                                            </span>
+                                                        )}
+                                                        <span className="tp-split-badge tp-split-badge--total">
+                                                            Total&nbsp;{total}
+                                                        </span>
                                                     </div>
                                                 </div>
                                             );
                                         })()}
 
+                                        {/* ── Charts ── */}
                                         {activeJob.epochMeta?.history?.length > 0 && (
                                             <div className="charts-section">
                                                 <LossChart history={activeJob.epochMeta.history} />
@@ -885,6 +925,7 @@ const TrainingPanel = ({ project, onClose }) => {
                                             </div>
                                         )}
 
+                                        {/* ── Log ── */}
                                         <div className="tp-section-header" style={{ marginBottom: 6 }}>
                                             <span className="tp-section-title" style={{ margin: 0 }}>Log</span>
                                         </div>
@@ -895,6 +936,7 @@ const TrainingPanel = ({ project, onClose }) => {
                                             <div ref={logsEndRef} />
                                         </div>
 
+                                        {/* ── Final metrics table ── */}
                                         {activeJob.status === 'SUCCESS' && activeJob.result && (
                                             <div className="tp-result-card" style={{ marginTop: 12 }}>
                                                 <span className="tp-result-icon">🏆</span>
@@ -921,6 +963,7 @@ const TrainingPanel = ({ project, onClose }) => {
                                             </div>
                                         )}
 
+                                        {/* No worker */}
                                         {activeJob.status === 'NO_WORKER' && (
                                             <div className="tp-worker-box tp-worker-box--error" style={{ marginTop: 12 }}>
                                                 <p className="tp-worker-error">⚠️ Worker not detected. Start it, then try again.</p>
