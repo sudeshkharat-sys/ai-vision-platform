@@ -11,10 +11,10 @@ import logoImg from '../logo.png';
 
 import { API_URL } from '../config';
 const POLL_INTERVAL = 3000;
-const MAX_PARALLEL  = 2;
+const MAX_PARALLEL  = 1;
 const NO_WORKER_TICKS = 15; // ~45 s
 
-// ── Split preview (mirrors backend _split_images logic) ──────────────
+// ── Split preview (mirrors backend _split_images logic) ────────────────────
 function computeSplitPreview(n) {
     if (n < 1) return null;
     if (n < 5)  return { train: n, val: n, test: 0, mirror: true };
@@ -28,7 +28,7 @@ function computeSplitPreview(n) {
     return { train, val, test, mirror: false };
 }
 
-// ── Helpers ────────────────────────────────────────────────────────
+// ── Helpers ────────────────────────────────────────────────────────────────
 const makeJob = (taskId, modelName) => ({
     id: Date.now(),
     taskId,
@@ -61,7 +61,7 @@ const fmtEta = (sec) => {
     return m > 0 ? `${m}m ${s}s` : `${s}s`;
 };
 
-// ── Chart tooltip ──────────────────────────────────────────────────
+// ── Chart tooltip ───────────────────────────────────────────────────────────
 const ChartTooltip = ({ active, payload, label }) => {
     if (!active || !payload?.length) return null;
     return (
@@ -76,7 +76,7 @@ const ChartTooltip = ({ active, payload, label }) => {
     );
 };
 
-// ── Loss chart ─────────────────────────────────────────────────────
+// ── Loss chart ───────────────────────────────────────────────────────────────
 const LossChart = ({ history }) => {
     if (!history?.length) return null;
     const hasBox = history.some(h => h.box_loss != null);
@@ -103,7 +103,7 @@ const LossChart = ({ history }) => {
     );
 };
 
-// ── mAP chart ──────────────────────────────────────────────────────
+// ── mAP chart ───────────────────────────────────────────────────────────────
 const MapChart = ({ history }) => {
     if (!history?.length) return null;
     const hasMap50 = history.some(h => h['mAP50'] != null || h['mAP50(B)'] != null);
@@ -132,7 +132,7 @@ const MapChart = ({ history }) => {
     );
 };
 
-// ── PreprocessingProgress ──────────────────────────────────────────
+// ── PreprocessingProgress ─────────────────────────────────────────────────────
 const PreprocessingProgress = ({ meta }) => {
     if (!meta || meta.phase !== 'preprocessing') return null;
     const { current = 0, total = 0, split = '', pct = 0 } = meta;
@@ -157,7 +157,7 @@ const PreprocessingProgress = ({ meta }) => {
     );
 };
 
-// ── Epoch progress bar ─────────────────────────────────────────────
+// ── Epoch progress bar ────────────────────────────────────────────────────────
 const EpochProgress = ({ meta }) => {
     if (!meta || meta.epoch == null) return null;
     const { epoch, total_epochs, eta_seconds } = meta;
@@ -177,9 +177,9 @@ const EpochProgress = ({ meta }) => {
     );
 };
 
-// ══════════════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════════
 //  MainTrainingPanel
-// ══════════════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════════
 const MainTrainingPanel = ({ project, onClose }) => {
     const [stats, setStats]               = useState(null);
     const [statsLoading, setStatsLoading] = useState(true);
@@ -189,7 +189,6 @@ const MainTrainingPanel = ({ project, onClose }) => {
     const [launching, setLaunching]       = useState(false);
     const [view, setView]                 = useState('detail');
 
-    // Config state
     const [selectedModel, setSelectedModel]     = useState(DEFAULT_MAIN_MODEL);
     const [epochs, setEpochs]                   = useState(60);
     const [useSeedWeights, setUseSeedWeights]   = useState(true);
@@ -206,7 +205,6 @@ const MainTrainingPanel = ({ project, onClose }) => {
 
     useEffect(() => { jobsRef.current = jobs; }, [jobs]);
 
-    // ── Load stats + model status ──────────────────────────────────
     const loadData = useCallback(() => {
         setStatsLoading(true);
         Promise.all([
@@ -221,7 +219,6 @@ const MainTrainingPanel = ({ project, onClose }) => {
             .finally(() => setStatsLoading(false));
     }, [project.id]);
 
-    // ── CLAHE preview ──────────────────────────────────────────────
     const loadClahePreview = useCallback(() => {
         setPreviewLoading(true);
         axios.get(`${API_URL}/pipeline/clahe-preview/${project.id}`)
@@ -230,7 +227,6 @@ const MainTrainingPanel = ({ project, onClose }) => {
             .finally(() => setPreviewLoading(false));
     }, [project.id]);
 
-    // ── Load persisted jobs from DB ────────────────────────────────
     const loadPersistedJobs = useCallback((resumePollingFn) => {
         axios.get(`${API_URL}/pipeline/jobs/${project.id}?job_type=main_training`)
             .then(async res => {
@@ -248,8 +244,6 @@ const MainTrainingPanel = ({ project, onClose }) => {
                     startedAt: new Date(j.created_at),
                 }));
 
-                // ── Reconcile ALL active jobs in parallel BEFORE rendering ──
-                // Single setJobs call after all checks complete — no flicker.
                 const reconciled = await Promise.all(loaded.map(async (job) => {
                     if (job.status !== 'PENDING' && job.status !== 'STARTED') return job;
 
@@ -280,7 +274,6 @@ const MainTrainingPanel = ({ project, onClose }) => {
                             return { ...job, status: 'FAILURE', error, logs: newLogs };
 
                         } else if (celery === 'PENDING' && job.status === 'STARTED') {
-                            // DB says "started" but Celery shows PENDING — result expired.
                             const newLogs = [...job.logs,
                                 '⚠️  Task result expired (panel was closed before it finished).',
                                 '    The main training run may have completed — check for a saved model.',
@@ -293,18 +286,15 @@ const MainTrainingPanel = ({ project, onClose }) => {
                             return { ...job, status: 'FAILURE', logs: newLogs };
 
                         } else {
-                            // Genuinely still running — start the normal poll loop
                             resumePollingFn(job.taskId);
                             return job;
                         }
                     } catch {
-                        // Can't reach status endpoint — resume polling so it retries
                         resumePollingFn(job.taskId);
                         return job;
                     }
                 }));
 
-                // Single state update — no flicker
                 setJobs(reconciled);
                 setActiveJobId(reconciled[reconciled.length - 1].id);
             })
@@ -319,7 +309,6 @@ const MainTrainingPanel = ({ project, onClose }) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [loadData, loadPersistedJobs]);
 
-    // auto-scroll log
     useEffect(() => {
         if (logsEndRef.current) logsEndRef.current.scrollIntoView({ behavior: 'smooth' });
     }, [jobs, activeJobId]);
@@ -327,7 +316,6 @@ const MainTrainingPanel = ({ project, onClose }) => {
     const runningCount = () =>
         jobsRef.current.filter(j => j.status === 'PENDING' || j.status === 'STARTED').length;
 
-    // ── Polling ───────────────────────────────────────────────────
     const startPolling = useCallback((taskId) => {
         if (pollRef.current[taskId]) clearInterval(pollRef.current[taskId]);
         let pendingTicks    = 0;
@@ -432,7 +420,6 @@ const MainTrainingPanel = ({ project, onClose }) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [loadData]);
 
-    // ── Dispatch queued job ────────────────────────────────────────
     const dispatchQueued = useCallback(async () => {
         if (runningCount() >= MAX_PARALLEL) return;
         const next = queueRef.current.shift();
@@ -464,7 +451,6 @@ const MainTrainingPanel = ({ project, onClose }) => {
         }
     }, [startPolling]);
 
-    // ── Stop running job ───────────────────────────────────────────
     const handleStop = async () => {
         const job = activeJob || jobs.find(j => j.status === 'PENDING' || j.status === 'STARTED');
         if (!job?.taskId) return;
@@ -482,7 +468,22 @@ const MainTrainingPanel = ({ project, onClose }) => {
         ));
     };
 
-    // ── Launch ─────────────────────────────────────────────────────
+    const handleDeleteJob = async (job) => {
+        if ((job.status === 'PENDING' || job.status === 'STARTED') && job.taskId) {
+            try { await axios.post(`${API_URL}/pipeline/cancel/${job.taskId}`); } catch {}
+            if (pollRef.current[job.taskId]) {
+                clearInterval(pollRef.current[job.taskId]);
+                delete pollRef.current[job.taskId];
+            }
+        }
+        setJobs(prev => {
+            const remaining = prev.filter(j => j.id !== job.id);
+            if (activeJobId === job.id)
+                setActiveJobId(remaining.length ? remaining[remaining.length - 1].id : null);
+            return remaining;
+        });
+    };
+
     const handleTrain = async () => {
         setLaunching(true);
         setView('jobs');
@@ -531,7 +532,6 @@ const MainTrainingPanel = ({ project, onClose }) => {
         }
     };
 
-    // ── Derived ────────────────────────────────────────────────────
     const activeJob    = jobs.find(j => j.id === activeJobId) || jobs[jobs.length - 1] || null;
     const anyRunning   = jobs.some(j => j.status === 'PENDING' || j.status === 'STARTED');
     const hasSeed      = modelStatus?.has_seed_model;
@@ -577,7 +577,6 @@ const MainTrainingPanel = ({ project, onClose }) => {
                     {/* ═════════════ DETAIL VIEW ═════════════ */}
                     {view === 'detail' && (
                         <>
-                            {/* Dataset overview */}
                             <section className="mtp-section">
                                 <div className="mtp-section-header">
                                     <span className="mtp-section-title">Dataset Overview</span>
@@ -603,7 +602,6 @@ const MainTrainingPanel = ({ project, onClose }) => {
                                             </div>
                                         </div>
 
-                                        {/* Model availability status */}
                                         <div className="mtp-model-status-row">
                                             <div className={`mtp-model-chip ${hasSeed ? 'mtp-model-chip--ok' : 'mtp-model-chip--miss'}`}>
                                                 {hasSeed ? '✅' : '⚠️'} Seed Model
@@ -619,7 +617,6 @@ const MainTrainingPanel = ({ project, onClose }) => {
                                         {useSeedWeights && !hasSeed && (
                                             <div className="mtp-warning">⚠️ Seed model required when "Fine-tune from seed" is on. Train seed model first, or disable fine-tuning.</div>
                                         )}
-                                        {/* ── Split preview ── */}
                                         {(() => {
                                             const sp = computeSplitPreview(stats.annotated_images);
                                             if (!sp) return null;
@@ -639,39 +636,25 @@ const MainTrainingPanel = ({ project, onClose }) => {
                                 ) : <p className="mtp-error-text">Failed to load stats.</p>}
                             </section>
 
-                            {/* Training config */}
                             <section className="mtp-section">
                                 <p className="mtp-section-title">Training Config</p>
 
-                                {/* YOLO architecture */}
                                 <div className="mtp-model-row">
                                     <label className="mtp-model-label">YOLO Architecture</label>
-                                    <select
-                                        className="mtp-model-select"
-                                        value={selectedModel}
-                                        onChange={e => setSelectedModel(e.target.value)}
-                                    >
+                                    <select className="mtp-model-select" value={selectedModel} onChange={e => setSelectedModel(e.target.value)}>
                                         {YOLO_MODEL_GROUPS.map(group => (
                                             <optgroup key={group.family} label={`${group.family}${group.note ? ` (${group.note})` : ''}`}>
                                                 {group.models.map(m => (
-                                                    <option key={m.value} value={m.value}>
-                                                        {m.label}  [{m.params}]
-                                                    </option>
+                                                    <option key={m.value} value={m.value}>{m.label}  [{m.params}]</option>
                                                 ))}
                                             </optgroup>
                                         ))}
                                     </select>
                                 </div>
 
-                                {/* Fine-tune from seed toggle */}
                                 <div className="mtp-toggle-row">
                                     <label className="mtp-toggle-label">
-                                        <input
-                                            type="checkbox"
-                                            className="mtp-toggle-check"
-                                            checked={useSeedWeights}
-                                            onChange={e => setUseSeedWeights(e.target.checked)}
-                                        />
+                                        <input type="checkbox" className="mtp-toggle-check" checked={useSeedWeights} onChange={e => setUseSeedWeights(e.target.checked)} />
                                         <span className="mtp-toggle-slider" />
                                         <span className="mtp-toggle-text">
                                             Fine-tune from seed model
@@ -680,51 +663,35 @@ const MainTrainingPanel = ({ project, onClose }) => {
                                     </label>
                                 </div>
 
-                                {/* Epochs */}
                                 <div className="mtp-model-row">
                                     <label className="mtp-model-label">
                                         Epochs
                                         <span className="mtp-model-hint">More = better accuracy, longer training</span>
                                     </label>
                                     <div className="mtp-epochs-row">
-                                        <input
-                                            type="range" min="10" max="500" step="10"
-                                            value={epochs}
-                                            onChange={e => setEpochs(Number(e.target.value))}
-                                            className="mtp-epochs-slider"
-                                        />
+                                        <input type="range" min="10" max="500" step="10" value={epochs} onChange={e => setEpochs(Number(e.target.value))} className="mtp-epochs-slider" />
                                         <span className="mtp-epochs-val">{epochs}</span>
                                     </div>
                                 </div>
 
-                                {/* Image size */}
                                 <div className="mtp-model-row">
                                     <label className="mtp-model-label">
                                         Image Size
                                         <span className="mtp-model-hint"> (larger = slower, needs more VRAM)</span>
                                     </label>
-                                    <select
-                                        className="mtp-model-select mtp-model-select--sm"
-                                        value={imgsz}
-                                        onChange={e => setImgsz(Number(e.target.value))}
-                                    >
+                                    <select className="mtp-model-select mtp-model-select--sm" value={imgsz} onChange={e => setImgsz(Number(e.target.value))}>
                                         {[320, 416, 512, 640, 768, 1024, 1280].map(s => (
                                             <option key={s} value={s}>{s} × {s}{s === 640 ? ' (recommended)' : ''}</option>
                                         ))}
                                     </select>
                                 </div>
 
-                                {/* Batch size */}
                                 <div className="mtp-model-row">
                                     <label className="mtp-model-label">
                                         Batch Size
                                         <span className="mtp-model-hint"> (Auto finds max that fits in VRAM)</span>
                                     </label>
-                                    <select
-                                        className="mtp-model-select mtp-model-select--sm"
-                                        value={batch}
-                                        onChange={e => setBatch(Number(e.target.value))}
-                                    >
+                                    <select className="mtp-model-select mtp-model-select--sm" value={batch} onChange={e => setBatch(Number(e.target.value))}>
                                         <option value={-1}>Auto (recommended)</option>
                                         {[2, 4, 8, 16, 32].map(b => <option key={b} value={b}>{b}</option>)}
                                     </select>
@@ -735,7 +702,6 @@ const MainTrainingPanel = ({ project, onClose }) => {
                                     </div>
                                 )}
 
-                                {/* Static info */}
                                 <div className="mtp-config-rows" style={{ marginTop: 12 }}>
                                     {[
                                         ['Classes', project.classes?.length > 0 ? project.classes.join(', ') : 'dynamic'],
@@ -749,18 +715,10 @@ const MainTrainingPanel = ({ project, onClose }) => {
                                     ))}
                                 </div>
 
-                                {/* ── CLAHE preprocessing toggle ── */}
                                 <div className="mtp-toggle-row" style={{ marginTop: 12 }}>
                                     <label className="mtp-toggle-label">
-                                        <input
-                                            type="checkbox"
-                                            className="mtp-toggle-check"
-                                            checked={preprocess}
-                                            onChange={e => {
-                                                setPreprocess(e.target.checked);
-                                                if (e.target.checked && !clahePreview) loadClahePreview();
-                                            }}
-                                        />
+                                        <input type="checkbox" className="mtp-toggle-check" checked={preprocess}
+                                            onChange={e => { setPreprocess(e.target.checked); if (e.target.checked && !clahePreview) loadClahePreview(); }} />
                                         <span className="mtp-toggle-slider" />
                                         <span className="mtp-toggle-text">
                                             CLAHE contrast preprocessing
@@ -769,14 +727,11 @@ const MainTrainingPanel = ({ project, onClose }) => {
                                     </label>
                                 </div>
 
-                                {/* ── Before / After preview ── */}
                                 {preprocess && (
                                     <div style={{ marginTop: 10 }}>
                                         {clahePreview ? (
                                             <>
-                                                <p style={{ fontSize: 11, color: '#666666', marginBottom: 6 }}>
-                                                    Preview — <em>{clahePreview.filename}</em>
-                                                </p>
+                                                <p style={{ fontSize: 11, color: '#666666', marginBottom: 6 }}>Preview — <em>{clahePreview.filename}</em></p>
                                                 <div style={{ display: 'flex', gap: 8 }}>
                                                     <div style={{ flex: 1, textAlign: 'center' }}>
                                                         <p style={{ fontSize: 10, color: '#666666', marginBottom: 4 }}>Original</p>
@@ -799,12 +754,7 @@ const MainTrainingPanel = ({ project, onClose }) => {
                                                 <span>
                                                     <strong>CLAHE active</strong> — contrast enhancement will be applied to all training images.
                                                     {stats?.annotated_images > 0 && (
-                                                        <button
-                                                            onClick={loadClahePreview}
-                                                            style={{ marginLeft: 8, background: 'none', border: 'none', color: '#dc143c', cursor: 'pointer', fontSize: 11, textDecoration: 'underline', padding: 0 }}
-                                                        >
-                                                            Show preview
-                                                        </button>
+                                                        <button onClick={loadClahePreview} style={{ marginLeft: 8, background: 'none', border: 'none', color: '#dc143c', cursor: 'pointer', fontSize: 11, textDecoration: 'underline', padding: 0 }}>Show preview</button>
                                                     )}
                                                 </span>
                                             </div>
@@ -813,21 +763,18 @@ const MainTrainingPanel = ({ project, onClose }) => {
                                 )}
                                 {!preprocess && (
                                     <div className="mtp-warning" style={{ marginTop: 8 }}>
-                                        Preprocessing disabled — raw images will be used as-is. Detection of subtle brightness-based defects may be less accurate.
+                                        Preprocessing disabled — raw images will be used as-is.
                                     </div>
                                 )}
                             </section>
 
-                            {/* Worker setup */}
                             <section className="mtp-section">
                                 <p className="mtp-section-title">Worker Setup Required</p>
                                 <div className="mtp-worker-box">
                                     <p className="mtp-worker-desc">Open a <strong>new terminal</strong> in <code>backend/</code> and run:</p>
                                     <div className="mtp-cmd-block">
                                         <code>celery -A app.tasks.celery_app:celery_app worker --loglevel=info</code>
-                                        <button className="mtp-cmd-copy"
-                                            onClick={() => navigator.clipboard.writeText('celery -A app.tasks.celery_app:celery_app worker --loglevel=info')}
-                                            title="Copy"><Copy size={14} /></button>
+                                        <button className="mtp-cmd-copy" onClick={() => navigator.clipboard.writeText('celery -A app.tasks.celery_app:celery_app worker --loglevel=info')} title="Copy"><Copy size={14} /></button>
                                     </div>
                                 </div>
                             </section>
@@ -844,34 +791,26 @@ const MainTrainingPanel = ({ project, onClose }) => {
                             </div>
                         ) : (
                             <div className="mtp-jobs-layout">
-
-                                {/* Job list */}
                                 <div className="mtp-jobs-list">
                                     {[...jobs].reverse().map((job, idx) => {
                                         const info = STATUS_LABEL[job.status] || { label: job.status, cls: 'badge--pending' };
                                         return (
-                                            <div
-                                                key={job.id}
-                                                className={`mtp-job-item ${activeJob?.id === job.id ? 'mtp-job-item--active' : ''}`}
-                                                onClick={() => setActiveJobId(job.id)}
-                                            >
+                                            <div key={job.id} className={`mtp-job-item ${activeJob?.id === job.id ? 'mtp-job-item--active' : ''}`} onClick={() => setActiveJobId(job.id)}>
                                                 <div className="mtp-job-item-top">
                                                     <span className="mtp-job-num">#{jobs.length - idx}</span>
                                                     <span className={`mtp-job-badge ${info.cls}`}>{info.label}</span>
+                                                    <button className="mtp-job-delete" onClick={e => { e.stopPropagation(); handleDeleteJob(job); }} title="Delete job"><X size={10} /></button>
                                                 </div>
                                                 <div className="mtp-job-item-model">{job.modelName}</div>
                                                 <div className="mtp-job-item-time">{fmtTime(job.startedAt)}</div>
                                                 {job.status === 'STARTED' && job.epochMeta?.epoch != null && (
-                                                    <div className="mtp-job-item-epoch">
-                                                        {job.epochMeta.epoch}/{job.epochMeta.total_epochs}
-                                                    </div>
+                                                    <div className="mtp-job-item-epoch">{job.epochMeta.epoch}/{job.epochMeta.total_epochs}</div>
                                                 )}
                                             </div>
                                         );
                                     })}
                                 </div>
 
-                                {/* Job detail */}
                                 {activeJob && (
                                     <div className="mtp-job-detail">
                                         <div className="mtp-job-detail-header">
@@ -885,7 +824,6 @@ const MainTrainingPanel = ({ project, onClose }) => {
                                             )}
                                         </div>
 
-                                        {/* Model badge */}
                                         {activeJob.modelName && (
                                             <div className="mtp-job-model-tag">
                                                 <span className="mtp-job-model-icon"><Brain size={12} /></span>
@@ -906,16 +844,9 @@ const MainTrainingPanel = ({ project, onClose }) => {
                                             </div>
                                         )}
 
-                                        {/* ── Preprocessing Progress ── */}
-                                        {activeJob.status === 'STARTED' && (
-                                            <PreprocessingProgress meta={activeJob.epochMeta} />
-                                        )}
+                                        {activeJob.status === 'STARTED' && <PreprocessingProgress meta={activeJob.epochMeta} />}
+                                        {(activeJob.status === 'STARTED' || activeJob.status === 'SUCCESS') && <EpochProgress meta={activeJob.epochMeta} />}
 
-                                        {(activeJob.status === 'STARTED' || activeJob.status === 'SUCCESS') && (
-                                            <EpochProgress meta={activeJob.epochMeta} />
-                                        )}
-
-                                        {/* ── Dataset Split ── */}
                                         {(() => {
                                             const split = activeJob.epochMeta?.split || activeJob.result?.split;
                                             if (!split) return null;
@@ -924,20 +855,10 @@ const MainTrainingPanel = ({ project, onClose }) => {
                                                 <div className="mtp-split-row">
                                                     <span className="mtp-split-label">Dataset split</span>
                                                     <div className="mtp-split-badges">
-                                                        <span className="mtp-split-badge mtp-split-badge--train">
-                                                            Train&nbsp;{split.train}
-                                                        </span>
-                                                        <span className="mtp-split-badge mtp-split-badge--val">
-                                                            Val&nbsp;{split.val}
-                                                        </span>
-                                                        {split.test > 0 && (
-                                                            <span className="mtp-split-badge mtp-split-badge--test">
-                                                                Test&nbsp;{split.test}
-                                                            </span>
-                                                        )}
-                                                        <span className="mtp-split-badge mtp-split-badge--total">
-                                                            Total&nbsp;{total}
-                                                        </span>
+                                                        <span className="mtp-split-badge mtp-split-badge--train">Train&nbsp;{split.train}</span>
+                                                        <span className="mtp-split-badge mtp-split-badge--val">Val&nbsp;{split.val}</span>
+                                                        {split.test > 0 && <span className="mtp-split-badge mtp-split-badge--test">Test&nbsp;{split.test}</span>}
+                                                        <span className="mtp-split-badge mtp-split-badge--total">Total&nbsp;{total}</span>
                                                     </div>
                                                 </div>
                                             );
@@ -954,9 +875,7 @@ const MainTrainingPanel = ({ project, onClose }) => {
                                             <span className="mtp-section-title" style={{ margin: 0 }}>Log</span>
                                         </div>
                                         <div className="mtp-logs">
-                                            {activeJob.logs.map((line, i) => (
-                                                <div key={i} className="mtp-log-line">{line}</div>
-                                            ))}
+                                            {activeJob.logs.map((line, i) => <div key={i} className="mtp-log-line">{line}</div>)}
                                             <div ref={logsEndRef} />
                                         </div>
 
@@ -970,21 +889,16 @@ const MainTrainingPanel = ({ project, onClose }) => {
                                             </div>
                                         )}
 
-                                        {activeJob.status === 'SUCCESS' && activeJob.result?.metrics &&
-                                            Object.keys(activeJob.result.metrics).length > 0 && (
+                                        {activeJob.status === 'SUCCESS' && activeJob.result?.metrics && Object.keys(activeJob.result.metrics).length > 0 && (
                                             <div style={{ marginTop: 12 }}>
                                                 <p className="mtp-section-title" style={{ marginBottom: 8 }}>Final Metrics</p>
                                                 <div className="mtp-config-rows">
-                                                    {Object.entries(activeJob.result.metrics)
-                                                        .filter(([k]) => k !== 'epoch')
-                                                        .map(([k, v]) => (
-                                                            <div key={k} className="mtp-config-row">
-                                                                <span className="mtp-config-key">{k}</span>
-                                                                <span className="mtp-config-val">
-                                                                    {typeof v === 'number' ? v.toFixed(4) : String(v)}
-                                                                </span>
-                                                            </div>
-                                                        ))}
+                                                    {Object.entries(activeJob.result.metrics).filter(([k]) => k !== 'epoch').map(([k, v]) => (
+                                                        <div key={k} className="mtp-config-row">
+                                                            <span className="mtp-config-key">{k}</span>
+                                                            <span className="mtp-config-val">{typeof v === 'number' ? v.toFixed(4) : String(v)}</span>
+                                                        </div>
+                                                    ))}
                                                 </div>
                                             </div>
                                         )}
@@ -1007,16 +921,13 @@ const MainTrainingPanel = ({ project, onClose }) => {
 
                 {/* ── Footer ── */}
                 <div className="mtp-footer">
-                    <button
-                        className="mtp-train-btn"
-                        onClick={handleTrain}
-                        disabled={!readyToTrain || launching}
-                    >
-                        {btnLabel()}
-                    </button>
-                    {anyRunning && (
-                        <button className="mtp-stop-btn" onClick={handleStop} title="Stop training">
-                            <Square size={14} /> Stop
+                    {anyRunning ? (
+                        <button className="mtp-stop-btn" onClick={handleStop}>
+                            <Square size={14} /> Stop Training
+                        </button>
+                    ) : (
+                        <button className="mtp-train-btn" onClick={handleTrain} disabled={!readyToTrain || launching}>
+                            {btnLabel()}
                         </button>
                     )}
                 </div>
