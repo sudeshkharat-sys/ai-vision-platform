@@ -337,17 +337,23 @@ const AnnotationWorkspace = ({ project, onProjectUpdated }) => {
         const scaleBy = 1.12;
         const oldZoom = userZoom;
         const newZoom = Math.max(0.2, Math.min(15, e.evt.deltaY < 0 ? oldZoom * scaleBy : oldZoom / scaleBy));
+        // Total stage x = centerOffset + panOffset; derive the content point under the cursor
+        const cx = Math.round((canvasSize.w - stageW) / 2);
+        const cy = Math.round((canvasSize.h - stageH) / 2);
+        const totalX = cx + stagePos.x;
+        const totalY = cy + stagePos.y;
         const mousePointTo = {
-            x: (pointer.x - stagePos.x) / (scale * oldZoom),
-            y: (pointer.y - stagePos.y) / (scale * oldZoom),
+            x: (pointer.x - totalX) / (scale * oldZoom),
+            y: (pointer.y - totalY) / (scale * oldZoom),
         };
         setUserZoom(newZoom);
+        // New panOffset = newTotalX - cx; where newTotalX keeps the hovered point fixed
         setStagePos({
-            x: pointer.x - mousePointTo.x * scale * newZoom,
-            y: pointer.y - mousePointTo.y * scale * newZoom,
+            x: pointer.x - mousePointTo.x * scale * newZoom - cx,
+            y: pointer.y - mousePointTo.y * scale * newZoom - cy,
         });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [userZoom, stagePos, scale]);
+    }, [userZoom, stagePos, scale, canvasSize, stageW, stageH]);
 
     const resetZoom = useCallback(() => {
         setUserZoom(1);
@@ -611,9 +617,10 @@ Do you want to proceed?`;
     const handleMouseDown = (e) => {
         if (isPanning || userZoom > 1) return;
         if (pendingAnnotation) return;
-        // Block if clicking directly on a listening annotation shape (Rect/Group/Text)
-        // but allow clicks on Stage/Layer/non-listening nodes (e.g. the image)
-        if (e.target.listening && e.target.listening() && e.target !== e.target.getStage()) return;
+        // Only block when clicking on a visible annotation shape (Rect/Group/Text)
+        // Stage and Layer nodes are safe to draw on; KonvaImage has listening=false
+        const cls = e.target.getClassName ? e.target.getClassName() : '';
+        if (cls === 'Rect' || cls === 'Group' || cls === 'Text') return;
         setSelectedAnnId(null);
         const pos = e.target.getStage().getRelativePointerPosition();
         setIsDrawing(true);
@@ -1003,11 +1010,15 @@ Do you want to proceed?`;
                                 height={canvasSize.h}
                                 scaleX={scale * userZoom}
                                 scaleY={scale * userZoom}
-                                x={stagePos.x}
-                                y={stagePos.y}
+                                x={Math.round((canvasSize.w - stageW) / 2) + stagePos.x}
+                                y={Math.round((canvasSize.h - stageH) / 2) + stagePos.y}
                                 draggable={isPanning || userZoom > 1}
                                 onWheel={handleWheel}
-                                onDragEnd={(e) => setStagePos({ x: e.target.x(), y: e.target.y() })}
+                                onDragEnd={(e) => {
+                                    const cx = Math.round((canvasSize.w - stageW) / 2);
+                                    const cy = Math.round((canvasSize.h - stageH) / 2);
+                                    setStagePos({ x: e.target.x() - cx, y: e.target.y() - cy });
+                                }}
                                 onMouseDown={handleMouseDown}
                                 onMouseMove={handleMouseMove}
                                 onMouseUp={handleMouseUp}
