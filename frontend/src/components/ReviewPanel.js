@@ -3,7 +3,7 @@ import axios from 'axios';
 import { Stage, Layer, Rect, Text, Image as KonvaImg, Group } from 'react-konva';
 import useImage from 'use-image';
 import './ReviewPanel.css';
-import { Check, X, Sparkles, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Check, X, Sparkles, ChevronLeft, ChevronRight, ZoomIn, ZoomOut, Maximize2 } from 'lucide-react';
 import logoImg from '../logo.png';
 
 import { API_URL, BASE_URL } from '../config';
@@ -77,9 +77,21 @@ export default function ReviewPanel({ project, images, onClose, onAnnotationsUpd
     const [statusMsg, setStatusMsg] = useState(null);
     // Actual displayed dimensions after EXIF orientation is applied by the browser
     const [loadedImageSize, setLoadedImageSize] = useState(null);
+    // Zoom / pan
+    const [userZoom, setUserZoom] = useState(1);
+    const [stagePos, setStagePos] = useState({ x: 0, y: 0 });
+    // Cache of { auto, total } annotation counts per image id (built as user browses)
+    const [annCountCache, setAnnCountCache] = useState({});
     const stageWrapRef = useRef(null);
 
     const currentImage = reviewImages[currentIdx] || null;
+
+    // Declared early so zoom/draw handlers can reference them without TDZ
+    const imgW = loadedImageSize?.width  || currentImage?.width  || 1;
+    const imgH = loadedImageSize?.height || currentImage?.height || 1;
+    const scale = currentImage ? Math.min(1, canvasSize.w / imgW, canvasSize.h / imgH) : 1;
+    const stageW = currentImage ? Math.round(imgW * scale) : canvasSize.w;
+    const stageH = currentImage ? Math.round(imgH * scale) : canvasSize.h;
 
     // Flash a short status message
     const showStatus = useCallback((msg) => {
@@ -113,9 +125,14 @@ export default function ReviewPanel({ project, images, onClose, onAnnotationsUpd
         setLoadedImageSize({ width: w, height: h });
     }, []);
 
-    // Reset loaded size when navigating to a different image
+    // Reset loaded size, zoom, and pan when navigating to a different image
     useEffect(() => {
         setLoadedImageSize(null);
+        setUserZoom(1);
+        setStagePos({ x: 0, y: 0 });
+        setPendingAnnotation(null);
+        setNewAnnotation(null);
+        setIsDrawing(false);
     }, [currentImage?.id]);
 
     // Load annotations when current image changes
@@ -128,6 +145,13 @@ export default function ReviewPanel({ project, images, onClose, onAnnotationsUpd
             .catch(() => setAnnotations([]))
             .finally(() => setLoading(false));
     }, [currentImage?.id]); // eslint-disable-line
+
+    // Update per-image annotation count cache whenever annotations change
+    useEffect(() => {
+        if (!currentImage) return;
+        const auto = annotations.filter(a => a.source !== 'manual').length;
+        setAnnCountCache(prev => ({ ...prev, [currentImage.id]: { auto, total: annotations.length } }));
+    }, [annotations, currentImage?.id]); // eslint-disable-line
 
     const navigate = useCallback((dir) => {
         setCurrentIdx(prev => {
@@ -210,21 +234,49 @@ export default function ReviewPanel({ project, images, onClose, onAnnotationsUpd
         return () => window.removeEventListener('keydown', handler);
     }, [pendingAnnotation, navigate, handleAcceptAll, handleRejectAll, onClose, onAnnotationsUpdated]);
 
-    // Canvas drawing
+    // Zoom via mouse wheel — zoom around the cursor point
+    const handleWheel = (e) => {
+        e.evt.preventDefault();
+        const stage = e.target.getStage();
+        const pointer = stage.getPointerPosition();
+        const scaleBy = 1.12;
+        const oldZoom = userZoom;
+        const newZoom = Math.max(0.2, Math.min(15, e.evt.deltaY < 0 ? oldZoom * scaleBy : oldZoom / scaleBy));
+        const cx = Math.round((canvasSize.w - stageW) / 2);
+        const cy = Math.round((canvasSize.h - stageH) / 2);
+        const totalX = cx + stagePos.x;
+        const totalY = cy + stagePos.y;
+        const mousePointTo = {
+            x: (pointer.x - totalX) / (scale * oldZoom),
+            y: (pointer.y - totalY) / (scale * oldZoom),
+        };
+        setUserZoom(newZoom);
+        setStagePos({
+            x: pointer.x - mousePointTo.x * scale * newZoom - cx,
+            y: pointer.y - mousePointTo.y * scale * newZoom - cy,
+        });
+    };
+
+    const resetZoom = () => { setUserZoom(1); setStagePos({ x: 0, y: 0 }); };
+
+    // Canvas drawing — blocked when zoomed in (drag pans instead)
     const handleMouseDown = (e) => {
+        if (userZoom > 1) return;
         if (pendingAnnotation) return;
-        const pos = e.target.getStage().getPointerPosition();
+        const cls = e.target.getClassName ? e.target.getClassName() : '';
+        if (cls === 'Rect' || cls === 'Group' || cls === 'Text') return;
+        const pos = e.target.getStage().getRelativePointerPosition();
         setIsDrawing(true);
-        setNewAnnotation({ x: pos.x / scale, y: pos.y / scale, width: 0, height: 0 });
+        setNewAnnotation({ x: pos.x, y: pos.y, width: 0, height: 0 });
     };
 
     const handleMouseMove = (e) => {
         if (!isDrawing) return;
-        const pos = e.target.getStage().getPointerPosition();
+        const pos = e.target.getStage().getRelativePointerPosition();
         setNewAnnotation(prev => ({
             ...prev,
-            width: pos.x / scale - prev.x,
-            height: pos.y / scale - prev.y,
+            width: pos.x - prev.x,
+            height: pos.y - prev.y,
         }));
     };
 
@@ -263,16 +315,6 @@ export default function ReviewPanel({ project, images, onClose, onAnnotationsUpd
         }
         setPendingAnnotation(null);
     };
-
-    // Use browser-reported natural dimensions (EXIF-corrected) once loaded
-    const imgW = loadedImageSize?.width  || currentImage?.width  || 1;
-    const imgH = loadedImageSize?.height || currentImage?.height || 1;
-
-    const scale = currentImage
-        ? Math.min(1, canvasSize.w / imgW, canvasSize.h / imgH)
-        : 1;
-    const stageW = currentImage ? Math.round(imgW * scale) : canvasSize.w;
-    const stageH = currentImage ? Math.round(imgH * scale) : canvasSize.h;
 
     const autoCount = annotations.filter(a => a.source !== 'manual').length;
     const drawnBox = pendingAnnotation || newAnnotation;
@@ -353,6 +395,12 @@ export default function ReviewPanel({ project, images, onClose, onAnnotationsUpd
                                     {reviewedIds.has(img.id) && (
                                         <div className="rp-strip-check"><Check size={12} /></div>
                                     )}
+                                    {annCountCache[img.id]?.auto > 0 && (
+                                        <div className="rp-strip-unverified">{annCountCache[img.id].auto}</div>
+                                    )}
+                                    {annCountCache[img.id]?.auto === 0 && annCountCache[img.id]?.total > 0 && (
+                                        <div className="rp-strip-allverified">✓</div>
+                                    )}
                                 </div>
                                 <div className="rp-strip-name">{img.filename}</div>
                             </div>
@@ -372,12 +420,14 @@ export default function ReviewPanel({ project, images, onClose, onAnnotationsUpd
                                 <>
                                     <div className="rp-canvas-toolbar">
                                         <span className="rp-canvas-filename">{currentImage.filename}</span>
-                                        <span className="rp-canvas-dims">
-                                            {imgW} × {imgH}px
-                                        </span>
+                                        <span className="rp-canvas-dims">{imgW} × {imgH}px</span>
                                         <span className="rp-canvas-hint">
-                                            Draw a box to add new annotation
+                                            {userZoom > 1 ? 'Drag to pan · scroll to zoom' : 'Draw a box to add annotation'}
                                         </span>
+                                        <button className="rp-zoom-btn" onClick={() => setUserZoom(z => Math.min(15, z * 1.3))} title="Zoom in"><ZoomIn size={14} /></button>
+                                        <span className="rp-zoom-pct">{Math.round(userZoom * 100)}%</span>
+                                        <button className="rp-zoom-btn" onClick={() => setUserZoom(z => Math.max(0.2, z / 1.3))} title="Zoom out"><ZoomOut size={14} /></button>
+                                        <button className="rp-zoom-btn" onClick={resetZoom} title="Reset zoom"><Maximize2 size={14} /></button>
                                         <span className="rp-ann-count-badge">
                                             {annotations.length} annotation{annotations.length !== 1 ? 's' : ''}
                                             {autoCount > 0 && (
@@ -386,13 +436,21 @@ export default function ReviewPanel({ project, images, onClose, onAnnotationsUpd
                                         </span>
                                     </div>
 
-                                    <div className="rp-stage-wrap" ref={stageWrapRef}>
+                                    <div className="rp-stage-wrap" ref={stageWrapRef} style={{ overflow: 'hidden', cursor: userZoom > 1 ? 'grab' : 'crosshair' }}>
                                         <Stage
-                                            width={stageW}
-                                            height={stageH}
-                                            scaleX={scale}
-                                            scaleY={scale}
-                                            style={{ cursor: 'crosshair' }}
+                                            width={canvasSize.w}
+                                            height={canvasSize.h}
+                                            scaleX={scale * userZoom}
+                                            scaleY={scale * userZoom}
+                                            x={Math.round((canvasSize.w - stageW) / 2) + stagePos.x}
+                                            y={Math.round((canvasSize.h - stageH) / 2) + stagePos.y}
+                                            draggable={userZoom > 1}
+                                            onWheel={handleWheel}
+                                            onDragEnd={(e) => {
+                                                const cx = Math.round((canvasSize.w - stageW) / 2);
+                                                const cy = Math.round((canvasSize.h - stageH) / 2);
+                                                setStagePos({ x: e.target.x() - cx, y: e.target.y() - cy });
+                                            }}
                                             onMouseDown={handleMouseDown}
                                             onMouseMove={handleMouseMove}
                                             onMouseUp={handleMouseUp}
@@ -409,9 +467,9 @@ export default function ReviewPanel({ project, images, onClose, onAnnotationsUpd
                                                     const bw = ann.bbox[2] * imgW;
                                                     const bh = ann.bbox[3] * imgH;
                                                     const isAuto = ann.source !== 'manual';
-                                                    const color = isAuto ? '#a78bfa' : '#22c55e';
+                                                    const color = isAuto ? '#f59e0b' : '#22c55e';
                                                     const fill  = isAuto
-                                                        ? 'rgba(167,139,250,0.10)'
+                                                        ? 'rgba(245,158,11,0.10)'
                                                         : 'rgba(34,197,94,0.07)';
                                                     const fs   = Math.max(10, 13 / scale);
                                                     const padX = 4 / scale;
@@ -523,7 +581,7 @@ export default function ReviewPanel({ project, images, onClose, onAnnotationsUpd
 
                                 {annotations.map(ann => {
                                     const isAuto = ann.source !== 'manual';
-                                    const dotColor = isAuto ? '#a78bfa' : '#22c55e';
+                                    const dotColor = isAuto ? '#f59e0b' : '#22c55e';
                                     return (
                                         <div
                                             key={ann.id}
