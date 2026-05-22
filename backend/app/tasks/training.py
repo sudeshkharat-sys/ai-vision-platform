@@ -13,6 +13,7 @@ import yaml
 import json
 import cv2
 import numpy as np
+import redis as redis_lib
 
 
 def _safe_float(v):
@@ -337,9 +338,20 @@ def _build_yolo_dataset(img_rows, anns_by_image, classes, project_id,
     return dataset_path, len(train_imgs), len(val_imgs), len(test_imgs)
 
 
-def _make_epoch_callback(celery_task, total_epochs, epoch_history, epoch_start_times):
+def _make_epoch_callback(celery_task, total_epochs, epoch_history, epoch_start_times, stop_flag):
     """Return an on_fit_epoch_end callback that pushes live metrics to Celery."""
     def on_fit_epoch_end(trainer):
+        # Check Redis stop flag — set by cancel/force-stop-all endpoints
+        try:
+            _r = redis_lib.from_url(settings.redis_url, socket_connect_timeout=1)
+            if _r.get(f"stop_training:{celery_task.request.id}"):
+                _r.delete(f"stop_training:{celery_task.request.id}")
+                stop_flag['value'] = True
+                trainer.stop = True
+                return
+        except Exception:
+            pass
+
         epoch = trainer.epoch + 1
 
         losses = {}
@@ -440,11 +452,12 @@ def train_seed_model(
     total_epochs   = epochs
     epoch_history  = []
     epoch_start_times = []
+    stop_flag      = {'value': False}
 
     model = YOLO(model_name)
     model.add_callback(
         "on_fit_epoch_end",
-        _make_epoch_callback(self, total_epochs, epoch_history, epoch_start_times),
+        _make_epoch_callback(self, total_epochs, epoch_history, epoch_start_times, stop_flag),
     )
 
     self.update_state(
@@ -498,6 +511,16 @@ def train_seed_model(
         verbose=False,
         workers=0,           # Celery workers are daemonic — cannot spawn DataLoader subprocesses
     )
+
+    # ── Discard if stopped by user ───────────────────────────────
+    if stop_flag['value']:
+        try:
+            shutil.rmtree(results.save_dir, ignore_errors=True)
+        except Exception:
+            pass
+        shutil.rmtree(dataset_path, ignore_errors=True)
+        from celery.exceptions import Ignore
+        raise Ignore()
 
     # ── Phase 4: Persist + cleanup ───────────────────────────────
     best_model_path = results.save_dir / "weights" / "best.pt"
@@ -579,6 +602,7 @@ def train_main_model(
     total_epochs   = epochs
     epoch_history  = []
     epoch_start_times = []
+    stop_flag      = {'value': False}
 
     # When fine-tuning from seed weights use a conservative LR to avoid
     # catastrophic forgetting / hallucination; when training from scratch
@@ -592,7 +616,7 @@ def train_main_model(
     model = YOLO(pretrained)
     model.add_callback(
         "on_fit_epoch_end",
-        _make_epoch_callback(self, total_epochs, epoch_history, epoch_start_times),
+        _make_epoch_callback(self, total_epochs, epoch_history, epoch_start_times, stop_flag),
     )
 
     self.update_state(
@@ -639,6 +663,16 @@ def train_main_model(
         verbose=False,
         workers=0,           # Celery workers are daemonic — cannot spawn DataLoader subprocesses
     )
+
+    # ── Discard if stopped by user ───────────────────────────────
+    if stop_flag['value']:
+        try:
+            shutil.rmtree(results.save_dir, ignore_errors=True)
+        except Exception:
+            pass
+        shutil.rmtree(dataset_path, ignore_errors=True)
+        from celery.exceptions import Ignore
+        raise Ignore()
 
     # ── Phase 4: Persist + cleanup ───────────────────────────────
     best_model_path = results.save_dir / "weights" / "best.pt"

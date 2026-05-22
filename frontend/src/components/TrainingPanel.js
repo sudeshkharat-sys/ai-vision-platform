@@ -226,7 +226,7 @@ const TrainingPanel = ({ project, onClose }) => {
         axios.get(`${API_URL}/pipeline/jobs/${project.id}?job_type=seed_training`)
             .then(async res => {
                 if (!res.data.length) return;
-                const DB_STATUS = { pending: 'PENDING', started: 'STARTED', success: 'SUCCESS', failure: 'FAILURE' };
+                const DB_STATUS = { pending: 'PENDING', started: 'STARTED', success: 'SUCCESS', failure: 'FAILURE', revoked: 'REVOKED' };
                 const loaded = res.data.map(j => ({
                     id: j.id,
                     taskId: j.id,
@@ -456,22 +456,31 @@ const TrainingPanel = ({ project, onClose }) => {
         }
     }, [startPolling]);
 
-    // ── Stop running job ──────────────────────────────
-    const handleStop = async () => {
-        const job = activeJob || jobs.find(j => j.status === 'PENDING' || j.status === 'STARTED');
-        if (!job?.taskId) return;
+    // ── Remove job from UI + DB ───────────────────────
+    const removeJob = useCallback((job) => {
+        setJobs(prev => prev.filter(j => j.id !== job.id));
+        if (job.taskId) axios.delete(`${API_URL}/pipeline/jobs/${job.taskId}`).catch(() => {});
+    }, []);
+
+    const clearFailedJobs = useCallback(() => {
+        const failed = jobsRef.current.filter(j => ['FAILURE','REVOKED','NO_WORKER'].includes(j.status));
+        failed.forEach(j => { if (j.taskId) axios.delete(`${API_URL}/pipeline/jobs/${j.taskId}`).catch(() => {}); });
+        setJobs(prev => prev.filter(j => !['FAILURE','REVOKED','NO_WORKER'].includes(j.status)));
+    }, []);
+
+    // ── Force stop all running/queued jobs ────────────────────────
+    const handleForceStopAll = async () => {
         try {
-            await axios.post(`${API_URL}/pipeline/cancel/${job.taskId}`);
-        } catch { /* ignore network errors — UI update is local */ }
-        if (pollRef.current[job.taskId]) {
-            clearInterval(pollRef.current[job.taskId]);
-            delete pollRef.current[job.taskId];
-        }
+            await axios.post(`${API_URL}/pipeline/force-stop-all/${project.id}`);
+        } catch { /* ignore network errors */ }
+        Object.values(pollRef.current).forEach(clearInterval);
+        pollRef.current = {};
         setJobs(prev => prev.map(j =>
-            j.taskId === job.taskId
-                ? { ...j, status: 'REVOKED', logs: [...j.logs, '🛑  Stopped by user.'] }
+            (j.status === 'PENDING' || j.status === 'STARTED' || j.status === 'QUEUED')
+                ? { ...j, status: 'REVOKED', logs: [...j.logs, '🛑  Force stopped by user.'] }
                 : j
         ));
+        queueRef.current = [];
     };
 
     // ── Launch training ────────────────────────────────
@@ -965,8 +974,8 @@ const TrainingPanel = ({ project, onClose }) => {
                         {btnLabel()}
                     </button>
                     {anyRunning && (
-                        <button className="tp-stop-btn" onClick={handleStop} title="Stop training">
-                            <Square size={14} /> Stop
+                        <button className="tp-stop-btn" onClick={handleForceStopAll} title="Stop all running and queued jobs, purge queue">
+                            <Square size={14} /> Force Stop All
                         </button>
                     )}
                 </div>

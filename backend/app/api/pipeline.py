@@ -4,6 +4,7 @@ from pydantic import BaseModel
 from typing import List, Optional
 from datetime import datetime
 import base64, io, cv2, numpy as np
+import redis as redis_lib
 from ..tasks.training import train_seed_model, train_main_model
 from ..tasks.auto_annotate import auto_annotate_remaining
 from ..tasks.ai_prompt import detect_with_prompt, bulk_detect_with_prompt
@@ -516,8 +517,7 @@ async def cancel_task(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Revoke a Celery task and mark the DB job record as stopped."""
-    # Verify the job belongs to the current user's project before cancelling
+    """Set Redis stop flag + revoke a Celery task and mark the DB job record as stopped."""
     result = await db.execute(select(TrainingJob).where(TrainingJob.id == task_id))
     job = result.scalar_one_or_none()
     if job:
@@ -530,7 +530,15 @@ async def cancel_task(
         if not proj_result.scalar_one_or_none():
             raise HTTPException(status_code=403, detail="Access denied")
 
-    celery_app.control.revoke(task_id, terminate=True, signal="SIGTERM")
+    # Set Redis stop flag — epoch callback picks this up and sets trainer.stop = True
+    try:
+        _r = redis_lib.from_url(settings.redis_url, socket_connect_timeout=1)
+        _r.setex(f"stop_training:{task_id}", 300, "1")
+    except Exception:
+        pass
+
+    # Revoke from queue only — no terminate/SIGKILL (Windows + solo pool safe)
+    celery_app.control.revoke(task_id, terminate=False)
 
     try:
         if job:
@@ -545,6 +553,94 @@ async def cancel_task(
         pass
 
     return {"task_id": task_id, "status": "revoked"}
+
+
+@router.post("/force-stop-all/{project_id}")
+async def force_stop_all(
+    project_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Stop every running/queued task for a project and purge the broker queue.
+
+    Steps:
+    1. Find all non-terminal DB jobs (pending + started) for the project.
+    2. Set Redis stop flags for STARTED tasks (epoch callback stops training gracefully).
+    3. Revoke all task IDs so they won't restart if re-queued.
+    4. Mark all jobs as failed (Stopped by user) in the DB immediately.
+    5. Inspect active worker tasks to catch background tasks not tracked in DB.
+    6. Purge the entire broker queue (clears all pending tasks).
+    """
+    await get_owned_project(project_id, current_user, db)
+
+    result = await db.execute(
+        select(TrainingJob).where(
+            TrainingJob.project_id == project_id,
+            TrainingJob.status.in_(["pending", "started"]),
+        )
+    )
+    jobs = result.scalars().all()
+
+    # Connect to Redis for stop flags
+    try:
+        _r = redis_lib.from_url(settings.redis_url, socket_connect_timeout=2)
+    except Exception:
+        _r = None
+
+    stopped_ids = []
+    for job in jobs:
+        if _r:
+            try:
+                _r.setex(f"stop_training:{job.id}", 300, "1")
+            except Exception:
+                pass
+        celery_app.control.revoke(job.id, terminate=False)
+        job.status = "failure"
+        job.result_meta = _sanitize_meta({
+            **(job.result_meta or {}),
+            "error": "Stopped by user",
+        })
+        job.finished_at = datetime.utcnow()
+        stopped_ids.append(job.id)
+
+    # Also handle background tasks the UI doesn't know about
+    _TRAINING_TASKS = {
+        "app.tasks.training.train_seed_model",
+        "app.tasks.training.train_main_model",
+        "app.tasks.auto_annotate.auto_annotate_remaining",
+    }
+    try:
+        active = celery_app.control.inspect(timeout=2).active() or {}
+        for worker_tasks in active.values():
+            for task_info in (worker_tasks or []):
+                tid  = task_info.get("id", "")
+                name = task_info.get("name", "")
+                args = task_info.get("args", [])
+                if (
+                    name in _TRAINING_TASKS
+                    and args
+                    and args[0] == project_id
+                    and tid not in stopped_ids
+                ):
+                    if _r:
+                        try:
+                            _r.setex(f"stop_training:{tid}", 300, "1")
+                        except Exception:
+                            pass
+                    celery_app.control.revoke(tid, terminate=False)
+                    stopped_ids.append(tid)
+    except Exception:
+        pass
+
+    # Purge the broker queue — removes all PENDING tasks waiting to run
+    try:
+        celery_app.control.purge()
+    except Exception:
+        pass
+
+    await db.commit()
+    return {"stopped": len(stopped_ids), "task_ids": stopped_ids}
 
 
 # ── Task status ───────────────────────────────────────────────────
