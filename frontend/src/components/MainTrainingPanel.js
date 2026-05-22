@@ -295,7 +295,7 @@ const MainTrainingPanel = ({ project, onClose }) => {
         axios.get(`${API_URL}/pipeline/jobs/${project.id}?job_type=main_training`)
             .then(async res => {
                 if (!res.data.length) return;
-                const DB_STATUS = { pending: 'PENDING', started: 'STARTED', success: 'SUCCESS', failure: 'FAILURE' };
+                const DB_STATUS = { pending: 'PENDING', started: 'STARTED', success: 'SUCCESS', failure: 'FAILURE', revoked: 'REVOKED' };
                 const loaded = res.data.map(j => ({
                     id:        j.id,
                     taskId:    j.id,
@@ -539,22 +539,22 @@ const MainTrainingPanel = ({ project, onClose }) => {
         setJobs(prev => prev.filter(j => !['FAILURE','REVOKED','NO_WORKER'].includes(j.status)));
     }, []);
 
-    // ── Stop running job ───────────────────────────────────────────
-    const handleStop = async () => {
-        const job = activeJob || jobs.find(j => j.status === 'PENDING' || j.status === 'STARTED');
-        if (!job?.taskId) return;
+    // ── Force stop all running/queued jobs ────────────────────────
+    const handleForceStopAll = async () => {
         try {
-            await axios.post(`${API_URL}/pipeline/cancel/${job.taskId}`);
+            await axios.post(`${API_URL}/pipeline/force-stop-all/${project.id}`);
         } catch { /* ignore network errors */ }
-        if (pollRef.current[job.taskId]) {
-            clearInterval(pollRef.current[job.taskId]);
-            delete pollRef.current[job.taskId];
-        }
+        // Stop all polling intervals
+        Object.values(pollRef.current).forEach(clearInterval);
+        pollRef.current = {};
+        // Mark every active job as stopped in UI
         setJobs(prev => prev.map(j =>
-            j.taskId === job.taskId
-                ? { ...j, status: 'REVOKED', logs: [...j.logs, '🛑  Stopped by user.'] }
+            (j.status === 'PENDING' || j.status === 'STARTED' || j.status === 'QUEUED')
+                ? { ...j, status: 'REVOKED', logs: [...j.logs, '🛑  Force stopped by user.'] }
                 : j
         ));
+        // Also clear the local queue
+        queueRef.current = [];
     };
 
     // ── Launch ─────────────────────────────────────────────────────
@@ -1186,8 +1186,8 @@ const MainTrainingPanel = ({ project, onClose }) => {
                         {btnLabel()}
                     </button>
                     {anyRunning && (
-                        <button className="mtp-stop-btn" onClick={handleStop} title="Stop training">
-                            <Square size={14} /> Stop
+                        <button className="mtp-stop-btn" onClick={handleForceStopAll} title="Stop all running and queued jobs, purge queue">
+                            <Square size={14} /> Force Stop All
                         </button>
                     )}
                 </div>

@@ -15,6 +15,7 @@ const STATUS_LABEL = {
     STARTED:   { label: 'Running',   cls: 'aap-badge--running' },
     SUCCESS:   { label: 'Done',      cls: 'aap-badge--done'    },
     FAILURE:   { label: 'Failed',    cls: 'aap-badge--fail'    },
+    REVOKED:   { label: 'Stopped',   cls: 'aap-badge--fail'    },
     NO_WORKER: { label: 'No Worker', cls: 'aap-badge--fail'    },
 };
 
@@ -146,7 +147,7 @@ const AutoAnnotatePanel = ({ project, onClose, onAnnotationsUpdated }) => {
         axios.get(`${API_URL}/pipeline/jobs/${project.id}?job_type=auto_annotate`)
             .then(async res => {
                 if (!res.data.length) return;
-                const DB_STATUS = { pending: 'PENDING', started: 'STARTED', success: 'SUCCESS', failure: 'FAILURE' };
+                const DB_STATUS = { pending: 'PENDING', started: 'STARTED', success: 'SUCCESS', failure: 'FAILURE', revoked: 'REVOKED' };
                 const loaded = res.data.map(j => ({
                     id:         j.id,
                     taskId:     j.id,
@@ -374,25 +375,21 @@ const AutoAnnotatePanel = ({ project, onClose, onAnnotationsUpdated }) => {
     }, []);
 
     const clearFailedJobs = useCallback(() => {
-        const failed = jobs.filter(j => ['FAILURE', 'NO_WORKER'].includes(j.status));
+        const failed = jobs.filter(j => ['FAILURE', 'REVOKED', 'NO_WORKER'].includes(j.status));
         failed.forEach(j => { if (j.taskId) axios.delete(`${API_URL}/pipeline/jobs/${j.taskId}`).catch(() => {}); });
-        setJobs(prev => prev.filter(j => !['FAILURE', 'NO_WORKER'].includes(j.status)));
+        setJobs(prev => prev.filter(j => !['FAILURE', 'REVOKED', 'NO_WORKER'].includes(j.status)));
     }, [jobs]);
 
-    // ── Stop running job ─────────────────────────────────────────
-    const handleStop = async () => {
-        const job = jobs.find(j => j.status === 'PENDING' || j.status === 'STARTED');
-        if (!job?.taskId) return;
+    // ── Force stop all running/queued jobs ────────────────────────
+    const handleForceStopAll = async () => {
         try {
-            await axios.post(`${API_URL}/pipeline/cancel/${job.taskId}`);
+            await axios.post(`${API_URL}/pipeline/force-stop-all/${project.id}`);
         } catch { /* ignore */ }
-        if (pollRef.current[job.taskId]) {
-            clearInterval(pollRef.current[job.taskId]);
-            delete pollRef.current[job.taskId];
-        }
+        Object.values(pollRef.current).forEach(clearInterval);
+        pollRef.current = {};
         setJobs(prev => prev.map(j =>
-            j.taskId === job.taskId
-                ? { ...j, status: 'FAILURE', logs: [...j.logs, '🛑  Stopped by user.'] }
+            (j.status === 'PENDING' || j.status === 'STARTED' || j.status === 'QUEUED')
+                ? { ...j, status: 'FAILURE', logs: [...j.logs, '🛑  Force stopped by user.'] }
                 : j
         ));
     };
@@ -704,8 +701,8 @@ const AutoAnnotatePanel = ({ project, onClose, onAnnotationsUpdated }) => {
                         </button>
                     )}
                     {anyRunning && (
-                        <button className="aap-stop-btn" onClick={handleStop} title="Stop annotation">
-                            <Square size={14} /> Stop
+                        <button className="aap-stop-btn" onClick={handleForceStopAll} title="Stop all running and queued jobs, purge queue">
+                            <Square size={14} /> Force Stop All
                         </button>
                     )}
                 </div>
