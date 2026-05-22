@@ -296,6 +296,7 @@ const AnnotationWorkspace = ({ project, onProjectUpdated }) => {
             ann.bbox[3],
         ];
         pushHistory({ type: 'bbox', id: ann.id, oldBbox: ann.bbox, newBbox });
+        setSelectedAnnId(null);
         axios.patch(`${API_URL}/annotations/${ann.id}`, { bbox: newBbox })
             .then(res => setAnnotations(prev => prev.map(a => a.id === ann.id ? res.data : a)))
             .catch(() => setError('Failed to move annotation.'));
@@ -321,6 +322,7 @@ const AnnotationWorkspace = ({ project, onProjectUpdated }) => {
             newH / imgH,
         ];
         pushHistory({ type: 'bbox', id: ann.id, oldBbox: ann.bbox, newBbox });
+        setSelectedAnnId(null);
         axios.patch(`${API_URL}/annotations/${ann.id}`, { bbox: newBbox })
             .then(res => setAnnotations(prev => prev.map(a => a.id === ann.id ? res.data : a)))
             .catch(() => setError('Failed to resize annotation.'));
@@ -593,7 +595,7 @@ Do you want to proceed?`;
     };
 
     const handleMouseDown = (e) => {
-        if (isPanning) return;
+        if (isPanning || userZoom > 1) return;
         if (pendingAnnotation) return;
         // Only draw when clicking on stage background, not on a shape
         if (e.target !== e.target.getStage()) return;
@@ -912,7 +914,7 @@ Do you want to proceed?`;
                         <div className="canvas-toolbar">
                             <span className="canvas-filename">{currentImage.filename}</span>
                             <span className="canvas-dims">{imgW} × {imgH}px</span>
-                            <span className="canvas-hint" title="Space + drag to pan">{isPanning ? 'Pan mode' : selectedAnnId ? 'Drag to move · handles to resize' : 'Draw a box to annotate'}</span>
+                            <span className="canvas-hint" title="Scroll to zoom · drag to pan when zoomed">{isPanning ? 'Pan mode' : userZoom > 1 ? 'Drag to pan · scroll to zoom' : selectedAnnId ? 'Drag to move · handles to resize' : 'Draw a box to annotate'}</span>
                             {/* ── Undo / Redo ── */}
                             <button className="btn-toolbar" onClick={handleUndo} disabled={!history.length} title="Undo (Ctrl+Z)"><Undo2 size={14} /></button>
                             <button className="btn-toolbar" onClick={handleRedo} disabled={!redoStack.length} title="Redo (Ctrl+Y)"><Redo2 size={14} /></button>
@@ -974,7 +976,7 @@ Do you want to proceed?`;
                             </div>
                         </div>
 
-                        <div className="canvas-center" ref={canvasCenterRef} style={{ overflow: 'hidden', cursor: isPanning ? 'grab' : 'crosshair' }}>
+                        <div className="canvas-center" ref={canvasCenterRef} style={{ overflow: 'hidden', cursor: (isPanning || userZoom > 1) ? 'grab' : 'crosshair' }}>
                             <Stage
                                 className="canvas-stage"
                                 width={canvasSize.w}
@@ -983,9 +985,9 @@ Do you want to proceed?`;
                                 scaleY={scale * userZoom}
                                 x={stagePos.x}
                                 y={stagePos.y}
-                                draggable={isPanning}
+                                draggable={isPanning || userZoom > 1}
                                 onWheel={handleWheel}
-                                onDragEnd={isPanning ? (e) => setStagePos({ x: e.target.x(), y: e.target.y() }) : undefined}
+                                onDragEnd={(e) => setStagePos({ x: e.target.x(), y: e.target.y() })}
                                 onMouseDown={handleMouseDown}
                                 onMouseMove={handleMouseMove}
                                 onMouseUp={handleMouseUp}
@@ -1022,13 +1024,13 @@ Do you want to proceed?`;
                                                             ? 'rgba(167,139,250,0.07)'
                                                             : 'rgba(244,63,94,0.07)'}
                                                     dash={unclassified ? [6 / totalScale, 3 / totalScale] : undefined}
-                                                    draggable={isSelected && !isPanning}
+                                                    draggable={isSelected && !isPanning && userZoom <= 1}
                                                     onClick={(e) => handleAnnClick(ann.id, e)}
                                                     onTap={(e) => handleAnnClick(ann.id, e)}
                                                     onDragEnd={(e) => handleAnnDragEnd(e, ann)}
                                                     onTransformEnd={(e) => handleAnnTransformEnd(e, ann)}
                                                     onMouseEnter={e => { e.target.getStage().container().style.cursor = 'move'; }}
-                                                    onMouseLeave={e => { e.target.getStage().container().style.cursor = isPanning ? 'grab' : 'crosshair'; }}
+                                                    onMouseLeave={e => { e.target.getStage().container().style.cursor = (isPanning || userZoom > 1) ? 'grab' : 'crosshair'; }}
                                                 />
                                                 {/* Label background */}
                                                 <Rect
@@ -1057,7 +1059,7 @@ Do you want to proceed?`;
                                                             onClick={(e) => { e.cancelBubble = true; handleRejectAnnotation(ann.id); }}
                                                             onTap={(e) => { e.cancelBubble = true; handleRejectAnnotation(ann.id); }}
                                                             onMouseEnter={e => { e.target.getStage().container().style.cursor = 'pointer'; }}
-                                                            onMouseLeave={e => { e.target.getStage().container().style.cursor = isPanning ? 'grab' : 'crosshair'; }}
+                                                            onMouseLeave={e => { e.target.getStage().container().style.cursor = (isPanning || userZoom > 1) ? 'grab' : 'crosshair'; }}
                                                         >
                                                             <Rect width={18 / totalScale} height={18 / totalScale} fill="#f43f5e" cornerRadius={3 / totalScale} shadowBlur={2 / totalScale} />
                                                             <Text text="✕" fill="#fff" fontSize={12 / totalScale} x={5 / totalScale} y={3 / totalScale} fontStyle="bold" />
@@ -1067,7 +1069,7 @@ Do you want to proceed?`;
                                                             onClick={(e) => { e.cancelBubble = true; handleAcceptAnnotation(ann.id); }}
                                                             onTap={(e) => { e.cancelBubble = true; handleAcceptAnnotation(ann.id); }}
                                                             onMouseEnter={e => { e.target.getStage().container().style.cursor = 'pointer'; }}
-                                                            onMouseLeave={e => { e.target.getStage().container().style.cursor = isPanning ? 'grab' : 'crosshair'; }}
+                                                            onMouseLeave={e => { e.target.getStage().container().style.cursor = (isPanning || userZoom > 1) ? 'grab' : 'crosshair'; }}
                                                         >
                                                             <Rect width={18 / totalScale} height={18 / totalScale} fill="#22c55e" cornerRadius={3 / totalScale} shadowBlur={2 / totalScale} />
                                                             <Text text="✓" fill="#fff" fontSize={12 / totalScale} x={4 / totalScale} y={3 / totalScale} fontStyle="bold" />
