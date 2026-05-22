@@ -174,6 +174,11 @@ const AnnotationWorkspace = ({ project, onProjectUpdated }) => {
     const [history, setHistory] = useState([]);
     const [redoStack, setRedoStack] = useState([]);
 
+    // Declared early so handlers defined below can reference them
+    const imgW = loadedImageSize?.width  || currentImage?.width  || 1;
+    const imgH = loadedImageSize?.height || currentImage?.height || 1;
+    const scale = currentImage ? Math.min(1, canvasSize.w / imgW, canvasSize.h / imgH) : 1;
+
     const pollTask = useCallback((taskId, onComplete, onProgress) => {
         const interval = setInterval(async () => {
             try {
@@ -764,15 +769,6 @@ Do you want to proceed?`;
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [handleUndo, handleRedo, selectedAnnId]);
 
-    // Use the browser-reported natural dimensions once the image loads (EXIF-corrected).
-    // Fall back to the backend-stored values while the image is still loading.
-    const imgW = loadedImageSize?.width  || currentImage?.width  || 1;
-    const imgH = loadedImageSize?.height || currentImage?.height || 1;
-
-    // Fit image inside available canvas area, preserving aspect ratio
-    const scale = currentImage
-        ? Math.min(1, canvasSize.w / imgW, canvasSize.h / imgH)
-        : 1;
     const stageW = currentImage ? Math.round(imgW * scale) : canvasSize.w;
     const stageH = currentImage ? Math.round(imgH * scale) : canvasSize.h;
 
