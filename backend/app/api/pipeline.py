@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from typing import List, Optional
@@ -84,6 +84,7 @@ async def get_available_models():
 
 class TrainSeedRequest(BaseModel):
     model_name: str = "yolo11s.pt"
+    custom_weights: Optional[str] = None
     epochs: int = 100
     imgsz: int = 640
     preprocess: bool = True
@@ -100,13 +101,15 @@ async def start_seed_training(
     await get_owned_project(project_id, current_user, db)
     req = body or TrainSeedRequest()
     task = train_seed_model.delay(
-        project_id, req.model_name, req.epochs, req.imgsz, req.preprocess, req.batch
+        project_id, req.model_name, req.epochs, req.imgsz, req.preprocess, req.batch,
+        req.custom_weights,
     )
     return {"task_id": task.id, "status": "queued"}
 
 
 class TrainMainRequest(BaseModel):
     model_name: str = "yolo11s.pt"
+    custom_weights: Optional[str] = None
     epochs: int = 150
     use_seed_weights: bool = True
     imgsz: int = 640
@@ -125,9 +128,47 @@ async def start_main_training(
     req = body or TrainMainRequest()
     task = train_main_model.delay(
         project_id, req.model_name, req.epochs,
-        req.use_seed_weights, req.imgsz, req.preprocess, req.batch
+        req.use_seed_weights, req.imgsz, req.preprocess, req.batch,
+        req.custom_weights,
     )
     return {"task_id": task.id, "status": "queued"}
+
+
+@router.post("/upload-weights/{project_id}")
+async def upload_custom_weights(
+    project_id: str,
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    await get_owned_project(project_id, current_user, db)
+    if not file.filename or not file.filename.endswith(".pt"):
+        raise HTTPException(status_code=400, detail="Only .pt files are supported.")
+    weights_dir = settings.model_dir / project_id / "custom_weights"
+    weights_dir.mkdir(parents=True, exist_ok=True)
+    target = weights_dir / file.filename
+    if target.exists():
+        raise HTTPException(
+            status_code=409,
+            detail=f"A model named '{file.filename}' already exists. Rename the file before uploading.",
+        )
+    content = await file.read()
+    target.write_bytes(content)
+    return {"filename": file.filename}
+
+
+@router.get("/custom-weights/{project_id}")
+async def list_custom_weights(
+    project_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    await get_owned_project(project_id, current_user, db)
+    weights_dir = settings.model_dir / project_id / "custom_weights"
+    if not weights_dir.exists():
+        return {"weights": []}
+    weights = sorted(f.name for f in weights_dir.glob("*.pt"))
+    return {"weights": weights}
 
 
 @router.get("/clahe-preview/{project_id}")

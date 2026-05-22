@@ -4,7 +4,7 @@ import {
     LineChart, Line, XAxis, YAxis, CartesianGrid,
     Tooltip, Legend, ResponsiveContainer,
 } from 'recharts';
-import { Brain, X, RefreshCw, Download, Inbox, Square, ChevronLeft, Copy } from 'lucide-react';
+import { Brain, X, RefreshCw, Download, Inbox, Square, ChevronLeft, Copy, Upload } from 'lucide-react';
 import { YOLO_MODEL_GROUPS, DEFAULT_MAIN_MODEL } from '../constants/yoloModels';
 import './MainTrainingPanel.css';
 import logoImg from '../logo.png';
@@ -198,6 +198,13 @@ const MainTrainingPanel = ({ project, onClose }) => {
     const [preprocess, setPreprocess]           = useState(true);
     const [clahePreview, setClahePreview]       = useState(null);
     const [previewLoading, setPreviewLoading]   = useState(false);
+    const [modelSource, setModelSource]         = useState('yolo');   // 'yolo' | 'upload'
+    const [customWeights, setCustomWeights]     = useState([]);
+    const [selectedWeight, setSelectedWeight]   = useState('');
+    const [uploadFile, setUploadFile]           = useState(null);
+    const [uploading, setUploading]             = useState(false);
+    const [uploadError, setUploadError]         = useState('');
+    const uploadInputRef = useRef(null);
 
     const logsEndRef = useRef(null);
     const pollRef    = useRef({});
@@ -229,6 +236,37 @@ const MainTrainingPanel = ({ project, onClose }) => {
             .catch(() => setClahePreview(null))
             .finally(() => setPreviewLoading(false));
     }, [project.id]);
+
+    // ── Custom weights ─────────────────────────────────────────────
+    const loadCustomWeights = useCallback(() => {
+        axios.get(`${API_URL}/pipeline/custom-weights/${project.id}`)
+            .then(res => {
+                setCustomWeights(res.data.weights || []);
+                if (res.data.weights?.length && !selectedWeight)
+                    setSelectedWeight(res.data.weights[res.data.weights.length - 1]);
+            })
+            .catch(() => {});
+    }, [project.id, selectedWeight]);
+
+    const handleUploadWeight = async () => {
+        if (!uploadFile) return;
+        setUploading(true);
+        setUploadError('');
+        const form = new FormData();
+        form.append('file', uploadFile);
+        try {
+            await axios.post(`${API_URL}/pipeline/upload-weights/${project.id}`, form, {
+                headers: { 'Content-Type': 'multipart/form-data' },
+            });
+            setUploadFile(null);
+            if (uploadInputRef.current) uploadInputRef.current.value = '';
+            loadCustomWeights();
+        } catch (err) {
+            setUploadError(err.response?.data?.detail || 'Upload failed.');
+        } finally {
+            setUploading(false);
+        }
+    };
 
     // ── Load persisted jobs from DB ────────────────────────────────
     const loadPersistedJobs = useCallback((resumePollingFn) => {
@@ -313,6 +351,7 @@ const MainTrainingPanel = ({ project, onClose }) => {
 
     useEffect(() => {
         loadData();
+        loadCustomWeights();
         loadPersistedJobs(startPolling);
         const polls = pollRef.current;
         return () => { Object.values(polls).forEach(clearInterval); };
@@ -442,6 +481,7 @@ const MainTrainingPanel = ({ project, onClose }) => {
                 model_name: next.modelName, epochs: next.epochs,
                 use_seed_weights: next.useSeedWeights, imgsz: next.imgsz,
                 preprocess: next.preprocess, batch: next.batch,
+                ...(next.customWeights ? { custom_weights: next.customWeights } : {}),
             });
             const taskId = res.data.task_id;
             const logs = [`📋  Task ID: ${taskId}`, '⏳  Waiting for worker…'];
@@ -497,6 +537,7 @@ const MainTrainingPanel = ({ project, onClose }) => {
             queueRef.current.push({
                 jobId: placeholder.id, projectId: project.id,
                 modelName: selectedModel, epochs, useSeedWeights, imgsz, preprocess, batch,
+                customWeights: modelSource === 'upload' ? selectedWeight : null,
             });
             setJobs(prev => [...prev, placeholder]);
             setActiveJobId(placeholder.id);
@@ -507,6 +548,7 @@ const MainTrainingPanel = ({ project, onClose }) => {
         try {
             const res = await axios.post(`${API_URL}/pipeline/train-main/${project.id}`, {
                 model_name: selectedModel, epochs, use_seed_weights: useSeedWeights, imgsz, preprocess, batch,
+                ...(modelSource === 'upload' && selectedWeight ? { custom_weights: selectedWeight } : {}),
             });
             const taskId = res.data.task_id;
             const job = makeJob(taskId, selectedModel);
@@ -536,7 +578,8 @@ const MainTrainingPanel = ({ project, onClose }) => {
     const anyRunning   = jobs.some(j => j.status === 'PENDING' || j.status === 'STARTED');
     const hasSeed      = modelStatus?.has_seed_model;
     const hasMain      = modelStatus?.has_main_model;
-    const readyToTrain = stats?.ready_to_train && (!useSeedWeights || hasSeed);
+    const usingCustomWeights = modelSource === 'upload' && !!selectedWeight;
+    const readyToTrain = stats?.ready_to_train && (usingCustomWeights || !useSeedWeights || hasSeed);
 
     const btnLabel = () => {
         if (launching) return 'Queuing…';
@@ -643,24 +686,103 @@ const MainTrainingPanel = ({ project, onClose }) => {
                             <section className="mtp-section">
                                 <p className="mtp-section-title">Training Config</p>
 
-                                {/* YOLO architecture */}
+                                {/* Starting weights with upload tab */}
                                 <div className="mtp-model-row">
-                                    <label className="mtp-model-label">YOLO Architecture</label>
-                                    <select
-                                        className="mtp-model-select"
-                                        value={selectedModel}
-                                        onChange={e => setSelectedModel(e.target.value)}
-                                    >
-                                        {YOLO_MODEL_GROUPS.map(group => (
-                                            <optgroup key={group.family} label={`${group.family}${group.note ? ` (${group.note})` : ''}`}>
-                                                {group.models.map(m => (
-                                                    <option key={m.value} value={m.value}>
-                                                        {m.label}  [{m.params}]
-                                                    </option>
-                                                ))}
-                                            </optgroup>
-                                        ))}
-                                    </select>
+                                    <label className="mtp-model-label">Starting Weights</label>
+                                    <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
+                                        <button
+                                            type="button"
+                                            onClick={() => setModelSource('yolo')}
+                                            style={{
+                                                padding: '4px 12px', fontSize: 12, borderRadius: 6, cursor: 'pointer', border: '1px solid',
+                                                background: modelSource === 'yolo' ? '#dc143c' : 'transparent',
+                                                color: modelSource === 'yolo' ? '#fff' : '#666',
+                                                borderColor: modelSource === 'yolo' ? '#dc143c' : '#d1d5db',
+                                            }}
+                                        >Pretrained YOLO</button>
+                                        <button
+                                            type="button"
+                                            onClick={() => { setModelSource('upload'); loadCustomWeights(); }}
+                                            style={{
+                                                padding: '4px 12px', fontSize: 12, borderRadius: 6, cursor: 'pointer', border: '1px solid',
+                                                background: modelSource === 'upload' ? '#dc143c' : 'transparent',
+                                                color: modelSource === 'upload' ? '#fff' : '#666',
+                                                borderColor: modelSource === 'upload' ? '#dc143c' : '#d1d5db',
+                                                display: 'flex', alignItems: 'center', gap: 4,
+                                            }}
+                                        ><Upload size={12} /> Upload .pt</button>
+                                    </div>
+
+                                    {modelSource === 'yolo' && (
+                                        <select
+                                            className="mtp-model-select"
+                                            value={selectedModel}
+                                            onChange={e => setSelectedModel(e.target.value)}
+                                        >
+                                            {YOLO_MODEL_GROUPS.map(group => (
+                                                <optgroup key={group.family} label={`${group.family}${group.note ? ` (${group.note})` : ''}`}>
+                                                    {group.models.map(m => (
+                                                        <option key={m.value} value={m.value}>
+                                                            {m.label}  [{m.params}]
+                                                        </option>
+                                                    ))}
+                                                </optgroup>
+                                            ))}
+                                        </select>
+                                    )}
+
+                                    {modelSource === 'upload' && (
+                                        <div style={{ border: '1px solid #e5e5e5', borderRadius: 8, padding: 12 }}>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+                                                <input
+                                                    ref={uploadInputRef}
+                                                    type="file"
+                                                    accept=".pt"
+                                                    style={{ display: 'none' }}
+                                                    onChange={e => { setUploadFile(e.target.files[0] || null); setUploadError(''); }}
+                                                />
+                                                <button
+                                                    type="button"
+                                                    onClick={() => uploadInputRef.current?.click()}
+                                                    style={{ padding: '5px 12px', fontSize: 12, borderRadius: 6, cursor: 'pointer', border: '1px solid #d1d5db', background: '#f9fafb', color: '#374151' }}
+                                                >Choose .pt file</button>
+                                                <span style={{ fontSize: 12, color: '#666', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                                    {uploadFile ? uploadFile.name : 'No file chosen'}
+                                                </span>
+                                                <button
+                                                    type="button"
+                                                    onClick={handleUploadWeight}
+                                                    disabled={!uploadFile || uploading}
+                                                    style={{ padding: '5px 12px', fontSize: 12, borderRadius: 6, cursor: uploadFile && !uploading ? 'pointer' : 'not-allowed', border: 'none', background: uploadFile && !uploading ? '#dc143c' : '#e5e5e5', color: uploadFile && !uploading ? '#fff' : '#999' }}
+                                                >{uploading ? 'Uploading…' : 'Upload'}</button>
+                                            </div>
+                                            {uploadError && <p style={{ fontSize: 12, color: '#dc2626', marginBottom: 8 }}>{uploadError}</p>}
+
+                                            {customWeights.length === 0 ? (
+                                                <p style={{ fontSize: 12, color: '#999' }}>No uploaded models yet. Upload a .pt file above.</p>
+                                            ) : (
+                                                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                                                    <p style={{ fontSize: 11, color: '#666', marginBottom: 4 }}>Select model to use:</p>
+                                                    {customWeights.map(w => (
+                                                        <label key={w} style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', padding: '4px 8px', borderRadius: 6, background: selectedWeight === w ? '#fff1f2' : 'transparent', border: `1px solid ${selectedWeight === w ? '#dc143c' : 'transparent'}` }}>
+                                                            <input
+                                                                type="radio"
+                                                                name="customWeightMain"
+                                                                value={w}
+                                                                checked={selectedWeight === w}
+                                                                onChange={() => setSelectedWeight(w)}
+                                                                style={{ accentColor: '#dc143c' }}
+                                                            />
+                                                            <span style={{ fontSize: 12, color: '#374151' }}>{w}</span>
+                                                        </label>
+                                                    ))}
+                                                </div>
+                                            )}
+                                            {!selectedWeight && customWeights.length > 0 && (
+                                                <p style={{ fontSize: 12, color: '#d97706', marginTop: 6 }}>Select a model to use for training.</p>
+                                            )}
+                                        </div>
+                                    )}
                                 </div>
 
                                 {/* Fine-tune from seed toggle */}

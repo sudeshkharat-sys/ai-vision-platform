@@ -403,6 +403,7 @@ def train_seed_model(
     imgsz: int = 640,
     preprocess: bool = True,
     batch: int = -1,
+    custom_weights: str = None,
 ):
     """
     Quick seed-training on manually annotated images.
@@ -441,7 +442,13 @@ def train_seed_model(
     epoch_history  = []
     epoch_start_times = []
 
-    model = YOLO(model_name)
+    if custom_weights:
+        custom_path = settings.model_dir / project_id / "custom_weights" / custom_weights
+        if not custom_path.exists():
+            return {"error": f"Uploaded weights '{custom_weights}' not found."}
+        model = YOLO(str(custom_path))
+    else:
+        model = YOLO(model_name)
     model.add_callback(
         "on_fit_epoch_end",
         _make_epoch_callback(self, total_epochs, epoch_history, epoch_start_times),
@@ -450,7 +457,7 @@ def train_seed_model(
     self.update_state(
         state="STARTED",
         meta={"epoch": 0, "total_epochs": total_epochs, "eta_seconds": None,
-              "history": [], "model_name": model_name,
+              "history": [], "model_name": custom_weights or model_name,
               "split": {"train": n_train, "val": n_val, "test": n_test}},
     )
 
@@ -532,6 +539,7 @@ def train_main_model(
     imgsz: int = 640,
     preprocess: bool = True,
     batch: int = -1,
+    custom_weights: str = None,
 ):
     """
     Full/main training on ALL annotated images (manual + auto-annotated).
@@ -558,8 +566,13 @@ def train_main_model(
     if not img_rows:
         return {"error": "No annotated images found"}
 
-    # Resolve pretrained weights
-    if use_seed_weights:
+    # Resolve pretrained weights — custom upload takes priority over seed/yolo
+    if custom_weights:
+        custom_path = settings.model_dir / project_id / "custom_weights" / custom_weights
+        if not custom_path.exists():
+            return {"error": f"Uploaded weights '{custom_weights}' not found."}
+        pretrained = str(custom_path)
+    elif use_seed_weights:
         seed_path = settings.model_dir / project_id / "seed_best.pt"
         if not seed_path.exists():
             return {"error": "Seed model not found — train seed model first, or disable 'Use seed weights'."}
