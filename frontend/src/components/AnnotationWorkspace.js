@@ -11,7 +11,7 @@ import ReviewPanel from './ReviewPanel';
 import VideoPanel from './VideoPanel';
 import ActiveLearningPanel from './ActiveLearningPanel';
 import './AnnotationWorkspace.css';
-import { Sparkles, AlertTriangle, X, Upload, Image as ImageIcon, Check, ArrowLeft, ArrowRight, Brain, Rocket, Eye, Target, Tag, Package, Film, Undo2, Redo2, ZoomIn, ZoomOut, Maximize2 } from 'lucide-react';
+import { Sparkles, AlertTriangle, X, Upload, Image as ImageIcon, Check, ArrowLeft, ArrowRight, Brain, Rocket, Eye, Target, Tag, Package, Film, Undo2, Redo2, ZoomIn, ZoomOut, Maximize2, Trash2 } from 'lucide-react';
 
 import { API_URL } from '../config';
 
@@ -449,6 +449,20 @@ Do you want to proceed?`;
         }
     };
 
+    const handleClearAllAnnotations = async () => {
+        if (!currentImage || annotations.length === 0) return;
+        if (!window.confirm(`Delete all ${annotations.length} annotation(s) on this image?`)) return;
+        try {
+            await Promise.all(annotations.map(a => axios.delete(`${API_URL}/annotations/${a.id}`)));
+            setAnnotations([]);
+            setSelectedAnnId(null);
+            setHistory([]);
+            setRedoStack([]);
+        } catch (e) {
+            setError('Failed to clear annotations.');
+        }
+    };
+
     const handleAcceptAll = async () => {
         const toVerify = annotations.filter(a => a.source !== 'manual');
         if (toVerify.length === 0) return;
@@ -597,8 +611,9 @@ Do you want to proceed?`;
     const handleMouseDown = (e) => {
         if (isPanning || userZoom > 1) return;
         if (pendingAnnotation) return;
-        // Only draw when clicking on stage background, not on a shape
-        if (e.target !== e.target.getStage()) return;
+        // Block if clicking directly on a listening annotation shape (Rect/Group/Text)
+        // but allow clicks on Stage/Layer/non-listening nodes (e.g. the image)
+        if (e.target.listening && e.target.listening() && e.target !== e.target.getStage()) return;
         setSelectedAnnId(null);
         const pos = e.target.getStage().getRelativePointerPosition();
         setIsDrawing(true);
@@ -921,6 +936,8 @@ Do you want to proceed?`;
                             {/* ── Undo / Redo ── */}
                             <button className="btn-toolbar" onClick={handleUndo} disabled={!history.length} title="Undo (Ctrl+Z)"><Undo2 size={14} /></button>
                             <button className="btn-toolbar" onClick={handleRedo} disabled={!redoStack.length} title="Redo (Ctrl+Y)"><Redo2 size={14} /></button>
+                            {/* ── Clear all ── */}
+                            <button className="btn-toolbar" onClick={handleClearAllAnnotations} disabled={annotations.length === 0} title="Delete all annotations on this image"><Trash2 size={14} /></button>
                             {/* ── Zoom ── */}
                             <button className="btn-toolbar" onClick={() => { setUserZoom(z => Math.min(15, z * 1.3)); }} title="Zoom in"><ZoomIn size={14} /></button>
                             <span style={{ fontSize: 11, color: '#666', minWidth: 36, textAlign: 'center' }}>{Math.round(userZoom * 100)}%</span>
@@ -952,13 +969,13 @@ Do you want to proceed?`;
                                     onChange={(e) => setAiPrompt(e.target.value)}
                                     disabled={isDetecting}
                                 />
-                                <label className="ai-prompt-checkbox">
-                                    <input 
-                                        type="checkbox" 
-                                        checked={clearExisting} 
-                                        onChange={e => setClearExisting(e.target.checked)} 
+                                <label className="ai-prompt-checkbox" title="Clear current annotations before running AI detection">
+                                    <input
+                                        type="checkbox"
+                                        checked={clearExisting}
+                                        onChange={e => setClearExisting(e.target.checked)}
                                     />
-                                    <span>Wipe Existing</span>
+                                    <span>Clear before detect</span>
                                 </label>
                             </div>
                             <div className="ai-prompt-bar-right">
