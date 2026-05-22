@@ -206,12 +206,34 @@ const MainTrainingPanel = ({ project, onClose }) => {
     const [uploadError, setUploadError]         = useState('');
     const uploadInputRef = useRef(null);
 
-    const logsEndRef = useRef(null);
-    const pollRef    = useRef({});
-    const jobsRef    = useRef(jobs);
-    const queueRef   = useRef([]);
+    const logsEndRef     = useRef(null);
+    const pollRef        = useRef({});
+    const jobsRef        = useRef(jobs);
+    const queueRef       = useRef([]);
+    const autoRemoveRef  = useRef({});
 
     useEffect(() => { jobsRef.current = jobs; }, [jobs]);
+
+    // Auto-remove failed/stopped/no-worker jobs after 4 s — no manual clearing needed
+    useEffect(() => {
+        const TERMINAL = ['FAILURE', 'REVOKED', 'NO_WORKER'];
+        jobs.forEach(j => {
+            if (TERMINAL.includes(j.status) && !autoRemoveRef.current[j.id]) {
+                autoRemoveRef.current[j.id] = setTimeout(() => {
+                    delete autoRemoveRef.current[j.id];
+                    setJobs(prev => prev.filter(jj => jj.id !== j.id));
+                    if (j.taskId) axios.delete(`${API_URL}/pipeline/jobs/${j.taskId}`).catch(() => {});
+                }, 4000);
+            }
+        });
+        // Cancel timers for jobs that were manually removed before the 4 s fired
+        Object.keys(autoRemoveRef.current).forEach(id => {
+            if (!jobs.find(j => String(j.id) === id)) {
+                clearTimeout(autoRemoveRef.current[id]);
+                delete autoRemoveRef.current[id];
+            }
+        });
+    }, [jobs]);
 
     // ── Load stats + model status ──────────────────────────────────
     const loadData = useCallback(() => {

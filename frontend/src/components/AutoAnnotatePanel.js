@@ -97,11 +97,32 @@ const AutoAnnotatePanel = ({ project, onClose, onAnnotationsUpdated }) => {
     const [activeJobId, setActiveJobId] = useState(null);
     const [launching, setLaunching]     = useState(false);
 
-    const pollRef  = useRef({});
-    const jobsRef  = useRef(jobs);
-    const logsEnd  = useRef(null);
+    const pollRef       = useRef({});
+    const jobsRef       = useRef(jobs);
+    const logsEnd       = useRef(null);
+    const autoRemoveRef = useRef({});
 
     useEffect(() => { jobsRef.current = jobs; }, [jobs]);
+
+    // Auto-remove failed/stopped/no-worker jobs after 4 s
+    useEffect(() => {
+        const TERMINAL = ['FAILURE', 'REVOKED', 'NO_WORKER'];
+        jobs.forEach(j => {
+            if (TERMINAL.includes(j.status) && !autoRemoveRef.current[j.id]) {
+                autoRemoveRef.current[j.id] = setTimeout(() => {
+                    delete autoRemoveRef.current[j.id];
+                    setJobs(prev => prev.filter(jj => jj.id !== j.id));
+                    if (j.taskId) axios.delete(`${API_URL}/pipeline/jobs/${j.taskId}`).catch(() => {});
+                }, 4000);
+            }
+        });
+        Object.keys(autoRemoveRef.current).forEach(id => {
+            if (!jobs.find(j => String(j.id) === id)) {
+                clearTimeout(autoRemoveRef.current[id]);
+                delete autoRemoveRef.current[id];
+            }
+        });
+    }, [jobs]);
 
     // ── Load pending images + model status ───────────────────
     const loadSetup = useCallback(() => {
