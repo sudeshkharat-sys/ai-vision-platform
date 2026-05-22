@@ -741,3 +741,27 @@ async def update_job(
 
     await db.commit()
     return {"id": job.id, "status": job.status}
+
+
+@router.delete("/jobs/{task_id}")
+async def delete_job(
+    task_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Remove a job record from the database (used to dismiss failed/stopped jobs)."""
+    result = await db.execute(select(TrainingJob).where(TrainingJob.id == task_id))
+    job = result.scalar_one_or_none()
+    if not job:
+        raise HTTPException(status_code=404, detail=f"Job {task_id} not found")
+    proj_result = await db.execute(
+        select(Project).where(
+            Project.id == job.project_id,
+            Project.user_id == current_user.id,
+        )
+    )
+    if not proj_result.scalar_one_or_none():
+        raise HTTPException(status_code=403, detail="Access denied")
+    await db.delete(job)
+    await db.commit()
+    return {"status": "deleted"}

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import axios from 'axios';
-import { Stage, Layer, Rect, Text, Image, Group } from 'react-konva';
+import { Stage, Layer, Rect, Text, Image, Group, Transformer } from 'react-konva';
 import useImage from 'use-image';
 import TrainingPanel from './TrainingPanel';
 import AutoAnnotatePanel from './AutoAnnotatePanel';
@@ -11,7 +11,7 @@ import ReviewPanel from './ReviewPanel';
 import VideoPanel from './VideoPanel';
 import ActiveLearningPanel from './ActiveLearningPanel';
 import './AnnotationWorkspace.css';
-import { Sparkles, AlertTriangle, X, Upload, Image as ImageIcon, Check, ArrowLeft, ArrowRight, Brain, Rocket, Eye, Target, Tag, Package, Film } from 'lucide-react';
+import { Sparkles, AlertTriangle, X, Upload, Image as ImageIcon, Check, ArrowLeft, ArrowRight, Brain, Rocket, Eye, Target, Tag, Package, Film, Undo2, Redo2, ZoomIn, ZoomOut, Maximize2 } from 'lucide-react';
 
 import { API_URL } from '../config';
 
@@ -160,6 +160,20 @@ const AnnotationWorkspace = ({ project, onProjectUpdated }) => {
     const canvasAreaRef = useRef(null);
     const canvasCenterRef = useRef(null);
 
+    // ── Bbox editing ─────────────────────────────────────────────
+    const [selectedAnnId, setSelectedAnnId] = useState(null);
+    const transformerRef = useRef(null);
+    const annNodesRef = useRef({});
+
+    // ── Zoom / pan ───────────────────────────────────────────────
+    const [userZoom, setUserZoom] = useState(1);
+    const [stagePos, setStagePos] = useState({ x: 0, y: 0 });
+    const [isPanning, setIsPanning] = useState(false);
+
+    // ── Undo / redo ──────────────────────────────────────────────
+    const [history, setHistory] = useState([]);
+    const [redoStack, setRedoStack] = useState([]);
+
     const pollTask = useCallback((taskId, onComplete, onProgress) => {
         const interval = setInterval(async () => {
             try {
@@ -197,6 +211,141 @@ const AnnotationWorkspace = ({ project, onProjectUpdated }) => {
         setPendingAnnotation({ x: bx, y: by, width: bw, height: bh });
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [currentImage]);
+
+    // ── History helpers ──────────────────────────────────────────
+    const pushHistory = useCallback((action) => {
+        setHistory(prev => [...prev.slice(-49), action]);
+        setRedoStack([]);
+    }, []);
+
+    const handleUndo = useCallback(async () => {
+        setHistory(prev => {
+            if (!prev.length) return prev;
+            const action = prev[prev.length - 1];
+            const next = prev.slice(0, -1);
+            setRedoStack(r => [...r, action]);
+            (async () => {
+                try {
+                    if (action.type === 'add') {
+                        await axios.delete(`${API_URL}/annotations/${action.ann.id}`);
+                        setAnnotations(a => a.filter(x => x.id !== action.ann.id));
+                    } else if (action.type === 'delete') {
+                        const res = await axios.post(`${API_URL}/annotations`, {
+                            image_id: action.ann.image_id, class_name: action.ann.class_name,
+                            bbox: action.ann.bbox, source: action.ann.source,
+                        });
+                        setAnnotations(a => [...a, res.data]);
+                    } else if (action.type === 'bbox') {
+                        await axios.patch(`${API_URL}/annotations/${action.id}`, { bbox: action.oldBbox });
+                        setAnnotations(a => a.map(x => x.id === action.id ? { ...x, bbox: action.oldBbox } : x));
+                    }
+                } catch { /* ignore */ }
+            })();
+            return next;
+        });
+    }, []);
+
+    const handleRedo = useCallback(async () => {
+        setRedoStack(prev => {
+            if (!prev.length) return prev;
+            const action = prev[prev.length - 1];
+            const next = prev.slice(0, -1);
+            setHistory(h => [...h, action]);
+            (async () => {
+                try {
+                    if (action.type === 'add') {
+                        const res = await axios.post(`${API_URL}/annotations`, {
+                            image_id: action.ann.image_id, class_name: action.ann.class_name,
+                            bbox: action.ann.bbox, source: action.ann.source,
+                        });
+                        setAnnotations(a => [...a, res.data]);
+                    } else if (action.type === 'delete') {
+                        await axios.delete(`${API_URL}/annotations/${action.ann.id}`);
+                        setAnnotations(a => a.filter(x => x.id !== action.ann.id));
+                    } else if (action.type === 'bbox') {
+                        await axios.patch(`${API_URL}/annotations/${action.id}`, { bbox: action.newBbox });
+                        setAnnotations(a => a.map(x => x.id === action.id ? { ...x, bbox: action.newBbox } : x));
+                    }
+                } catch { /* ignore */ }
+            })();
+            return next;
+        });
+    }, []);
+
+    // ── Annotation selection / transform ─────────────────────────
+    const handleAnnClick = useCallback((annId, e) => {
+        if (e) e.cancelBubble = true;
+        setSelectedAnnId(annId);
+    }, []);
+
+    const handleAnnDragEnd = useCallback((e, ann) => {
+        const node = e.target;
+        const newX = node.x();
+        const newY = node.y();
+        const bw = ann.bbox[2] * imgW;
+        const bh = ann.bbox[3] * imgH;
+        const newBbox = [
+            (newX + bw / 2) / imgW,
+            (newY + bh / 2) / imgH,
+            ann.bbox[2],
+            ann.bbox[3],
+        ];
+        pushHistory({ type: 'bbox', id: ann.id, oldBbox: ann.bbox, newBbox });
+        axios.patch(`${API_URL}/annotations/${ann.id}`, { bbox: newBbox })
+            .then(res => setAnnotations(prev => prev.map(a => a.id === ann.id ? res.data : a)))
+            .catch(() => setError('Failed to move annotation.'));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [imgW, imgH, pushHistory]);
+
+    const handleAnnTransformEnd = useCallback((e, ann) => {
+        const node = e.target;
+        const scaleX = node.scaleX();
+        const scaleY = node.scaleY();
+        const newW = Math.max(5, node.width() * scaleX);
+        const newH = Math.max(5, node.height() * scaleY);
+        const newX = node.x();
+        const newY = node.y();
+        node.scaleX(1);
+        node.scaleY(1);
+        node.width(newW);
+        node.height(newH);
+        const newBbox = [
+            (newX + newW / 2) / imgW,
+            (newY + newH / 2) / imgH,
+            newW / imgW,
+            newH / imgH,
+        ];
+        pushHistory({ type: 'bbox', id: ann.id, oldBbox: ann.bbox, newBbox });
+        axios.patch(`${API_URL}/annotations/${ann.id}`, { bbox: newBbox })
+            .then(res => setAnnotations(prev => prev.map(a => a.id === ann.id ? res.data : a)))
+            .catch(() => setError('Failed to resize annotation.'));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [imgW, imgH, pushHistory]);
+
+    // ── Zoom via mouse wheel ──────────────────────────────────────
+    const handleWheel = useCallback((e) => {
+        e.evt.preventDefault();
+        const stage = e.target.getStage();
+        const pointer = stage.getPointerPosition();
+        const scaleBy = 1.12;
+        const oldZoom = userZoom;
+        const newZoom = Math.max(0.2, Math.min(15, e.evt.deltaY < 0 ? oldZoom * scaleBy : oldZoom / scaleBy));
+        const mousePointTo = {
+            x: (pointer.x - stagePos.x) / (scale * oldZoom),
+            y: (pointer.y - stagePos.y) / (scale * oldZoom),
+        };
+        setUserZoom(newZoom);
+        setStagePos({
+            x: pointer.x - mousePointTo.x * scale * newZoom,
+            y: pointer.y - mousePointTo.y * scale * newZoom,
+        });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [userZoom, stagePos, scale]);
+
+    const resetZoom = useCallback(() => {
+        setUserZoom(1);
+        setStagePos({ x: 0, y: 0 });
+    }, []);
 
     const handleAIDetect = async () => {
         if (!currentImage || !aiPrompt.trim()) return;
@@ -282,9 +431,12 @@ Do you want to proceed?`;
     };
 
     const handleRejectAnnotation = async (annId) => {
+        const ann = annotations.find(a => a.id === annId);
         try {
             await axios.delete(`${API_URL}/annotations/${annId}`);
+            if (ann) pushHistory({ type: 'delete', ann });
             setAnnotations(prev => prev.filter(a => a.id !== annId));
+            if (selectedAnnId === annId) setSelectedAnnId(null);
         } catch (e) {
             setError("Failed to delete annotation.");
         }
@@ -436,23 +588,23 @@ Do you want to proceed?`;
     };
 
     const handleMouseDown = (e) => {
-        if (pendingAnnotation) return; // class picker is open
-        const pos = e.target.getStage().getPointerPosition();
-        const x = pos.x / scale;
-        const y = pos.y / scale;
+        if (isPanning) return;
+        if (pendingAnnotation) return;
+        // Only draw when clicking on stage background, not on a shape
+        if (e.target !== e.target.getStage()) return;
+        setSelectedAnnId(null);
+        const pos = e.target.getStage().getRelativePointerPosition();
         setIsDrawing(true);
-        setNewAnnotation({ x, y, width: 0, height: 0 });
+        setNewAnnotation({ x: pos.x, y: pos.y, width: 0, height: 0 });
     };
 
     const handleMouseMove = (e) => {
         if (!isDrawing) return;
-        const pos = e.target.getStage().getPointerPosition();
-        const x = pos.x / scale;
-        const y = pos.y / scale;
+        const pos = e.target.getStage().getRelativePointerPosition();
         setNewAnnotation(prev => ({
             ...prev,
-            width: x - prev.x,
-            height: y - prev.y,
+            width: pos.x - prev.x,
+            height: pos.y - prev.y,
         }));
     };
 
@@ -505,6 +657,7 @@ Do you want to proceed?`;
             })
                 .then(res => {
                     setAnnotations(prev => [...prev, res.data]);
+                    pushHistory({ type: 'add', ann: res.data });
                     setImages(prev => prev.map(img =>
                         img.id === currentImage.id ? { ...img, status: 'annotated' } : img
                     ));
@@ -560,6 +713,56 @@ Do you want to proceed?`;
     useEffect(() => {
         measureCanvas();
     }, [currentImage?.id, measureCanvas]);
+
+    // Reset zoom/pan and selection when switching images
+    useEffect(() => {
+        setUserZoom(1);
+        setStagePos({ x: 0, y: 0 });
+        setSelectedAnnId(null);
+        setHistory([]);
+        setRedoStack([]);
+    }, [currentImage?.id]);
+
+    // Sync transformer to selected annotation node
+    useEffect(() => {
+        const tr = transformerRef.current;
+        if (!tr) return;
+        const node = selectedAnnId ? annNodesRef.current[selectedAnnId] : null;
+        tr.nodes(node ? [node] : []);
+        tr.getLayer()?.batchDraw();
+    }, [selectedAnnId, annotations]);
+
+    // Keyboard: space=pan, Ctrl+Z=undo, Ctrl+Y / Ctrl+Shift+Z=redo
+    useEffect(() => {
+        const onKeyDown = (e) => {
+            if (e.key === ' ' && !e.repeat) {
+                e.preventDefault();
+                setIsPanning(true);
+            }
+            if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
+                e.preventDefault();
+                handleUndo();
+            }
+            if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.key === 'z' && e.shiftKey))) {
+                e.preventDefault();
+                handleRedo();
+            }
+            if (e.key === 'Escape') setSelectedAnnId(null);
+            if ((e.key === 'Delete' || e.key === 'Backspace') && selectedAnnId) {
+                handleRejectAnnotation(selectedAnnId);
+            }
+        };
+        const onKeyUp = (e) => {
+            if (e.key === ' ') setIsPanning(false);
+        };
+        window.addEventListener('keydown', onKeyDown);
+        window.addEventListener('keyup', onKeyUp);
+        return () => {
+            window.removeEventListener('keydown', onKeyDown);
+            window.removeEventListener('keyup', onKeyUp);
+        };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [handleUndo, handleRedo, selectedAnnId]);
 
     // Use the browser-reported natural dimensions once the image loads (EXIF-corrected).
     // Fall back to the backend-stored values while the image is still loading.
@@ -713,7 +916,15 @@ Do you want to proceed?`;
                         <div className="canvas-toolbar">
                             <span className="canvas-filename">{currentImage.filename}</span>
                             <span className="canvas-dims">{imgW} × {imgH}px</span>
-                            <span className="canvas-hint">Draw a box to annotate</span>
+                            <span className="canvas-hint" title="Space + drag to pan">{isPanning ? 'Pan mode' : selectedAnnId ? 'Drag to move · handles to resize' : 'Draw a box to annotate'}</span>
+                            {/* ── Undo / Redo ── */}
+                            <button className="btn-toolbar" onClick={handleUndo} disabled={!history.length} title="Undo (Ctrl+Z)"><Undo2 size={14} /></button>
+                            <button className="btn-toolbar" onClick={handleRedo} disabled={!redoStack.length} title="Redo (Ctrl+Y)"><Redo2 size={14} /></button>
+                            {/* ── Zoom ── */}
+                            <button className="btn-toolbar" onClick={() => { setUserZoom(z => Math.min(15, z * 1.3)); }} title="Zoom in"><ZoomIn size={14} /></button>
+                            <span style={{ fontSize: 11, color: '#666', minWidth: 36, textAlign: 'center' }}>{Math.round(userZoom * 100)}%</span>
+                            <button className="btn-toolbar" onClick={() => { setUserZoom(z => Math.max(0.2, z / 1.3)); }} title="Zoom out"><ZoomOut size={14} /></button>
+                            <button className="btn-toolbar" onClick={resetZoom} title="Reset view"><Maximize2 size={14} /></button>
                             <span className="canvas-ann-count">
                                 {annotations.length} annotation{annotations.length !== 1 ? 's' : ''}
                             </span>
@@ -767,13 +978,18 @@ Do you want to proceed?`;
                             </div>
                         </div>
 
-                        <div className="canvas-center" ref={canvasCenterRef}>
+                        <div className="canvas-center" ref={canvasCenterRef} style={{ overflow: 'hidden', cursor: isPanning ? 'grab' : 'crosshair' }}>
                             <Stage
                                 className="canvas-stage"
-                                width={stageW}
-                                height={stageH}
-                                scaleX={scale}
-                                scaleY={scale}
+                                width={canvasSize.w}
+                                height={canvasSize.h}
+                                scaleX={scale * userZoom}
+                                scaleY={scale * userZoom}
+                                x={stagePos.x}
+                                y={stagePos.y}
+                                draggable={isPanning}
+                                onWheel={handleWheel}
+                                onDragEnd={isPanning ? (e) => setStagePos({ x: e.target.x(), y: e.target.y() }) : undefined}
                                 onMouseDown={handleMouseDown}
                                 onMouseMove={handleMouseMove}
                                 onMouseUp={handleMouseUp}
@@ -782,6 +998,7 @@ Do you want to proceed?`;
                                     <KonvaImage
                                         src={`${API_URL.replace("/api/v1", "")}${currentImage.filepath}`}
                                         onLoad={handleImageLoad}
+                                        listening={false}
                                     />
                                     {annotations.map(ann => {
                                         const bx = (ann.bbox[0] - ann.bbox[2] / 2) * imgW;
@@ -789,32 +1006,42 @@ Do you want to proceed?`;
                                         const bw = ann.bbox[2] * imgW;
                                         const bh = ann.bbox[3] * imgH;
                                         const unclassified = ann.source === 'ai_prompt' && !ann.class_name;
-                                        // manual = rose red, auto = violet, unclassified = amber
                                         const color = unclassified ? '#f59e0b' : ann.source === 'auto' ? '#a78bfa' : '#f43f5e';
-                                        const fontSize = Math.max(10, 13 / scale);
-                                        const padX = 4 / scale;
-                                        const padY = 2 / scale;
+                                        const isSelected = selectedAnnId === ann.id;
+                                        const totalScale = scale * userZoom;
+                                        const fontSize = Math.max(10, 13 / totalScale);
+                                        const padX = 4 / totalScale;
+                                        const padY = 2 / totalScale;
                                         const labelH = fontSize + padY * 2;
                                         return (
                                             <React.Fragment key={ann.id}>
                                                 <Rect
+                                                    ref={node => { if (node) annNodesRef.current[ann.id] = node; else delete annNodesRef.current[ann.id]; }}
                                                     x={bx} y={by} width={bw} height={bh}
-                                                    stroke={color}
-                                                    strokeWidth={1.5 / scale}
+                                                    stroke={isSelected ? '#facc15' : color}
+                                                    strokeWidth={(isSelected ? 2 : 1.5) / totalScale}
                                                     fill={unclassified
                                                         ? 'rgba(245,158,11,0.10)'
                                                         : ann.source === 'auto'
                                                             ? 'rgba(167,139,250,0.07)'
                                                             : 'rgba(244,63,94,0.07)'}
-                                                    dash={unclassified ? [6 / scale, 3 / scale] : undefined}
+                                                    dash={unclassified ? [6 / totalScale, 3 / totalScale] : undefined}
+                                                    draggable={isSelected && !isPanning}
+                                                    onClick={(e) => handleAnnClick(ann.id, e)}
+                                                    onTap={(e) => handleAnnClick(ann.id, e)}
+                                                    onDragEnd={(e) => handleAnnDragEnd(e, ann)}
+                                                    onTransformEnd={(e) => handleAnnTransformEnd(e, ann)}
+                                                    onMouseEnter={e => { e.target.getStage().container().style.cursor = 'move'; }}
+                                                    onMouseLeave={e => { e.target.getStage().container().style.cursor = isPanning ? 'grab' : 'crosshair'; }}
                                                 />
                                                 {/* Label background */}
                                                 <Rect
                                                     x={bx} y={by - labelH}
-                                                    width={Math.min(bw, ((unclassified ? 12 : ann.class_name.length) * fontSize * 0.6) + padX * 2 + 30/scale)}
+                                                    width={Math.min(bw, ((unclassified ? 12 : ann.class_name.length) * fontSize * 0.6) + padX * 2 + 30/totalScale)}
                                                     height={labelH}
-                                                    fill={color}
-                                                    cornerRadius={2 / scale}
+                                                    fill={isSelected ? '#facc15' : color}
+                                                    cornerRadius={2 / totalScale}
+                                                    listening={false}
                                                 />
                                                 <Text
                                                     x={bx + padX}
@@ -824,57 +1051,30 @@ Do you want to proceed?`;
                                                     fontFamily="sans-serif"
                                                     fill="#fff"
                                                     fontStyle="bold"
+                                                    listening={false}
                                                 />
 
                                                 {/* ── Canvas Controls (Only for AI boxes) ── */}
                                                 {ann.source !== 'manual' && (
-                                                    <Group x={bx + bw - (44 / scale)} y={by + (4 / scale)}>
-                                                        {/* Reject Button */}
-                                                        <Group 
-                                                            onClick={() => handleRejectAnnotation(ann.id)} 
-                                                            onTap={() => handleRejectAnnotation(ann.id)}
-                                                            onMouseEnter={e => {
-                                                                const stage = e.target.getStage();
-                                                                stage.container().style.cursor = 'pointer';
-                                                            }}
-                                                            onMouseLeave={e => {
-                                                                const stage = e.target.getStage();
-                                                                stage.container().style.cursor = 'crosshair';
-                                                            }}
+                                                    <Group x={bx + bw - (44 / totalScale)} y={by + (4 / totalScale)}>
+                                                        <Group
+                                                            onClick={(e) => { e.cancelBubble = true; handleRejectAnnotation(ann.id); }}
+                                                            onTap={(e) => { e.cancelBubble = true; handleRejectAnnotation(ann.id); }}
+                                                            onMouseEnter={e => { e.target.getStage().container().style.cursor = 'pointer'; }}
+                                                            onMouseLeave={e => { e.target.getStage().container().style.cursor = isPanning ? 'grab' : 'crosshair'; }}
                                                         >
-                                                            <Rect
-                                                                width={18 / scale} height={18 / scale}
-                                                                fill="#f43f5e" cornerRadius={3 / scale}
-                                                                shadowBlur={2 / scale}
-                                                            />
-                                                            <Text
-                                                                text="✕" fill="#fff" fontSize={12 / scale}
-                                                                x={5 / scale} y={3 / scale} fontStyle="bold"
-                                                            />
+                                                            <Rect width={18 / totalScale} height={18 / totalScale} fill="#f43f5e" cornerRadius={3 / totalScale} shadowBlur={2 / totalScale} />
+                                                            <Text text="✕" fill="#fff" fontSize={12 / totalScale} x={5 / totalScale} y={3 / totalScale} fontStyle="bold" />
                                                         </Group>
-                                                        {/* Accept Button */}
-                                                        <Group 
-                                                            x={22 / scale} 
-                                                            onClick={() => handleAcceptAnnotation(ann.id)} 
-                                                            onTap={() => handleAcceptAnnotation(ann.id)}
-                                                            onMouseEnter={e => {
-                                                                const stage = e.target.getStage();
-                                                                stage.container().style.cursor = 'pointer';
-                                                            }}
-                                                            onMouseLeave={e => {
-                                                                const stage = e.target.getStage();
-                                                                stage.container().style.cursor = 'crosshair';
-                                                            }}
+                                                        <Group
+                                                            x={22 / totalScale}
+                                                            onClick={(e) => { e.cancelBubble = true; handleAcceptAnnotation(ann.id); }}
+                                                            onTap={(e) => { e.cancelBubble = true; handleAcceptAnnotation(ann.id); }}
+                                                            onMouseEnter={e => { e.target.getStage().container().style.cursor = 'pointer'; }}
+                                                            onMouseLeave={e => { e.target.getStage().container().style.cursor = isPanning ? 'grab' : 'crosshair'; }}
                                                         >
-                                                            <Rect
-                                                                width={18 / scale} height={18 / scale}
-                                                                fill="#22c55e" cornerRadius={3 / scale}
-                                                                shadowBlur={2 / scale}
-                                                            />
-                                                            <Text
-                                                                text="✓" fill="#fff" fontSize={12 / scale}
-                                                                x={4 / scale} y={3 / scale} fontStyle="bold"
-                                                            />
+                                                            <Rect width={18 / totalScale} height={18 / totalScale} fill="#22c55e" cornerRadius={3 / totalScale} shadowBlur={2 / totalScale} />
+                                                            <Text text="✓" fill="#fff" fontSize={12 / totalScale} x={4 / totalScale} y={3 / totalScale} fontStyle="bold" />
                                                         </Group>
                                                     </Group>
                                                 )}
@@ -888,11 +1088,18 @@ Do you want to proceed?`;
                                             width={drawnBox.width}
                                             height={drawnBox.height}
                                             stroke="#dc143c"
-                                            strokeWidth={2 / scale}
-                                            dash={[6 / scale, 3 / scale]}
+                                            strokeWidth={2 / (scale * userZoom)}
+                                            dash={[6 / (scale * userZoom), 3 / (scale * userZoom)]}
                                             fill="rgba(220,20,60,0.08)"
                                         />
                                     )}
+                                    <Transformer
+                                        ref={transformerRef}
+                                        rotateEnabled={false}
+                                        boundBoxFunc={(oldBox, newBox) =>
+                                            newBox.width < 5 || newBox.height < 5 ? oldBox : newBox
+                                        }
+                                    />
                                 </Layer>
                             </Stage>
 

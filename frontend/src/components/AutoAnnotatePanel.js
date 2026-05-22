@@ -258,6 +258,11 @@ const AutoAnnotatePanel = ({ project, onClose, onAnnotationsUpdated }) => {
                     delete pollRef.current[taskId];
                 }
 
+                // Auto-revoke stuck task from Celery when no worker is detected
+                if (isNoWorker) {
+                    axios.post(`${API_URL}/pipeline/cancel/${taskId}`).catch(() => {});
+                }
+
                 if (status === 'STARTED' && !startedPersisted) {
                     startedPersisted = true;
                     axios.patch(`${API_URL}/pipeline/jobs/${taskId}`, { status: 'started' }).catch(() => {});
@@ -340,6 +345,18 @@ const AutoAnnotatePanel = ({ project, onClose, onAnnotationsUpdated }) => {
             } catch { /* ignore */ }
         }, POLL_INTERVAL);
     }, [loadSetup, onAnnotationsUpdated]);
+
+    // ── Remove a job from UI + DB ────────────────────────────────
+    const removeJob = useCallback((job) => {
+        setJobs(prev => prev.filter(j => j.id !== job.id));
+        if (job.taskId) axios.delete(`${API_URL}/pipeline/jobs/${job.taskId}`).catch(() => {});
+    }, []);
+
+    const clearFailedJobs = useCallback(() => {
+        const failed = jobs.filter(j => ['FAILURE', 'NO_WORKER'].includes(j.status));
+        failed.forEach(j => { if (j.taskId) axios.delete(`${API_URL}/pipeline/jobs/${j.taskId}`).catch(() => {}); });
+        setJobs(prev => prev.filter(j => !['FAILURE', 'NO_WORKER'].includes(j.status)));
+    }, [jobs]);
 
     // ── Stop running job ─────────────────────────────────────────
     const handleStop = async () => {
@@ -532,17 +549,32 @@ const AutoAnnotatePanel = ({ project, onClose, onAnnotationsUpdated }) => {
                             <div className="aap-jobs-layout">
                                 {/* Job list */}
                                 <div className="aap-jobs-list">
+                                    {jobs.some(j => ['FAILURE','NO_WORKER'].includes(j.status)) && (
+                                        <button
+                                            onClick={clearFailedJobs}
+                                            style={{ width: '100%', marginBottom: 6, padding: '4px 8px', fontSize: 11, background: 'rgba(220,20,60,0.07)', border: '1px solid rgba(220,20,60,0.2)', borderRadius: 6, color: '#dc143c', cursor: 'pointer' }}
+                                        >Clear all failed</button>
+                                    )}
                                     {[...jobs].reverse().map((job, idx) => {
                                         const info = STATUS_LABEL[job.status] || { label: job.status, cls: 'aap-badge--pending' };
+                                        const isDone = ['FAILURE','NO_WORKER','SUCCESS'].includes(job.status);
                                         return (
                                             <div
                                                 key={job.id}
                                                 className={`aap-job-item ${activeJob?.id === job.id ? 'aap-job-item--active' : ''}`}
                                                 onClick={() => setActiveJobId(job.id)}
+                                                style={{ position: 'relative' }}
                                             >
                                                 <div className="aap-job-item-top">
                                                     <span className="aap-job-num">#{jobs.length - idx}</span>
                                                     <span className={`aap-job-badge ${info.cls}`}>{info.label}</span>
+                                                    {isDone && (
+                                                        <button
+                                                            onClick={(e) => { e.stopPropagation(); removeJob(job); }}
+                                                            title="Remove"
+                                                            style={{ marginLeft: 'auto', background: 'none', border: 'none', cursor: 'pointer', color: '#999', padding: '0 2px', lineHeight: 1 }}
+                                                        >✕</button>
+                                                    )}
                                                 </div>
                                                 <div className="aap-job-meta">{job.imageCount} img</div>
                                                 <div className="aap-job-time">{fmtTime(job.startedAt)}</div>

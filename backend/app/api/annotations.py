@@ -15,6 +15,9 @@ from pydantic import BaseModel
 class ClassifyBody(BaseModel):
     class_name: str
 
+class BboxUpdateBody(BaseModel):
+    bbox: list
+
 
 router = APIRouter(prefix="/annotations", tags=["annotations"])
 
@@ -50,6 +53,21 @@ async def list_image_annotations(
     await get_owned_image(image_id, current_user, db)
     result = await db.execute(select(Annotation).where(Annotation.image_id == image_id))
     return result.scalars().all()
+
+
+@router.patch("/{annotation_id}", response_model=AnnotationResponse)
+async def update_annotation_bbox(
+    annotation_id: str,
+    data: BboxUpdateBody,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Update the bounding box of an annotation (for drag/resize editing)."""
+    ann = await get_owned_annotation(annotation_id, current_user, db)
+    ann.bbox = data.bbox
+    await db.commit()
+    await db.refresh(ann)
+    return ann
 
 
 @router.patch("/{annotation_id}/classify", response_model=AnnotationResponse)

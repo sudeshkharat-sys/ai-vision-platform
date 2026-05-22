@@ -469,6 +469,26 @@
   font-weight: 600;
 }
 
+.btn-toolbar {
+  background: transparent;
+  border: 1px solid #e5e5e5;
+  border-radius: 5px;
+  color: #555;
+  cursor: pointer;
+  padding: 3px 6px;
+  display: inline-flex;
+  align-items: center;
+  transition: background 0.12s, color 0.12s;
+}
+.btn-toolbar:hover:not(:disabled) {
+  background: #f3f4f6;
+  color: #111;
+}
+.btn-toolbar:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
 .btn-no-objects {
   margin-left: auto;
   background: rgba(22, 163, 74, 0.08);
