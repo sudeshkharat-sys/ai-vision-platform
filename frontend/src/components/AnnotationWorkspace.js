@@ -178,6 +178,8 @@ const AnnotationWorkspace = ({ project, onProjectUpdated }) => {
     const imgW = loadedImageSize?.width  || currentImage?.width  || 1;
     const imgH = loadedImageSize?.height || currentImage?.height || 1;
     const scale = currentImage ? Math.min(1, canvasSize.w / imgW, canvasSize.h / imgH) : 1;
+    const stageW = currentImage ? Math.round(imgW * scale) : canvasSize.w;
+    const stageH = currentImage ? Math.round(imgH * scale) : canvasSize.h;
 
     const pollTask = useCallback((taskId, onComplete, onProgress) => {
         const interval = setInterval(async () => {
@@ -795,9 +797,6 @@ Do you want to proceed?`;
         };
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [handleUndo, handleRedo, selectedAnnId]);
-
-    const stageW = currentImage ? Math.round(imgW * scale) : canvasSize.w;
-    const stageH = currentImage ? Math.round(imgH * scale) : canvasSize.h;
 
     // The box to draw while mouse is held or while picker is open
     const drawnBox = pendingAnnotation || newAnnotation;
