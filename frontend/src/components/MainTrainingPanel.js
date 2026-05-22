@@ -859,8 +859,15 @@ const MainTrainingPanel = ({ project, onClose }) => {
 
                                 {/* Job list */}
                                 <div className="mtp-jobs-list">
+                                    {jobs.some(j => ['FAILURE','REVOKED','NO_WORKER'].includes(j.status)) && (
+                                        <button
+                                            onClick={clearFailedJobs}
+                                            style={{ width: '100%', marginBottom: 6, padding: '4px 8px', fontSize: 11, background: 'rgba(220,20,60,0.07)', border: '1px solid rgba(220,20,60,0.2)', borderRadius: 6, color: '#dc143c', cursor: 'pointer' }}
+                                        >Clear all failed</button>
+                                    )}
                                     {[...jobs].reverse().map((job, idx) => {
                                         const info = STATUS_LABEL[job.status] || { label: job.status, cls: 'badge--pending' };
+                                        const isDone = ['FAILURE','REVOKED','NO_WORKER','SUCCESS'].includes(job.status);
                                         return (
                                             <div
                                                 key={job.id}
@@ -870,6 +877,13 @@ const MainTrainingPanel = ({ project, onClose }) => {
                                                 <div className="mtp-job-item-top">
                                                     <span className="mtp-job-num">#{jobs.length - idx}</span>
                                                     <span className={`mtp-job-badge ${info.cls}`}>{info.label}</span>
+                                                    {isDone && (
+                                                        <button
+                                                            onClick={(e) => { e.stopPropagation(); removeJob(job); }}
+                                                            title="Remove"
+                                                            style={{ marginLeft: 'auto', background: 'none', border: 'none', cursor: 'pointer', color: '#999', padding: '0 2px', lineHeight: 1 }}
+                                                        >✕</button>
+                                                    )}
                                                 </div>
                                                 <div className="mtp-job-item-model">{job.modelName}</div>
                                                 <div className="mtp-job-item-time">{fmtTime(job.startedAt)}</div>

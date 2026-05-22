@@ -541,8 +541,15 @@ const AutoAnnotatePanel = ({ project, onClose, onAnnotationsUpdated }) => {
                             <div className="aap-jobs-layout">
                                 {/* Job list */}
                                 <div className="aap-jobs-list">
+                                    {jobs.some(j => ['FAILURE','REVOKED','NO_WORKER'].includes(j.status)) && (
+                                        <button
+                                            onClick={clearFailedJobs}
+                                            style={{ width: '100%', marginBottom: 6, padding: '4px 8px', fontSize: 11, background: 'rgba(220,20,60,0.07)', border: '1px solid rgba(220,20,60,0.2)', borderRadius: 6, color: '#dc143c', cursor: 'pointer' }}
+                                        >Clear all failed</button>
+                                    )}
                                     {[...jobs].reverse().map((job, idx) => {
                                         const info = STATUS_LABEL[job.status] || { label: job.status, cls: 'aap-badge--pending' };
+                                        const isDone = ['FAILURE','REVOKED','NO_WORKER','SUCCESS'].includes(job.status);
                                         return (
                                             <div
                                                 key={job.id}
@@ -552,6 +559,13 @@ const AutoAnnotatePanel = ({ project, onClose, onAnnotationsUpdated }) => {
                                                 <div className="aap-job-item-top">
                                                     <span className="aap-job-num">#{jobs.length - idx}</span>
                                                     <span className={`aap-job-badge ${info.cls}`}>{info.label}</span>
+                                                    {isDone && (
+                                                        <button
+                                                            onClick={(e) => { e.stopPropagation(); removeJob(job); }}
+                                                            title="Remove"
+                                                            style={{ marginLeft: 'auto', background: 'none', border: 'none', cursor: 'pointer', color: '#999', padding: '0 2px', lineHeight: 1 }}
+                                                        >✕</button>
+                                                    )}
                                                 </div>
                                                 <div className="aap-job-meta">{job.imageCount} img</div>
                                                 <div className="aap-job-time">{fmtTime(job.startedAt)}</div>
