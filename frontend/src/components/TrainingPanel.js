@@ -193,6 +193,11 @@ const TrainingPanel = ({ project, onClose }) => {
     const [imgsz, setImgsz]             = useState(640);
     const [batch, setBatch]             = useState(-1);
     const [preprocess, setPreprocess]   = useState(true);
+    const [augFliplr, setAugFliplr]     = useState(true);
+    const [augFlipud, setAugFlipud]     = useState(true);
+    const [augMosaic, setAugMosaic]     = useState(true);
+    const [augHsvV, setAugHsvV]         = useState(0.4);
+    const [showAugSettings, setShowAugSettings] = useState(false);
     const [clahePreview, setClahePreview] = useState(null);   // { original, enhanced, filename }
     const [previewLoading, setPreviewLoading] = useState(false);
     const [modelSource, setModelSource] = useState('yolo');   // 'yolo' | 'upload'
@@ -495,6 +500,10 @@ const TrainingPanel = ({ project, onClose }) => {
             const res = await axios.post(`${API_URL}/pipeline/train-seed/${next.projectId}`, {
                 model_name: next.modelName, epochs: next.epochs, preprocess: next.preprocess,
                 imgsz: next.imgsz, batch: next.batch,
+                aug_fliplr: next.augFliplr ? 0.5 : 0.0,
+                aug_flipud: next.augFlipud ? 0.1 : 0.0,
+                aug_mosaic: next.augMosaic ? 0.5 : 0.0,
+                aug_hsv_v: next.augHsvV,
                 ...(next.customWeights ? { custom_weights: next.customWeights } : {}),
             });
             const taskId = res.data.task_id;
@@ -557,7 +566,7 @@ const TrainingPanel = ({ project, onClose }) => {
                 logs: ['📋  Job queued — waiting for a free slot…'],
                 epochMeta: null, result: null, error: null, startedAt: new Date(),
             };
-            queueRef.current.push({ jobId: placeholder.id, projectId: project.id, modelName: selectedModel, epochs, preprocess, imgsz, batch, customWeights: modelSource === 'upload' ? selectedWeight : null });
+            queueRef.current.push({ jobId: placeholder.id, projectId: project.id, modelName: selectedModel, epochs, preprocess, imgsz, batch, customWeights: modelSource === 'upload' ? selectedWeight : null, augFliplr, augFlipud, augMosaic, augHsvV });
             setJobs(prev => [...prev, placeholder]);
             setActiveJobId(placeholder.id);
             setLaunching(false);
@@ -567,6 +576,10 @@ const TrainingPanel = ({ project, onClose }) => {
         try {
             const res = await axios.post(`${API_URL}/pipeline/train-seed/${project.id}`, {
                 model_name: selectedModel, epochs, preprocess, imgsz, batch,
+                aug_fliplr: augFliplr ? 0.5 : 0.0,
+                aug_flipud: augFlipud ? 0.1 : 0.0,
+                aug_mosaic: augMosaic ? 0.5 : 0.0,
+                aug_hsv_v: augHsvV,
                 ...(modelSource === 'upload' && selectedWeight ? { custom_weights: selectedWeight } : {}),
             });
             const taskId = res.data.task_id;
@@ -931,6 +944,45 @@ const TrainingPanel = ({ project, onClose }) => {
                                         Preprocessing disabled — raw images will be used as-is. Detection of subtle brightness-based defects may be less accurate.
                                     </div>
                                 )}
+
+                                {/* ── Augmentation Settings ── */}
+                                <div style={{ marginTop: 14 }}>
+                                    <button onClick={() => setShowAugSettings(v => !v)} style={{ background: 'none', border: '1px solid #e5e5e5', borderRadius: 6, padding: '5px 10px', cursor: 'pointer', fontSize: 12, color: '#555', display: 'flex', alignItems: 'center', gap: 6 }}>
+                                        <span>{showAugSettings ? '▼' : '▶'}</span> Augmentation Settings
+                                    </button>
+                                    {showAugSettings && (
+                                        <div style={{ marginTop: 10, padding: '10px 12px', background: '#f9f9f9', borderRadius: 8, border: '1px solid #e5e5e5' }}>
+                                            <div className="tp-toggle-row">
+                                                <label className="tp-toggle-label">
+                                                    <input type="checkbox" className="tp-toggle-check" checked={augFliplr} onChange={e => setAugFliplr(e.target.checked)} />
+                                                    <span className="tp-toggle-slider" />
+                                                    <span className="tp-toggle-text">Flip Left/Right <span className="tp-model-hint">(disable for nameplate/text projects)</span></span>
+                                                </label>
+                                            </div>
+                                            <div className="tp-toggle-row" style={{ marginTop: 8 }}>
+                                                <label className="tp-toggle-label">
+                                                    <input type="checkbox" className="tp-toggle-check" checked={augFlipud} onChange={e => setAugFlipud(e.target.checked)} />
+                                                    <span className="tp-toggle-slider" />
+                                                    <span className="tp-toggle-text">Flip Upside Down <span className="tp-model-hint">(disable for nameplate/orientation projects)</span></span>
+                                                </label>
+                                            </div>
+                                            <div className="tp-toggle-row" style={{ marginTop: 8 }}>
+                                                <label className="tp-toggle-label">
+                                                    <input type="checkbox" className="tp-toggle-check" checked={augMosaic} onChange={e => setAugMosaic(e.target.checked)} />
+                                                    <span className="tp-toggle-slider" />
+                                                    <span className="tp-toggle-text">Mosaic <span className="tp-model-hint">(disable for binary OK/NOT OK inspection)</span></span>
+                                                </label>
+                                            </div>
+                                            <div style={{ marginTop: 10 }}>
+                                                <span style={{ fontSize: 12, color: '#555' }}>Brightness Variation (hsv_v): <strong>{augHsvV}</strong></span>
+                                                <input type="range" min={0.0} max={0.6} step={0.05} value={augHsvV} onChange={e => setAugHsvV(parseFloat(e.target.value))} style={{ width: '100%', marginTop: 4 }} />
+                                                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: '#999' }}>
+                                                    <span>0.0 (none)</span><span>0.4 (default)</span><span>0.6 (max)</span>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
                             </section>
 
                             <section className="tp-section">
