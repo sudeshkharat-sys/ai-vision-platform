@@ -276,8 +276,10 @@ const MainTrainingPanel = ({ project, onClose }) => {
         axios.get(`${API_URL}/pipeline/custom-weights/${project.id}`)
             .then(res => {
                 setCustomWeights(res.data.weights || []);
-                if (res.data.weights?.length && !selectedWeight)
+                if (res.data.weights?.length && !selectedWeight) {
                     setSelectedWeight(res.data.weights[res.data.weights.length - 1]);
+                    setModelSource('upload');
+                }
             })
             .catch(() => {});
     }, [project.id, selectedWeight]);
