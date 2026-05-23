@@ -582,16 +582,18 @@ const MainTrainingPanel = ({ project, onClose }) => {
         setLaunching(true);
         setView('jobs');
 
+        const activeModelName = modelSource === 'upload' ? selectedWeight : selectedModel;
+
         if (runningCount() >= MAX_PARALLEL) {
             const placeholder = {
                 id: Date.now(), taskId: null, status: 'QUEUED',
-                modelName: selectedModel,
+                modelName: activeModelName,
                 logs: ['[INFO] Job queued - waiting for a free slot...'],
                 epochMeta: null, result: null, error: null, startedAt: new Date(),
             };
             queueRef.current.push({
                 jobId: placeholder.id, projectId: project.id,
-                modelName: selectedModel, epochs, useSeedWeights, imgsz, preprocess, batch,
+                modelName: activeModelName, epochs, useSeedWeights, imgsz, preprocess, batch,
                 customWeights: modelSource === 'upload' ? selectedWeight : null,
                 augFliplr, augFlipud, augMosaic, augHsvV, augHsvH, augHsvS,
                 augDegrees, augTranslate, augScale, augMixup, augCopyPaste,
@@ -614,18 +616,18 @@ const MainTrainingPanel = ({ project, onClose }) => {
                 ...(modelSource === 'upload' && selectedWeight ? { custom_weights: selectedWeight } : {}),
             });
             const taskId = res.data.task_id;
-            const job = makeJob(taskId, selectedModel);
+            const job = makeJob(taskId, activeModelName);
             setJobs(prev => [...prev, job]);
             setActiveJobId(job.id);
             axios.post(`${API_URL}/pipeline/jobs`, {
                 task_id: taskId, project_id: project.id, job_type: 'main_training',
-                result_meta: { logs: job.logs, startedAt: job.startedAt.toISOString(), modelName: selectedModel },
+                result_meta: { logs: job.logs, startedAt: job.startedAt.toISOString(), modelName: activeModelName },
             }).catch(() => {});
             startPolling(taskId);
         } catch {
             const failJob = {
                 id: Date.now(), taskId: null, status: 'FAILURE',
-                modelName: selectedModel,
+                modelName: activeModelName,
                 logs: ['[ERR] Failed to queue main training job.'],
                 epochMeta: null, result: null, error: 'Failed to queue', startedAt: new Date(),
             };

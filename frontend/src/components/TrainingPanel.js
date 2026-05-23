@@ -571,13 +571,15 @@ const TrainingPanel = ({ project, onClose }) => {
         setLaunching(true);
         setView('jobs');
 
+        const activeModelName = modelSource === 'upload' ? selectedWeight : selectedModel;
+
         if (runningCount() >= MAX_PARALLEL) {
             const placeholder = {
                 id: Date.now(), taskId: null, status: 'QUEUED',
                 logs: ['📋  Job queued — waiting for a free slot…'],
                 epochMeta: null, result: null, error: null, startedAt: new Date(),
             };
-            queueRef.current.push({ jobId: placeholder.id, projectId: project.id, modelName: selectedModel, epochs, preprocess, imgsz, batch, customWeights: modelSource === 'upload' ? selectedWeight : null, augFliplr, augFlipud, augMosaic, augHsvV, augHsvH, augHsvS, augDegrees, augTranslate, augScale, augMixup, augCopyPaste });
+            queueRef.current.push({ jobId: placeholder.id, projectId: project.id, modelName: activeModelName, epochs, preprocess, imgsz, batch, customWeights: modelSource === 'upload' ? selectedWeight : null, augFliplr, augFlipud, augMosaic, augHsvV, augHsvH, augHsvS, augDegrees, augTranslate, augScale, augMixup, augCopyPaste });
             setJobs(prev => [...prev, placeholder]);
             setActiveJobId(placeholder.id);
             setLaunching(false);
@@ -602,7 +604,7 @@ const TrainingPanel = ({ project, onClose }) => {
             // Persist to DB so jobs survive page reload
             axios.post(`${API_URL}/pipeline/jobs`, {
                 task_id: taskId, project_id: project.id, job_type: 'seed_training',
-                result_meta: { logs: job.logs, startedAt: job.startedAt.toISOString(), modelName: selectedModel },
+                result_meta: { logs: job.logs, startedAt: job.startedAt.toISOString(), modelName: activeModelName },
             }).catch(() => {});
             startPolling(taskId);
         } catch {
