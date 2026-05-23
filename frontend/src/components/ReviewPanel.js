@@ -506,8 +506,8 @@ export default function ReviewPanel({ project, images, onClose, onAnnotationsUpd
                                                                 fontStyle="bold"
                                                             />
 
-                                                            {/* Inline accept/reject on canvas for auto boxes */}
-                                                            {isAuto && (
+                                                            {/* Inline buttons on canvas */}
+                                                            {isAuto ? (
                                                                 <Group
                                                                     x={bx + bw - 44 / scale}
                                                                     y={by + 4 / scale}
@@ -516,7 +516,7 @@ export default function ReviewPanel({ project, images, onClose, onAnnotationsUpd
                                                                         onClick={() => handleRejectAnnotation(ann.id)}
                                                                         onTap={() => handleRejectAnnotation(ann.id)}
                                                                         onMouseEnter={e => { e.target.getStage().container().style.cursor = 'pointer'; }}
-                                                                        onMouseLeave={e => { e.target.getStage().container().style.cursor = 'crosshair'; }}
+                                                                        onMouseLeave={e => { e.target.getStage().container().style.cursor = userZoom > 1 ? 'grab' : 'crosshair'; }}
                                                                     >
                                                                         <Rect width={18 / scale} height={18 / scale} fill="#f43f5e" cornerRadius={3 / scale} />
                                                                         <Text text="✕" fill="#fff" fontSize={12 / scale} x={5 / scale} y={3 / scale} fontStyle="bold" />
@@ -526,11 +526,24 @@ export default function ReviewPanel({ project, images, onClose, onAnnotationsUpd
                                                                         onClick={() => handleAcceptAnnotation(ann.id)}
                                                                         onTap={() => handleAcceptAnnotation(ann.id)}
                                                                         onMouseEnter={e => { e.target.getStage().container().style.cursor = 'pointer'; }}
-                                                                        onMouseLeave={e => { e.target.getStage().container().style.cursor = 'crosshair'; }}
+                                                                        onMouseLeave={e => { e.target.getStage().container().style.cursor = userZoom > 1 ? 'grab' : 'crosshair'; }}
                                                                     >
                                                                         <Rect width={18 / scale} height={18 / scale} fill="#22c55e" cornerRadius={3 / scale} />
                                                                         <Text text="✓" fill="#fff" fontSize={12 / scale} x={4 / scale} y={3 / scale} fontStyle="bold" />
                                                                     </Group>
+                                                                </Group>
+                                                            ) : (
+                                                                /* Delete button on canvas for verified annotations */
+                                                                <Group
+                                                                    x={bx + bw - 22 / scale}
+                                                                    y={by + 4 / scale}
+                                                                    onClick={() => handleRejectAnnotation(ann.id)}
+                                                                    onTap={() => handleRejectAnnotation(ann.id)}
+                                                                    onMouseEnter={e => { e.target.getStage().container().style.cursor = 'pointer'; }}
+                                                                    onMouseLeave={e => { e.target.getStage().container().style.cursor = userZoom > 1 ? 'grab' : 'crosshair'; }}
+                                                                >
+                                                                    <Rect width={18 / scale} height={18 / scale} fill="#f43f5e" cornerRadius={3 / scale} />
+                                                                    <Text text="✕" fill="#fff" fontSize={12 / scale} x={5 / scale} y={3 / scale} fontStyle="bold" />
                                                                 </Group>
                                                             )}
                                                         </React.Fragment>
@@ -610,7 +623,16 @@ export default function ReviewPanel({ project, images, onClose, onAnnotationsUpd
                                                     </button>
                                                 </div>
                                             ) : (
-                                                <span className="rp-verified-tag">verified</span>
+                                                <div className="rp-ann-row-actions">
+                                                    <span className="rp-verified-tag">verified</span>
+                                                    <button
+                                                        className="rp-row-btn remove"
+                                                        title="Delete this verified annotation"
+                                                        onClick={() => handleRejectAnnotation(ann.id)}
+                                                    >
+                                                        <X size={14} />
+                                                    </button>
+                                                </div>
                                             )}
                                         </div>
                                     );
