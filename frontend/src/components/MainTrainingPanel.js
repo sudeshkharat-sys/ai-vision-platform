@@ -1012,19 +1012,19 @@ const MainTrainingPanel = ({ project, onClose }) => {
                                             <p style={{ fontSize: 11, fontWeight: 600, color: '#888', margin: '0 0 8px', textTransform: 'uppercase', letterSpacing: 0.5 }}>Color &amp; Lighting</p>
 
                                             <div style={{ marginBottom: 10 }}>
-                                                <span style={{ fontSize: 12, color: '#555' }}>Hue (hsv_h): <strong>{augHsvH}</strong> <span title="Randomly shifts the color hue each epoch. Keep low (0.01–0.05) so object colors don't change drastically. Set to 0 for color-critical inspection (e.g. red vs green wire)." style={{ cursor: 'help', color: '#aaa', fontSize: 11 }}>ⓘ</span></span>
+                                                <span style={{ fontSize: 12, color: '#555' }}>Hue (hsv_h): <strong>{augHsvH}</strong> <span title="Changes the color tone of images during training. Keep low. Turn off if color matters — e.g. red wire vs green wire." style={{ cursor: 'help', color: '#aaa', fontSize: 11 }}>ⓘ</span></span>
                                                 <input type="range" min={0.0} max={0.5} step={0.005} value={augHsvH} onChange={e => setAugHsvH(parseFloat(e.target.value))} style={{ width: '100%', marginTop: 4 }} />
                                                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: '#999' }}><span>0.0 (off)</span><span>0.015 (default)</span><span>0.5 (max)</span></div>
                                             </div>
 
                                             <div style={{ marginBottom: 10 }}>
-                                                <span style={{ fontSize: 12, color: '#555' }}>Saturation (hsv_s): <strong>{augHsvS}</strong> <span title="Randomly changes color vividness. Helps model handle faded or oversaturated images under different factory lighting conditions." style={{ cursor: 'help', color: '#aaa', fontSize: 11 }}>ⓘ</span></span>
+                                                <span style={{ fontSize: 12, color: '#555' }}>Saturation (hsv_s): <strong>{augHsvS}</strong> <span title="Makes colors more or less vivid during training. Helps if your camera sometimes looks washed out or too bright." style={{ cursor: 'help', color: '#aaa', fontSize: 11 }}>ⓘ</span></span>
                                                 <input type="range" min={0.0} max={1.0} step={0.05} value={augHsvS} onChange={e => setAugHsvS(parseFloat(e.target.value))} style={{ width: '100%', marginTop: 4 }} />
                                                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: '#999' }}><span>0.0 (off)</span><span>0.3 (default)</span><span>1.0 (max)</span></div>
                                             </div>
 
                                             <div style={{ marginBottom: 14 }}>
-                                                <span style={{ fontSize: 12, color: '#555' }}>Brightness (hsv_v): <strong>{augHsvV}</strong> <span title="Randomly makes images brighter or darker each epoch. Raise to 0.4+ for sensors with glare or reflections — forces model to learn the object shape, not just its brightness." style={{ cursor: 'help', color: '#aaa', fontSize: 11 }}>ⓘ</span></span>
+                                                <span style={{ fontSize: 12, color: '#555' }}>Brightness (hsv_v): <strong>{augHsvV}</strong> <span title="Makes images brighter or darker during training. Raise this if your part has reflections or glare." style={{ cursor: 'help', color: '#aaa', fontSize: 11 }}>ⓘ</span></span>
                                                 <input type="range" min={0.0} max={0.6} step={0.05} value={augHsvV} onChange={e => setAugHsvV(parseFloat(e.target.value))} style={{ width: '100%', marginTop: 4 }} />
                                                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: '#999' }}><span>0.0 (off)</span><span>0.4 (default)</span><span>0.6 (max)</span></div>
                                             </div>
@@ -1033,19 +1033,19 @@ const MainTrainingPanel = ({ project, onClose }) => {
                                             <p style={{ fontSize: 11, fontWeight: 600, color: '#888', margin: '0 0 8px', textTransform: 'uppercase', letterSpacing: 0.5 }}>Geometry</p>
 
                                             <div style={{ marginBottom: 10 }}>
-                                                <span style={{ fontSize: 12, color: '#555' }}>Rotation (degrees): <strong>{augDegrees}°</strong> <span title="Randomly rotates images up to this many degrees. Good for circular or symmetric objects (sensors, pipes). Set to 0 for barcodes, directional labels, or objects where angle matters." style={{ cursor: 'help', color: '#aaa', fontSize: 11 }}>ⓘ</span></span>
+                                                <span style={{ fontSize: 12, color: '#555' }}>Rotation (degrees): <strong>{augDegrees}°</strong> <span title="Rotates images during training. Good for round objects. Turn off if direction matters — e.g. a label that must always face up." style={{ cursor: 'help', color: '#aaa', fontSize: 11 }}>ⓘ</span></span>
                                                 <input type="range" min={0} max={45} step={1} value={augDegrees} onChange={e => setAugDegrees(parseFloat(e.target.value))} style={{ width: '100%', marginTop: 4 }} />
                                                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: '#999' }}><span>0° (off)</span><span>10° (default)</span><span>45° (max)</span></div>
                                             </div>
 
                                             <div style={{ marginBottom: 10 }}>
-                                                <span style={{ fontSize: 12, color: '#555' }}>Translation (translate): <strong>{augTranslate}</strong> <span title="Randomly shifts the image position by this fraction. Simulates the object appearing off-center in the frame. Helps if camera placement is not perfectly fixed." style={{ cursor: 'help', color: '#aaa', fontSize: 11 }}>ⓘ</span></span>
+                                                <span style={{ fontSize: 12, color: '#555' }}>Translation (translate): <strong>{augTranslate}</strong> <span title="Shifts the object position in the image. Helps if the part is not always perfectly centered in front of the camera." style={{ cursor: 'help', color: '#aaa', fontSize: 11 }}>ⓘ</span></span>
                                                 <input type="range" min={0.0} max={0.3} step={0.05} value={augTranslate} onChange={e => setAugTranslate(parseFloat(e.target.value))} style={{ width: '100%', marginTop: 4 }} />
                                                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: '#999' }}><span>0.0 (off)</span><span>0.1 (default)</span><span>0.3 (max)</span></div>
                                             </div>
 
                                             <div style={{ marginBottom: 14 }}>
-                                                <span style={{ fontSize: 12, color: '#555' }}>Scale / Zoom (scale): <strong>{augScale}</strong> <span title="Randomly zooms in or out by up to this fraction each epoch. Helps when camera distance varies slightly between shots. Reduce if object size is always fixed in your setup." style={{ cursor: 'help', color: '#aaa', fontSize: 11 }}>ⓘ</span></span>
+                                                <span style={{ fontSize: 12, color: '#555' }}>Scale / Zoom (scale): <strong>{augScale}</strong> <span title="Zooms in and out during training. Helps if camera distance changes or the part appears at different sizes." style={{ cursor: 'help', color: '#aaa', fontSize: 11 }}>ⓘ</span></span>
                                                 <input type="range" min={0.0} max={0.9} step={0.05} value={augScale} onChange={e => setAugScale(parseFloat(e.target.value))} style={{ width: '100%', marginTop: 4 }} />
                                                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: '#999' }}><span>0.0 (off)</span><span>0.4 (default)</span><span>0.9 (max)</span></div>
                                             </div>
@@ -1057,14 +1057,14 @@ const MainTrainingPanel = ({ project, onClose }) => {
                                                 <label className="mtp-toggle-label">
                                                     <input type="checkbox" className="mtp-toggle-check" checked={augFliplr} onChange={e => setAugFliplr(e.target.checked)} />
                                                     <span className="mtp-toggle-slider" />
-                                                    <span className="mtp-toggle-text">Flip Left/Right <span title="Mirrors image horizontally (50% chance per image). Safe for symmetric objects like sensors or pipes. Disable for text, nameplates, or any object where left/right direction matters." style={{ cursor: 'help', color: '#aaa', fontSize: 11 }}>ⓘ</span></span>
+                                                    <span className="mtp-toggle-text">Flip Left/Right <span title="Mirrors the image left to right. Turn off if left/right matters — e.g. a nameplate or arrow that only faces one way." style={{ cursor: 'help', color: '#aaa', fontSize: 11 }}>ⓘ</span></span>
                                                 </label>
                                             </div>
                                             <div className="mtp-toggle-row" style={{ marginTop: 8, marginBottom: 14 }}>
                                                 <label className="mtp-toggle-label">
                                                     <input type="checkbox" className="mtp-toggle-check" checked={augFlipud} onChange={e => setAugFlipud(e.target.checked)} />
                                                     <span className="mtp-toggle-slider" />
-                                                    <span className="mtp-toggle-text">Flip Upside Down <span title="Mirrors image vertically (10% chance per image). Safe for round/symmetric objects. Disable if upside-down changes meaning — e.g. nameplate M becomes W which is a different label." style={{ cursor: 'help', color: '#aaa', fontSize: 11 }}>ⓘ</span></span>
+                                                    <span className="mtp-toggle-text">Flip Upside Down <span title="Flips the image upside down. Turn off if orientation matters — e.g. letter M upside down looks like W, which is wrong." style={{ cursor: 'help', color: '#aaa', fontSize: 11 }}>ⓘ</span></span>
                                                 </label>
                                             </div>
 
@@ -1075,18 +1075,18 @@ const MainTrainingPanel = ({ project, onClose }) => {
                                                 <label className="mtp-toggle-label">
                                                     <input type="checkbox" className="mtp-toggle-check" checked={augMosaic} onChange={e => setAugMosaic(e.target.checked)} />
                                                     <span className="mtp-toggle-slider" />
-                                                    <span className="mtp-toggle-text">Mosaic <span title="Combines 4 training images into 1 grid each epoch. Good for multi-class detection projects. Disable for binary OK/NOT OK inspection — mixing OK and NOT OK images in one tile confuses the model." style={{ cursor: 'help', color: '#aaa', fontSize: 11 }}>ⓘ</span></span>
+                                                    <span className="mtp-toggle-text">Mosaic <span title="Combines 4 images into one during training. Turn off for simple pass/fail inspection — mixing good and bad parts in one image confuses the model." style={{ cursor: 'help', color: '#aaa', fontSize: 11 }}>ⓘ</span></span>
                                                 </label>
                                             </div>
 
                                             <div style={{ marginTop: 10 }}>
-                                                <span style={{ fontSize: 12, color: '#555' }}>Mixup: <strong>{augMixup}</strong> <span title="Blends two images together as a ghost overlay. Usually keep at 0 for inspection tasks — blending OK and NOT OK images creates ambiguous training data that hurts accuracy." style={{ cursor: 'help', color: '#aaa', fontSize: 11 }}>ⓘ</span></span>
+                                                <span style={{ fontSize: 12, color: '#555' }}>Mixup: <strong>{augMixup}</strong> <span title="Overlays two images on top of each other like a ghost. Keep at 0 for most projects — blending good and bad parts confuses the model." style={{ cursor: 'help', color: '#aaa', fontSize: 11 }}>ⓘ</span></span>
                                                 <input type="range" min={0.0} max={0.3} step={0.05} value={augMixup} onChange={e => setAugMixup(parseFloat(e.target.value))} style={{ width: '100%', marginTop: 4 }} />
                                                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: '#999' }}><span>0.0 (off)</span><span>0.15</span><span>0.3 (max)</span></div>
                                             </div>
 
                                             <div style={{ marginTop: 10 }}>
-                                                <span style={{ fontSize: 12, color: '#555' }}>Copy Paste: <strong>{augCopyPaste}</strong> <span title="Cuts detected objects from one image and pastes them into another. Helps when you have very few labeled examples of a class. Safe to keep at a low value (0.1)." style={{ cursor: 'help', color: '#aaa', fontSize: 11 }}>ⓘ</span></span>
+                                                <span style={{ fontSize: 12, color: '#555' }}>Copy Paste: <strong>{augCopyPaste}</strong> <span title="Copies objects from one image and pastes into another. Useful if you have very few training images for a part." style={{ cursor: 'help', color: '#aaa', fontSize: 11 }}>ⓘ</span></span>
                                                 <input type="range" min={0.0} max={0.2} step={0.01} value={augCopyPaste} onChange={e => setAugCopyPaste(parseFloat(e.target.value))} style={{ width: '100%', marginTop: 4 }} />
                                                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: '#999' }}><span>0.0 (off)</span><span>0.1 (default)</span><span>0.2 (max)</span></div>
                                             </div>
