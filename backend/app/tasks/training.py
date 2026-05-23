@@ -502,7 +502,7 @@ def train_seed_model(
         # from the actual colour cue rather than fighting augmentation noise.
         hsv_h=0.015,         # minimal hue jitter (lighting colour shifts)
         hsv_s=0.3,           # reduced from 0.7 — preserve white-clip colour signature
-        hsv_v=0.2,           # reduced from 0.4 — preserve clip brightness contrast
+        hsv_v=0.4,           # increased from 0.2 — expose model to brightness variation (reflection robustness)
         degrees=10,          # slight rotation — clips appear at various angles
         translate=0.1,       # random translation ± 10 %
         scale=0.4,           # random scale ± 40 %
@@ -660,7 +660,7 @@ def train_main_model(
         # --- augmentation (same conservative tuning as seed) ---------------
         hsv_h=0.015,
         hsv_s=0.3,           # reduced — preserve white-clip colour signature
-        hsv_v=0.2,           # reduced — preserve clip brightness contrast
+        hsv_v=0.4,           # increased from 0.2 — expose model to brightness variation (reflection robustness)
         degrees=10,
         translate=0.1,
         scale=0.4,
