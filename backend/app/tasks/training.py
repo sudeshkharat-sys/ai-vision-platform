@@ -420,6 +420,13 @@ def train_seed_model(
     aug_flipud: float = 0.1,
     aug_mosaic: float = 0.5,
     aug_hsv_v: float = 0.4,
+    aug_hsv_h: float = 0.015,
+    aug_hsv_s: float = 0.3,
+    aug_degrees: float = 10.0,
+    aug_translate: float = 0.1,
+    aug_scale: float = 0.4,
+    aug_mixup: float = 0.0,
+    aug_copy_paste: float = 0.05,
 ):
     """
     Quick seed-training on manually annotated images.
@@ -504,18 +511,18 @@ def train_seed_model(
         # plastic clip*.  Heavy brightness / saturation jitter destroys that
         # signal.  We intentionally keep HSV jitter low so the model learns
         # from the actual colour cue rather than fighting augmentation noise.
-        hsv_h=0.015,         # minimal hue jitter (lighting colour shifts)
-        hsv_s=0.3,           # reduced from 0.7 — preserve white-clip colour signature
-        hsv_v=aug_hsv_v,     # configurable brightness variation (reflection robustness)
-        degrees=10,          # slight rotation — clips appear at various angles
-        translate=0.1,       # random translation ± 10 %
-        scale=0.4,           # random scale ± 40 %
-        fliplr=aug_fliplr,   # configurable horizontal flip
-        flipud=aug_flipud,   # configurable vertical flip
-        mosaic=aug_mosaic,   # configurable mosaic mixing
+        hsv_h=aug_hsv_h,
+        hsv_s=aug_hsv_s,
+        hsv_v=aug_hsv_v,
+        degrees=aug_degrees,
+        translate=aug_translate,
+        scale=aug_scale,
+        fliplr=aug_fliplr,
+        flipud=aug_flipud,
+        mosaic=aug_mosaic,
         close_mosaic=15,     # disable mosaic for last 15 epochs to stabilise
-        mixup=0.0,           # disabled — pixel blending corrupts the binary signal
-        copy_paste=0.05,     # minimal copy-paste
+        mixup=aug_mixup,
+        copy_paste=aug_copy_paste,
         # ------------------------------------------------------------------
         project=str(settings.model_dir / project_id),
         name="seed_model",
@@ -571,6 +578,13 @@ def train_main_model(
     aug_flipud: float = 0.1,
     aug_mosaic: float = 0.5,
     aug_hsv_v: float = 0.4,
+    aug_hsv_h: float = 0.015,
+    aug_hsv_s: float = 0.3,
+    aug_degrees: float = 10.0,
+    aug_translate: float = 0.1,
+    aug_scale: float = 0.4,
+    aug_mixup: float = 0.0,
+    aug_copy_paste: float = 0.1,
 ):
     """
     Full/main training on ALL annotated images (manual + auto-annotated).
@@ -666,18 +680,18 @@ def train_main_model(
         patience=20,         # early stopping — stop when mAP stops improving
         label_smoothing=0.05,
         # --- augmentation (same conservative tuning as seed) ---------------
-        hsv_h=0.015,
-        hsv_s=0.3,           # reduced — preserve white-clip colour signature
-        hsv_v=aug_hsv_v,     # configurable brightness variation (reflection robustness)
-        degrees=10,
-        translate=0.1,
-        scale=0.4,
-        fliplr=aug_fliplr,   # configurable horizontal flip
-        flipud=aug_flipud,   # configurable vertical flip
-        mosaic=aug_mosaic,   # configurable mosaic mixing
+        hsv_h=aug_hsv_h,
+        hsv_s=aug_hsv_s,
+        hsv_v=aug_hsv_v,
+        degrees=aug_degrees,
+        translate=aug_translate,
+        scale=aug_scale,
+        fliplr=aug_fliplr,
+        flipud=aug_flipud,
+        mosaic=aug_mosaic,
         close_mosaic=10,     # disable mosaic for last 10 epochs to stabilise
-        mixup=0.0,           # disabled — pixel blending corrupts binary signal
-        copy_paste=0.1,      # increased — synthesises extra instances on small datasets
+        mixup=aug_mixup,
+        copy_paste=aug_copy_paste,
         # ------------------------------------------------------------------
         project=str(settings.model_dir / project_id),
         name="main_model",
