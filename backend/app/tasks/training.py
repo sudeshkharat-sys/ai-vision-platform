@@ -416,6 +416,10 @@ def train_seed_model(
     preprocess: bool = True,
     batch: int = -1,
     custom_weights: str = None,
+    aug_fliplr: float = 0.5,
+    aug_flipud: float = 0.1,
+    aug_mosaic: float = 0.5,
+    aug_hsv_v: float = 0.4,
 ):
     """
     Quick seed-training on manually annotated images.
@@ -502,13 +506,13 @@ def train_seed_model(
         # from the actual colour cue rather than fighting augmentation noise.
         hsv_h=0.015,         # minimal hue jitter (lighting colour shifts)
         hsv_s=0.3,           # reduced from 0.7 — preserve white-clip colour signature
-        hsv_v=0.4,           # increased from 0.2 — expose model to brightness variation (reflection robustness)
+        hsv_v=aug_hsv_v,     # configurable brightness variation (reflection robustness)
         degrees=10,          # slight rotation — clips appear at various angles
         translate=0.1,       # random translation ± 10 %
         scale=0.4,           # random scale ± 40 %
-        fliplr=0.5,          # horizontal flip (structurally valid for pipe clips)
-        flipud=0.1,          # occasional vertical flip
-        mosaic=0.5,          # reduced from 1.0 — avoid mixing OK+NOT-OK contexts
+        fliplr=aug_fliplr,   # configurable horizontal flip
+        flipud=aug_flipud,   # configurable vertical flip
+        mosaic=aug_mosaic,   # configurable mosaic mixing
         close_mosaic=15,     # disable mosaic for last 15 epochs to stabilise
         mixup=0.0,           # disabled — pixel blending corrupts the binary signal
         copy_paste=0.05,     # minimal copy-paste
@@ -563,6 +567,10 @@ def train_main_model(
     preprocess: bool = True,
     batch: int = -1,
     custom_weights: str = None,
+    aug_fliplr: float = 0.5,
+    aug_flipud: float = 0.1,
+    aug_mosaic: float = 0.5,
+    aug_hsv_v: float = 0.4,
 ):
     """
     Full/main training on ALL annotated images (manual + auto-annotated).
@@ -660,13 +668,13 @@ def train_main_model(
         # --- augmentation (same conservative tuning as seed) ---------------
         hsv_h=0.015,
         hsv_s=0.3,           # reduced — preserve white-clip colour signature
-        hsv_v=0.4,           # increased from 0.2 — expose model to brightness variation (reflection robustness)
+        hsv_v=aug_hsv_v,     # configurable brightness variation (reflection robustness)
         degrees=10,
         translate=0.1,
         scale=0.4,
-        fliplr=0.5,
-        flipud=0.1,
-        mosaic=0.5,          # reduced — avoid mixing OK+NOT-OK contexts
+        fliplr=aug_fliplr,   # configurable horizontal flip
+        flipud=aug_flipud,   # configurable vertical flip
+        mosaic=aug_mosaic,   # configurable mosaic mixing
         close_mosaic=10,     # disable mosaic for last 10 epochs to stabilise
         mixup=0.0,           # disabled — pixel blending corrupts binary signal
         copy_paste=0.1,      # increased — synthesises extra instances on small datasets

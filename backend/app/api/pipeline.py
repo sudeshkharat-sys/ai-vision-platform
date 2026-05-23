@@ -90,6 +90,10 @@ class TrainSeedRequest(BaseModel):
     imgsz: int = 640
     preprocess: bool = True
     batch: int = -1
+    aug_fliplr: float = 0.5
+    aug_flipud: float = 0.1
+    aug_mosaic: float = 0.5
+    aug_hsv_v: float = 0.4
 
 
 @router.post("/train-seed/{project_id}")
@@ -103,7 +107,7 @@ async def start_seed_training(
     req = body or TrainSeedRequest()
     task = train_seed_model.delay(
         project_id, req.model_name, req.epochs, req.imgsz, req.preprocess, req.batch,
-        req.custom_weights,
+        req.custom_weights, req.aug_fliplr, req.aug_flipud, req.aug_mosaic, req.aug_hsv_v,
     )
     return {"task_id": task.id, "status": "queued"}
 
@@ -116,6 +120,10 @@ class TrainMainRequest(BaseModel):
     imgsz: int = 640
     preprocess: bool = True
     batch: int = -1
+    aug_fliplr: float = 0.5
+    aug_flipud: float = 0.1
+    aug_mosaic: float = 0.5
+    aug_hsv_v: float = 0.4
 
 
 @router.post("/train-main/{project_id}")
@@ -130,7 +138,7 @@ async def start_main_training(
     task = train_main_model.delay(
         project_id, req.model_name, req.epochs,
         req.use_seed_weights, req.imgsz, req.preprocess, req.batch,
-        req.custom_weights,
+        req.custom_weights, req.aug_fliplr, req.aug_flipud, req.aug_mosaic, req.aug_hsv_v,
     )
     return {"task_id": task.id, "status": "queued"}
 
