@@ -11,7 +11,7 @@ import ReviewPanel from './ReviewPanel';
 import VideoPanel from './VideoPanel';
 import ActiveLearningPanel from './ActiveLearningPanel';
 import './AnnotationWorkspace.css';
-import { Sparkles, AlertTriangle, X, Upload, Image as ImageIcon, Check, ArrowLeft, ArrowRight, Brain, Rocket, Eye, Target, Tag, Package, Film, Undo2, Redo2, ZoomIn, ZoomOut, Maximize2, Trash2 } from 'lucide-react';
+import { Sparkles, AlertTriangle, X, Upload, Image as ImageIcon, Check, ArrowLeft, ArrowRight, Brain, Rocket, Eye, Target, Tag, Package, Film, Undo2, Redo2, ZoomIn, ZoomOut, Maximize2, Trash2, ImageOff } from 'lucide-react';
 
 import { API_URL } from '../config';
 
@@ -454,6 +454,28 @@ Do you want to proceed?`;
             if (selectedAnnId === annId) setSelectedAnnId(null);
         } catch (e) {
             setError("Failed to delete annotation.");
+        }
+    };
+
+    const handleDeleteImage = async () => {
+        if (!currentImage) return;
+        if (!window.confirm(`Delete "${currentImage.filename}"?\n\nThis will permanently remove the image and all its annotations.`)) return;
+        try {
+            await axios.delete(`${API_URL}/images/${currentImage.id}`);
+            const remaining = images.filter(img => img.id !== currentImage.id);
+            setImages(remaining);
+            // Navigate to next available image or clear canvas
+            const idx = images.findIndex(img => img.id === currentImage.id);
+            const next = remaining[idx] || remaining[idx - 1] || null;
+            if (next) {
+                handleImageClick(next);
+            } else {
+                setCurrentImage(null);
+                setAnnotations([]);
+            }
+            showStatus('Image deleted');
+        } catch (e) {
+            setError('Failed to delete image.');
         }
     };
 
@@ -942,8 +964,10 @@ Do you want to proceed?`;
                             {/* ── Undo / Redo ── */}
                             <button className="btn-toolbar" onClick={handleUndo} disabled={!history.length} title="Undo (Ctrl+Z)"><Undo2 size={14} /></button>
                             <button className="btn-toolbar" onClick={handleRedo} disabled={!redoStack.length} title="Redo (Ctrl+Y)"><Redo2 size={14} /></button>
-                            {/* ── Clear all ── */}
+                            {/* ── Clear all annotations ── */}
                             <button className="btn-toolbar" onClick={handleClearAllAnnotations} disabled={annotations.length === 0} title="Delete all annotations on this image"><Trash2 size={14} /></button>
+                            {/* ── Delete image ── */}
+                            <button className="btn-toolbar btn-toolbar--danger" onClick={handleDeleteImage} title="Delete this image (and all its annotations)"><ImageOff size={14} /></button>
                             {/* ── Zoom ── */}
                             <button className="btn-toolbar" onClick={() => { setUserZoom(z => Math.min(15, z * 1.3)); }} title="Zoom in"><ZoomIn size={14} /></button>
                             <span style={{ fontSize: 11, color: '#666', minWidth: 36, textAlign: 'center' }}>{Math.round(userZoom * 100)}%</span>

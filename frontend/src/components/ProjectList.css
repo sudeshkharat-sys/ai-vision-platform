@@ -545,6 +545,117 @@
 
 .pl-modal-delete:disabled { opacity: 0.55; cursor: not-allowed; transform: none; }
 
+.pl-modal {
+    max-width: 480px;
+    text-align: left;
+    align-items: flex-start;
+}
+
+.pl-modal-title {
+    text-align: left;
+}
+
+.pl-modal-body {
+    text-align: left;
+    margin-bottom: 12px;
+}
+
+.pl-modal-flush-section {
+    width: 100%;
+    background: #f8f9ff;
+    border: 1px solid #dde3ff;
+    border-radius: 12px;
+    padding: 14px 16px;
+    margin-bottom: 4px;
+}
+
+.pl-modal-option-title {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 14px;
+    font-weight: 600;
+    color: #1a1a1a;
+    margin-bottom: 6px;
+}
+
+.pl-modal-option-desc {
+    font-size: 13px;
+    color: #666;
+    line-height: 1.6;
+    margin: 0 0 10px;
+}
+
+.pl-modal-option-desc strong {
+    color: #1a1a1a;
+}
+
+.pl-modal-checkbox {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    color: #555;
+    cursor: pointer;
+    margin-bottom: 12px;
+}
+
+.pl-modal-checkbox input {
+    accent-color: #6366f1;
+    width: 14px;
+    height: 14px;
+    cursor: pointer;
+}
+
+.pl-modal-flush {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+    width: 100%;
+    background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);
+    border: none;
+    border-radius: 9px;
+    color: #fff;
+    font-size: 13px;
+    font-weight: 600;
+    padding: 10px 14px;
+    cursor: pointer;
+    transition: all 0.16s;
+    box-shadow: 0 3px 12px rgba(99, 102, 241, 0.3);
+    font-family: inherit;
+}
+
+.pl-modal-flush:hover:not(:disabled) {
+    background: linear-gradient(135deg, #4f46e5 0%, #4338ca 100%);
+    box-shadow: 0 5px 18px rgba(99, 102, 241, 0.42);
+    transform: translateY(-1px);
+}
+
+.pl-modal-flush:disabled { opacity: 0.55; cursor: not-allowed; transform: none; }
+
+.pl-modal-divider {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    color: #bbb;
+    font-size: 12px;
+    margin: 14px 0;
+}
+
+.pl-modal-divider::before,
+.pl-modal-divider::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: #e5e5e5;
+}
+
+.pl-modal-actions {
+    margin-top: 14px;
+}
+
 /* ════════════════════════════════════════════════════════════════
    PROJECT GRID
    ════════════════════════════════════════════════════════════════ */

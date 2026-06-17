@@ -3,7 +3,7 @@ import axios from 'axios';
 import './ProjectList.css';
 
 import { API_URL } from '../config';
-import { FolderOpen, Tag, Plus, X, Trash2, AlertTriangle, ArrowRight, Calendar, Grid3X3, Sparkles } from 'lucide-react';
+import { FolderOpen, Tag, Plus, X, Trash2, AlertTriangle, ArrowRight, Calendar, Grid3X3, Sparkles, DatabaseZap } from 'lucide-react';
 import logoImg from '../logo.png';
 
 /* ── Per-project gradient palette ─────────────────────────────── */
@@ -46,8 +46,9 @@ function SkeletonCard() {
     );
 }
 
-/* ── Delete Confirmation Modal ───────────────────────────────── */
-function DeleteModal({ project, onConfirm, onCancel, deleting }) {
+/* ── Delete / Flush Confirmation Modal ───────────────────────── */
+function DeleteModal({ project, onConfirm, onFlush, onCancel, deleting }) {
+    const [keepModel, setKeepModel] = useState(true);
     const modalRef = useRef(null);
 
     // Close on Escape key
@@ -71,13 +72,44 @@ function DeleteModal({ project, onConfirm, onCancel, deleting }) {
                 </div>
 
                 {/* Text */}
-                <h2 className="pl-modal-title">Delete Project?</h2>
+                <h2 className="pl-modal-title">Manage Project Data</h2>
                 <p className="pl-modal-body">
-                    You're about to permanently delete{' '}
-                    <strong>"{project.name}"</strong>.
-                    <br /><br />
-                    This will remove <strong>all images, annotations, and training jobs</strong> associated with this project. This action{' '}
-                    <strong>cannot be undone</strong>.
+                    Choose what to do with <strong>"{project.name}"</strong>:
+                </p>
+
+                {/* Flush option */}
+                <div className="pl-modal-flush-section">
+                    <div className="pl-modal-option-title"><DatabaseZap size={15} /> Flush Data Only</div>
+                    <p className="pl-modal-option-desc">
+                        Deletes all images &amp; annotations but <strong>keeps the project</strong>. Frees up disk space without losing your setup.
+                    </p>
+                    <label className="pl-modal-checkbox">
+                        <input
+                            type="checkbox"
+                            checked={keepModel}
+                            onChange={e => setKeepModel(e.target.checked)}
+                            disabled={deleting}
+                        />
+                        Keep trained model weights (.pt files)
+                    </label>
+                    <button
+                        className="pl-modal-flush"
+                        onClick={() => onFlush(keepModel)}
+                        disabled={deleting}
+                    >
+                        {deleting
+                            ? <><span className="pl-btn-spinner" />Working…</>
+                            : <><DatabaseZap size={14} /> Flush Images &amp; Annotations</>
+                        }
+                    </button>
+                </div>
+
+                <div className="pl-modal-divider"><span>or</span></div>
+
+                {/* Delete option */}
+                <div className="pl-modal-option-title"><Trash2 size={15} /> Delete Entire Project</div>
+                <p className="pl-modal-option-desc">
+                    Permanently removes the project, all images, annotations, and model weights. <strong>Cannot be undone.</strong>
                 </p>
 
                 {/* Actions */}
@@ -282,6 +314,23 @@ const ProjectList = ({ onProjectSelect, user }) => {
         if (!deleting) setDeleteTarget(null);
     };
 
+    const handleFlushConfirm = async (keepModel) => {
+        if (!deleteTarget) return;
+        setDeleting(true);
+        try {
+            await axios.post(`${API_URL}/projects/${deleteTarget.id}/flush?keep_model=${keepModel}`);
+            setDeleteTarget(null);
+            // Refresh project list to reflect updated stats
+            const res = await axios.get(`${API_URL}/projects`);
+            setProjects(res.data);
+        } catch {
+            setError(`Failed to flush data for "${deleteTarget.name}". Please try again.`);
+            setDeleteTarget(null);
+        } finally {
+            setDeleting(false);
+        }
+    };
+
     const firstName = user?.name?.split(' ')[0] || 'there';
     const totalClasses = projects.reduce((s, p) => s + (p.classes?.length || 0), 0);
 
@@ -293,6 +342,7 @@ const ProjectList = ({ onProjectSelect, user }) => {
                 <DeleteModal
                     project={deleteTarget}
                     onConfirm={handleDeleteConfirm}
+                    onFlush={handleFlushConfirm}
                     onCancel={handleDeleteCancel}
                     deleting={deleting}
                 />

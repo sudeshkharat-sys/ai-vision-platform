@@ -184,3 +184,55 @@ async def delete_project(
         shutil.rmtree(project_upload_dir, ignore_errors=True)
 
     return {"message": "Project deleted successfully", "id": project_id}
+
+
+@router.post("/{project_id}/flush")
+async def flush_project_data(
+    project_id: str,
+    keep_model: bool = True,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Delete all images and annotations for a project but keep the project itself.
+    If keep_model=True (default), trained model weights (.pt files) are preserved.
+    """
+    project = await get_owned_project(project_id, current_user, db)
+
+    # Count images before deletion for response
+    count_result = await db.execute(
+        select(func.count()).select_from(Image).where(Image.project_id == project_id)
+    )
+    image_count = count_result.scalar()
+
+    # Delete all annotations for this project's images via subquery
+    image_ids_subq = select(Image.id).where(Image.project_id == project_id).scalar_subquery()
+    await db.execute(delete(Annotation).where(Annotation.image_id.in_(image_ids_subq)))
+
+    # Delete all image records
+    await db.execute(delete(Image).where(Image.project_id == project_id))
+    await db.commit()
+
+    # Remove uploaded files from disk
+    project_upload_dir = settings.upload_dir / project_id
+    if project_upload_dir.exists():
+        if keep_model:
+            # Remove everything except model directories
+            for item in project_upload_dir.iterdir():
+                if item.is_file():
+                    item.unlink(missing_ok=True)
+                elif item.is_dir():
+                    shutil.rmtree(item, ignore_errors=True)
+        else:
+            shutil.rmtree(project_upload_dir, ignore_errors=True)
+
+    # Preserve model files if requested
+    model_dir = settings.model_dir / project_id
+    model_kept = keep_model and model_dir.exists()
+
+    return {
+        "message": "Project data flushed successfully",
+        "id": project_id,
+        "images_deleted": image_count,
+        "model_kept": model_kept,
+    }

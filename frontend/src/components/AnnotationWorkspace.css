@@ -488,6 +488,11 @@
   opacity: 0.35;
   cursor: default;
 }
+.btn-toolbar--danger:hover:not(:disabled) {
+  background: #fee2e2;
+  color: #dc2626;
+  border-color: #fca5a5;
+}
 
 .btn-no-objects {
   margin-left: auto;
