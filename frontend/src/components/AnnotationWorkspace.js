@@ -639,7 +639,7 @@ Do you want to proceed?`;
     };
 
     const handleMouseDown = (e) => {
-        if (isPanning || userZoom > 1) return;
+        if (isPanning) return;
         if (pendingAnnotation) return;
         // Only block when clicking on a visible annotation shape (Rect/Group/Text)
         // Stage and Layer nodes are safe to draw on; KonvaImage has listening=false
@@ -960,7 +960,7 @@ Do you want to proceed?`;
                         <div className="canvas-toolbar">
                             <span className="canvas-filename">{currentImage.filename}</span>
                             <span className="canvas-dims">{imgW} × {imgH}px</span>
-                            <span className="canvas-hint" title="Scroll to zoom · drag to pan when zoomed">{isPanning ? 'Pan mode' : userZoom > 1 ? 'Drag to pan · scroll to zoom' : selectedAnnId ? 'Drag to move · handles to resize' : 'Draw a box to annotate'}</span>
+                            <span className="canvas-hint" title="Scroll to zoom · hold Space + drag to pan">{isPanning ? 'Pan mode — drag to move' : selectedAnnId ? 'Drag to move · handles to resize' : 'Draw a box to annotate'}</span>
                             {/* ── Undo / Redo ── */}
                             <button className="btn-toolbar" onClick={handleUndo} disabled={!history.length} title="Undo (Ctrl+Z)"><Undo2 size={14} /></button>
                             <button className="btn-toolbar" onClick={handleRedo} disabled={!redoStack.length} title="Redo (Ctrl+Y)"><Redo2 size={14} /></button>
@@ -1026,7 +1026,7 @@ Do you want to proceed?`;
                             </div>
                         </div>
 
-                        <div className="canvas-center" ref={canvasCenterRef} style={{ overflow: 'hidden', cursor: (isPanning || userZoom > 1) ? 'grab' : 'crosshair' }}>
+                        <div className="canvas-center" ref={canvasCenterRef} style={{ overflow: 'hidden', cursor: isPanning ? 'grab' : 'crosshair' }}>
                             <Stage
                                 className="canvas-stage"
                                 width={canvasSize.w}
@@ -1035,7 +1035,7 @@ Do you want to proceed?`;
                                 scaleY={scale * userZoom}
                                 x={Math.round((canvasSize.w - stageW) / 2) + stagePos.x}
                                 y={Math.round((canvasSize.h - stageH) / 2) + stagePos.y}
-                                draggable={isPanning || userZoom > 1}
+                                draggable={isPanning}
                                 onWheel={handleWheel}
                                 onDragEnd={(e) => {
                                     const cx = Math.round((canvasSize.w - stageW) / 2);
@@ -1078,13 +1078,13 @@ Do you want to proceed?`;
                                                             ? 'rgba(167,139,250,0.07)'
                                                             : 'rgba(244,63,94,0.07)'}
                                                     dash={unclassified ? [6 / totalScale, 3 / totalScale] : undefined}
-                                                    draggable={isSelected && !isPanning && userZoom <= 1}
+                                                    draggable={isSelected && !isPanning}
                                                     onClick={(e) => handleAnnClick(ann.id, e)}
                                                     onTap={(e) => handleAnnClick(ann.id, e)}
                                                     onDragEnd={(e) => handleAnnDragEnd(e, ann)}
                                                     onTransformEnd={(e) => handleAnnTransformEnd(e, ann)}
                                                     onMouseEnter={e => { e.target.getStage().container().style.cursor = 'move'; }}
-                                                    onMouseLeave={e => { e.target.getStage().container().style.cursor = (isPanning || userZoom > 1) ? 'grab' : 'crosshair'; }}
+                                                    onMouseLeave={e => { e.target.getStage().container().style.cursor = isPanning ? 'grab' : 'crosshair'; }}
                                                 />
                                                 {/* Label background */}
                                                 <Rect
@@ -1113,7 +1113,7 @@ Do you want to proceed?`;
                                                             onClick={(e) => { e.cancelBubble = true; handleRejectAnnotation(ann.id); }}
                                                             onTap={(e) => { e.cancelBubble = true; handleRejectAnnotation(ann.id); }}
                                                             onMouseEnter={e => { e.target.getStage().container().style.cursor = 'pointer'; }}
-                                                            onMouseLeave={e => { e.target.getStage().container().style.cursor = (isPanning || userZoom > 1) ? 'grab' : 'crosshair'; }}
+                                                            onMouseLeave={e => { e.target.getStage().container().style.cursor = isPanning ? 'grab' : 'crosshair'; }}
                                                         >
                                                             <Rect width={18 / totalScale} height={18 / totalScale} fill="#f43f5e" cornerRadius={3 / totalScale} shadowBlur={2 / totalScale} />
                                                             <Text text="✕" fill="#fff" fontSize={12 / totalScale} x={5 / totalScale} y={3 / totalScale} fontStyle="bold" />
@@ -1123,7 +1123,7 @@ Do you want to proceed?`;
                                                             onClick={(e) => { e.cancelBubble = true; handleAcceptAnnotation(ann.id); }}
                                                             onTap={(e) => { e.cancelBubble = true; handleAcceptAnnotation(ann.id); }}
                                                             onMouseEnter={e => { e.target.getStage().container().style.cursor = 'pointer'; }}
-                                                            onMouseLeave={e => { e.target.getStage().container().style.cursor = (isPanning || userZoom > 1) ? 'grab' : 'crosshair'; }}
+                                                            onMouseLeave={e => { e.target.getStage().container().style.cursor = isPanning ? 'grab' : 'crosshair'; }}
                                                         >
                                                             <Rect width={18 / totalScale} height={18 / totalScale} fill="#22c55e" cornerRadius={3 / totalScale} shadowBlur={2 / totalScale} />
                                                             <Text text="✓" fill="#fff" fontSize={12 / totalScale} x={4 / totalScale} y={3 / totalScale} fontStyle="bold" />
