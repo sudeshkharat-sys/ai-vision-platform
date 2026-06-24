@@ -230,6 +230,20 @@ export default function ReviewPanel({ project, images, onClose, onAnnotationsUpd
         }
     }, [annotations, markReviewed, showStatus]);
 
+    const handleDeleteAllProjectAnnotations = useCallback(async () => {
+        if (!window.confirm(
+            `Delete ALL annotations across every image in "${project.name}"?\n\nThis will reset all ${reviewImages.length} images back to unannotated. This cannot be undone.`
+        )) return;
+        try {
+            const res = await axios.delete(`${API_URL}/projects/${project.id}/annotations`);
+            setAnnotations([]);
+            onAnnotationsUpdated?.();
+            showStatus(`✕ Deleted ${res.data.deleted} annotations across all images`);
+        } catch {
+            showStatus('Failed to delete annotations');
+        }
+    }, [project, reviewImages.length, onAnnotationsUpdated, showStatus]);
+
     // Keyboard shortcuts
     useEffect(() => {
         const handler = (e) => {
@@ -368,12 +382,21 @@ export default function ReviewPanel({ project, images, onClose, onAnnotationsUpd
                         </span>
                     </div>
 
-                    <button
-                        className="rp-exit-btn"
-                        onClick={() => { onAnnotationsUpdated?.(); onClose(); }}
-                    >
-                        <X size={16} /> Exit Review
-                    </button>
+                    <div className="rp-header-right">
+                        <button
+                            className="rp-delete-all-btn"
+                            onClick={handleDeleteAllProjectAnnotations}
+                            title="Delete every annotation across all images in this project"
+                        >
+                            <Trash2 size={15} /> Delete All Annotations
+                        </button>
+                        <button
+                            className="rp-exit-btn"
+                            onClick={() => { onAnnotationsUpdated?.(); onClose(); }}
+                        >
+                            <X size={16} /> Exit Review
+                        </button>
+                    </div>
                 </div>
 
                 {/* ── Body ── */}

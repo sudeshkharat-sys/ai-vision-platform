@@ -159,6 +159,27 @@ async def get_class_stats(
     return {row.class_name: row.cnt for row in rows}
 
 
+@router.delete("/{project_id}/annotations")
+async def delete_all_project_annotations(
+    project_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete every annotation across all images in the project. Images are kept."""
+    project = await get_owned_project(project_id, current_user, db)
+
+    image_ids_subq = select(Image.id).where(Image.project_id == project.id).scalar_subquery()
+    result = await db.execute(delete(Annotation).where(Annotation.image_id.in_(image_ids_subq)))
+
+    # Reset all image statuses back to pending
+    await db.execute(
+        update(Image).where(Image.project_id == project.id).values(status='pending')
+    )
+    await db.commit()
+
+    return {"deleted": result.rowcount}
+
+
 @router.delete("/{project_id}")
 async def delete_project(
     project_id: str,
