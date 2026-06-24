@@ -521,6 +521,15 @@
 .rp-bulk-reject:not(:disabled):hover {
   background: rgba(220, 20, 60, 0.12);
 }
+.rp-bulk-delete-all {
+  background: rgba(127, 29, 29, 0.06);
+  border-color: rgba(127, 29, 29, 0.2);
+  color: #7f1d1d;
+  margin-top: 4px;
+}
+.rp-bulk-delete-all:not(:disabled):hover {
+  background: rgba(127, 29, 29, 0.12);
+}
 
 /* ── Footer ───────────────────────────────────────────────── */
 .rp-footer {

@@ -3,7 +3,7 @@ import axios from 'axios';
 import { Stage, Layer, Rect, Text, Image as KonvaImg, Group } from 'react-konva';
 import useImage from 'use-image';
 import './ReviewPanel.css';
-import { Check, X, Sparkles, ChevronLeft, ChevronRight, ZoomIn, ZoomOut, Maximize2 } from 'lucide-react';
+import { Check, X, Sparkles, ChevronLeft, ChevronRight, ZoomIn, ZoomOut, Maximize2, Trash2 } from 'lucide-react';
 import logoImg from '../logo.png';
 
 import { API_URL, BASE_URL } from '../config';
@@ -217,6 +217,19 @@ export default function ReviewPanel({ project, images, onClose, onAnnotationsUpd
         }
     }, [annotations, markReviewed, showStatus]);
 
+    const handleDeleteAllAnnotations = useCallback(async () => {
+        if (!annotations.length) return;
+        if (!window.confirm(`Delete all ${annotations.length} annotation(s) on this image? This cannot be undone.`)) return;
+        try {
+            await Promise.all(annotations.map(a => axios.delete(`${API_URL}/annotations/${a.id}`)));
+            setAnnotations([]);
+            markReviewed();
+            showStatus('All annotations deleted');
+        } catch {
+            // silent
+        }
+    }, [annotations, markReviewed, showStatus]);
+
     // Keyboard shortcuts
     useEffect(() => {
         const handler = (e) => {
@@ -259,9 +272,7 @@ export default function ReviewPanel({ project, images, onClose, onAnnotationsUpd
 
     const resetZoom = () => { setUserZoom(1); setStagePos({ x: 0, y: 0 }); };
 
-    // Canvas drawing — blocked when zoomed in (drag pans instead)
     const handleMouseDown = (e) => {
-        if (userZoom > 1) return;
         if (pendingAnnotation) return;
         const cls = e.target.getClassName ? e.target.getClassName() : '';
         if (cls === 'Rect' || cls === 'Group' || cls === 'Text') return;
@@ -422,7 +433,7 @@ export default function ReviewPanel({ project, images, onClose, onAnnotationsUpd
                                         <span className="rp-canvas-filename">{currentImage.filename}</span>
                                         <span className="rp-canvas-dims">{imgW} × {imgH}px</span>
                                         <span className="rp-canvas-hint">
-                                            {userZoom > 1 ? 'Drag to pan · scroll to zoom' : 'Draw a box to add annotation'}
+                                            {'Draw a box to add annotation · scroll to zoom'}
                                         </span>
                                         <button className="rp-zoom-btn" onClick={() => setUserZoom(z => Math.min(15, z * 1.3))} title="Zoom in"><ZoomIn size={14} /></button>
                                         <span className="rp-zoom-pct">{Math.round(userZoom * 100)}%</span>
@@ -436,7 +447,7 @@ export default function ReviewPanel({ project, images, onClose, onAnnotationsUpd
                                         </span>
                                     </div>
 
-                                    <div className="rp-stage-wrap" ref={stageWrapRef} style={{ overflow: 'hidden', cursor: userZoom > 1 ? 'grab' : 'crosshair' }}>
+                                    <div className="rp-stage-wrap" ref={stageWrapRef} style={{ overflow: 'hidden', cursor: 'crosshair' }}>
                                         <Stage
                                             width={canvasSize.w}
                                             height={canvasSize.h}
@@ -444,7 +455,7 @@ export default function ReviewPanel({ project, images, onClose, onAnnotationsUpd
                                             scaleY={scale * userZoom}
                                             x={Math.round((canvasSize.w - stageW) / 2) + stagePos.x}
                                             y={Math.round((canvasSize.h - stageH) / 2) + stagePos.y}
-                                            draggable={userZoom > 1}
+                                            draggable={false}
                                             onWheel={handleWheel}
                                             onDragEnd={(e) => {
                                                 const cx = Math.round((canvasSize.w - stageW) / 2);
@@ -656,6 +667,14 @@ export default function ReviewPanel({ project, images, onClose, onAnnotationsUpd
                                     title="Reject all auto annotations (R)"
                                 >
                                     <X size={14} /> Reject All Auto
+                                </button>
+                                <button
+                                    className="rp-bulk-btn rp-bulk-delete-all"
+                                    disabled={annotations.length === 0}
+                                    onClick={handleDeleteAllAnnotations}
+                                    title="Delete every annotation on this image (including verified)"
+                                >
+                                    <Trash2 size={14} /> Delete All ({annotations.length})
                                 </button>
                             </div>
                         </div>
