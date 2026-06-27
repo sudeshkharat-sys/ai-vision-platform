@@ -10,7 +10,6 @@ from ..config import settings
 from ..api.auth import get_current_user
 from ..api.deps import get_owned_project, get_owned_image
 from typing import List
-import shutil
 import os
 import uuid
 from PIL import Image as PILImage
@@ -36,8 +35,11 @@ async def upload_images(
         unique_filename = f"{uuid.uuid4()}{file_ext}"
         file_path = project_dir / unique_filename
 
+        contents = await file.read()
+        if not contents:
+            raise HTTPException(status_code=400, detail=f"Uploaded file '{file.filename}' is empty.")
         with open(file_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
+            buffer.write(contents)
 
         with PILImage.open(file_path) as img:
             width, height = img.size
