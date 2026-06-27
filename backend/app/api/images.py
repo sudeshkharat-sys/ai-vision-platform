@@ -17,7 +17,7 @@ from PIL import Image as PILImage
 router = APIRouter(prefix="/images", tags=["images"])
 
 
-@router.post("/upload/{project_id}", response_model=List[ImageResponse])
+@router.post("/upload/{project_id}")
 async def upload_images(
     project_id: str,
     files: List[UploadFile] = File(...),
@@ -30,46 +30,57 @@ async def upload_images(
     project_dir.mkdir(parents=True, exist_ok=True)
 
     uploaded_images = []
+    failed_files = []
+
     for file in files:
         file_ext = os.path.splitext(file.filename)[1]
         unique_filename = f"{uuid.uuid4()}{file_ext}"
         file_path = project_dir / unique_filename
 
-        contents = await file.read()
-        if not contents:
-            raise HTTPException(status_code=400, detail=f"Uploaded file '{file.filename}' is empty.")
-        with open(file_path, "wb") as buffer:
-            buffer.write(contents)
+        try:
+            contents = await file.read()
+            if not contents:
+                raise ValueError("File is empty")
 
-        with PILImage.open(file_path) as img:
-            width, height = img.size
-            # Correct dimensions for EXIF orientation so stored values match
-            # what the browser actually displays (phones often shoot rotated).
-            # Orientations 5-8 require a 90°/270° rotation, swapping W and H.
-            try:
-                exif_data = img._getexif()
-                if exif_data:
-                    orientation = exif_data.get(274, 1)  # tag 274 = Orientation
-                    if orientation in (5, 6, 7, 8):
-                        width, height = height, width
-            except Exception:
-                pass
+            with open(file_path, "wb") as buffer:
+                buffer.write(contents)
 
-        db_image = Image(
-            project_id=project_id,
-            filename=file.filename,
-            filepath=f"/uploads/{project_id}/{unique_filename}",
-            width=width,
-            height=height,
-        )
-        db.add(db_image)
-        uploaded_images.append(db_image)
+            with PILImage.open(file_path) as img:
+                width, height = img.size
+                try:
+                    exif_data = img._getexif()
+                    if exif_data:
+                        orientation = exif_data.get(274, 1)
+                        if orientation in (5, 6, 7, 8):
+                            width, height = height, width
+                except Exception:
+                    pass
 
-    await db.commit()
-    for img in uploaded_images:
-        await db.refresh(img)
+            db_image = Image(
+                project_id=project_id,
+                filename=file.filename,
+                filepath=f"/uploads/{project_id}/{unique_filename}",
+                width=width,
+                height=height,
+            )
+            db.add(db_image)
+            uploaded_images.append(db_image)
 
-    return uploaded_images
+        except Exception as e:
+            # Clean up the bad file from disk if it was written
+            if file_path.exists():
+                file_path.unlink()
+            failed_files.append({"filename": file.filename, "reason": str(e)})
+
+    if uploaded_images:
+        await db.commit()
+        for img in uploaded_images:
+            await db.refresh(img)
+
+    return {
+        "uploaded": uploaded_images,
+        "failed": failed_files,
+    }
 
 
 @router.get("/project/{project_id}", response_model=List[ImageResponse])
