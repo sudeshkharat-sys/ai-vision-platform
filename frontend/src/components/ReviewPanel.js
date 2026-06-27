@@ -307,7 +307,7 @@ export default function ReviewPanel({ project, images, onClose, onAnnotationsUpd
 
     const handleMouseUp = () => {
         setIsDrawing(false);
-        if (!newAnnotation || Math.abs(newAnnotation.width) < 5 || Math.abs(newAnnotation.height) < 5) {
+        if (!newAnnotation || Math.abs(newAnnotation.width) < 5 / userZoom || Math.abs(newAnnotation.height) < 5 / userZoom) {
             setNewAnnotation(null);
             return;
         }
@@ -589,8 +589,8 @@ export default function ReviewPanel({ project, images, onClose, onAnnotationsUpd
                                                         x={drawnBox.x} y={drawnBox.y}
                                                         width={drawnBox.width} height={drawnBox.height}
                                                         stroke="#dc143c"
-                                                        strokeWidth={2 / scale}
-                                                        dash={[6 / scale, 3 / scale]}
+                                                        strokeWidth={2 / (scale * userZoom)}
+                                                        dash={[6 / (scale * userZoom), 3 / (scale * userZoom)]}
                                                         fill="rgba(220,20,60,0.08)"
                                                     />
                                                 )}
