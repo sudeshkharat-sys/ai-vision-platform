@@ -603,8 +603,13 @@ Do you want to proceed?`;
             },
         })
             .then(res => {
-                setImages(prev => [...prev, ...res.data]);
-                showStatus(`✓ ${res.data.length} image${res.data.length !== 1 ? 's' : ''} uploaded`);
+                const uploaded = res.data.uploaded ?? res.data;
+                const failed = res.data.failed ?? [];
+                setImages(prev => [...prev, ...uploaded]);
+                if (uploaded.length > 0)
+                    showStatus(`✓ ${uploaded.length} image${uploaded.length !== 1 ? 's' : ''} uploaded`);
+                if (failed.length > 0)
+                    showStatus(`⚠ ${failed.length} file${failed.length !== 1 ? 's' : ''} skipped: ${failed.map(f => f.filename).join(', ')}`);
             })
             .catch((err) => {
                 const detail = err.response?.data?.detail;
