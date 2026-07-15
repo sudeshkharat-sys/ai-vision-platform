@@ -12,7 +12,7 @@ import VideoPanel from './VideoPanel';
 import ActiveLearningPanel from './ActiveLearningPanel';
 import OcrTrainingPanel from './OcrTrainingPanel';
 import './AnnotationWorkspace.css';
-import { Sparkles, AlertTriangle, X, Upload, Image as ImageIcon, Check, ArrowLeft, ArrowRight, Brain, Rocket, Eye, Target, Tag, Package, Film, Undo2, Redo2, ZoomIn, ZoomOut, Maximize2, Trash2, ImageOff, Type } from 'lucide-react';
+import { Sparkles, AlertTriangle, X, Upload, Image as ImageIcon, Check, ArrowLeft, ArrowRight, Brain, Rocket, Eye, Target, Tag, Package, Film, Undo2, Redo2, ZoomIn, ZoomOut, Maximize2, Trash2, ImageOff, Type, RotateCw, RotateCcw } from 'lucide-react';
 
 import { API_URL } from '../config';
 
@@ -130,6 +130,7 @@ const AnnotationWorkspace = ({ project, onProjectUpdated }) => {
     // Actual displayed dimensions from the loaded image (may differ from backend
     // stored values when EXIF orientation rotates the image 90°/270°).
     const [loadedImageSize, setLoadedImageSize] = useState(null);
+    const [imgVersion, setImgVersion] = useState({}); // image_id -> counter, cache-busts after rotation
     const [isDrawing, setIsDrawing] = useState(false);
     const [newAnnotation, setNewAnnotation] = useState(null);
     const [pendingAnnotation, setPendingAnnotation] = useState(null); // bbox waiting for class
@@ -561,6 +562,31 @@ Do you want to proceed?`;
         setShowReviewPanel(true);
     };
 
+    const handleRotateImage = async (direction) => {
+        if (!currentImage) return;
+        try {
+            const res = await axios.post(
+                `${API_URL}/images/${currentImage.id}/rotate?direction=${direction}`
+            );
+            const { width, height } = res.data;
+            const updated = { ...currentImage, width, height };
+            setCurrentImage(updated);
+            setImages(prev => prev.map(im => (im.id === updated.id ? updated : im)));
+            setLoadedImageSize(null);
+            setImgVersion(prev => ({ ...prev, [updated.id]: (prev[updated.id] || 0) + 1 }));
+            // Boxes were remapped server-side — old undo states are now stale
+            setHistory([]);
+            setRedoStack([]);
+            setSelectedAnnId(null);
+            resetZoom();
+            const annRes = await axios.get(`${API_URL}/annotations/image/${updated.id}`);
+            setAnnotations(annRes.data);
+            showStatus(`✓ Rotated ${direction === 'cw' ? 'clockwise' : 'counter-clockwise'}`);
+        } catch {
+            setError('Failed to rotate image.');
+        }
+    };
+
     const handleImageLoad = useCallback((w, h) => {
         setLoadedImageSize({ width: w, height: h });
     }, []);
@@ -978,6 +1004,9 @@ Do you want to proceed?`;
                             <button className="btn-toolbar" onClick={handleClearAllAnnotations} disabled={annotations.length === 0} title="Delete all annotations on this image"><Trash2 size={14} /></button>
                             {/* ── Delete image ── */}
                             <button className="btn-toolbar btn-toolbar--danger" onClick={handleDeleteImage} title="Delete this image (and all its annotations)"><ImageOff size={14} /></button>
+                            {/* ── Rotate (portrait ↔ landscape; boxes are remapped) ── */}
+                            <button className="btn-toolbar" onClick={() => handleRotateImage('ccw')} title="Rotate 90° counter-clockwise"><RotateCcw size={14} /></button>
+                            <button className="btn-toolbar" onClick={() => handleRotateImage('cw')} title="Rotate 90° clockwise"><RotateCw size={14} /></button>
                             {/* ── Zoom ── */}
                             <button className="btn-toolbar" onClick={() => { setUserZoom(z => Math.min(15, z * 1.3)); }} title="Zoom in"><ZoomIn size={14} /></button>
                             <span style={{ fontSize: 11, color: '#666', minWidth: 36, textAlign: 'center' }}>{Math.round(userZoom * 100)}%</span>
@@ -1058,7 +1087,7 @@ Do you want to proceed?`;
                             >
                                 <Layer>
                                     <KonvaImage
-                                        src={`${API_URL.replace("/api/v1", "")}${currentImage.filepath}`}
+                                        src={`${API_URL.replace("/api/v1", "")}${currentImage.filepath}${imgVersion[currentImage.id] ? `?v=${imgVersion[currentImage.id]}` : ''}`}
                                         onLoad={handleImageLoad}
                                         listening={false}
                                     />

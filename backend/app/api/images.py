@@ -113,6 +113,65 @@ async def mark_image_empty(
     return image
 
 
+@router.post("/{image_id}/rotate")
+async def rotate_image(
+    image_id: str,
+    direction: str = "cw",
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Rotate the image file 90° on disk ('cw' or 'ccw') and remap every
+    annotation bbox so labels stay on their characters. Useful when a
+    plate was photographed in portrait but is easier to label landscape.
+    """
+    if direction not in ("cw", "ccw"):
+        raise HTTPException(status_code=400, detail="direction must be 'cw' or 'ccw'")
+
+    image = await get_owned_image(image_id, current_user, db)
+    file_path = settings.upload_dir.parent / image.filepath.lstrip("/")
+    if not file_path.exists():
+        file_path = settings.upload_dir / image.filepath.replace("/uploads/", "", 1)
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="Image file not found on disk")
+
+    try:
+        from PIL import ImageOps
+        with PILImage.open(file_path) as img:
+            # Bake in any EXIF orientation first so the pixels match what
+            # the browser has been displaying, then rotate.
+            img = ImageOps.exif_transpose(img)
+            # PIL's rotate is counter-clockwise; expand=True swaps dimensions
+            rotated = img.rotate(-90 if direction == "cw" else 90, expand=True)
+            rotated.save(file_path)
+            new_w, new_h = rotated.size
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=f"Could not rotate image: {e}")
+
+    image.width, image.height = new_w, new_h
+
+    # Remap normalized [xc, yc, w, h] boxes into the rotated frame
+    result = await db.execute(select(Annotation).where(Annotation.image_id == image_id))
+    for ann in result.scalars().all():
+        if not ann.bbox or len(ann.bbox) != 4:
+            continue
+        xc, yc, w, h = ann.bbox
+        if direction == "cw":
+            ann.bbox = [1 - yc, xc, h, w]
+        else:
+            ann.bbox = [yc, 1 - xc, h, w]
+
+    await db.commit()
+    await db.refresh(image)
+    return {
+        "status": "rotated",
+        "id": image_id,
+        "direction": direction,
+        "width": image.width,
+        "height": image.height,
+    }
+
+
 @router.post("/{image_id}/wipe")
 async def wipe_image(
     image_id: str,
