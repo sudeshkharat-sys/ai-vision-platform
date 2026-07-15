@@ -186,13 +186,94 @@ def _render_synthetic_char(ch: str, size: int, rng: random.Random):
     return _augment_char(canvas, rng)
 
 
+EMNIST_URL = "https://biometrics.nist.gov/cs_links/EMNIST/gzip.zip"
+
+
+def _download_emnist(cache_dir: Path, task=None):
+    """Fetch the EMNIST balanced train split (idx files) into cache_dir."""
+    import urllib.request
+    import zipfile
+
+    wanted = (
+        "emnist-balanced-train-images-idx3-ubyte.gz",
+        "emnist-balanced-train-labels-idx1-ubyte.gz",
+    )
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    zip_path = cache_dir / "emnist_gzip.zip"
+    if task:
+        try:
+            task.update_state(state="STARTED", meta={
+                "phase": "pretraining",
+                "detail": "downloading EMNIST from NIST (~0.5 GB, first time only)",
+            })
+        except Exception:
+            pass
+    urllib.request.urlretrieve(EMNIST_URL, zip_path)
+    with zipfile.ZipFile(zip_path) as z:
+        for name in z.namelist():
+            base = Path(name).name
+            if base in wanted:
+                with z.open(name) as src, open(cache_dir / base, "wb") as dst:
+                    shutil.copyfileobj(src, dst)
+    zip_path.unlink(missing_ok=True)  # free the ~0.5 GB archive
+
+
+def _load_emnist_chars(img_size: int, per_class: int, rng: random.Random, task=None):
+    """
+    Load real labeled character images from the EMNIST balanced split
+    (NIST). Labels 0-35 map to 0-9 then A-Z — the same order as
+    PRETRAIN_CHARS. Downloads once into model_dir/emnist (no extra
+    packages; plain idx parsing). Returns (images, label_indices), or
+    None when the dataset can't be fetched (offline server) — callers
+    fall back to synthetic-only.
+    """
+    import gzip
+
+    cache_dir = settings.model_dir / "emnist"
+    img_gz = cache_dir / "emnist-balanced-train-images-idx3-ubyte.gz"
+    lbl_gz = cache_dir / "emnist-balanced-train-labels-idx1-ubyte.gz"
+    try:
+        if not (img_gz.exists() and lbl_gz.exists()):
+            _download_emnist(cache_dir, task=task)
+        with gzip.open(lbl_gz) as f:
+            f.read(8)  # idx header
+            labels = np.frombuffer(f.read(), dtype=np.uint8)
+        with gzip.open(img_gz) as f:
+            f.read(16)  # idx header
+            images = np.frombuffer(f.read(), dtype=np.uint8).reshape(-1, 28, 28)
+    except Exception:
+        return None
+
+    xs, ys = [], []
+    counts = [0] * 36
+    order = np.random.default_rng(rng.randrange(1 << 30)).permutation(len(labels))
+    for i in order:
+        li = int(labels[i])
+        if li >= 36 or counts[li] >= per_class:
+            continue
+        # EMNIST idx images are stored transposed
+        img = np.transpose(images[i])
+        img = cv2.resize(img, (img_size, img_size), interpolation=cv2.INTER_LINEAR)
+        # EMNIST is white-on-black; engraved chars vary — randomize polarity
+        if rng.random() < 0.5:
+            img = 255 - img
+        xs.append(_augment_char(img, rng))
+        ys.append(li)
+        counts[li] += 1
+        if sum(counts) >= per_class * 36:
+            break
+    return (xs, ys) if xs else None
+
+
 def _get_or_build_pretrained_base(tf, img_size: int, task=None,
                                   samples_per_char: int = 250, epochs: int = 10):
     """
     Return a base model with general knowledge of 0-9/A-Z, training and
     caching it on first use (one-time cost, shared by all projects).
+    Trained on synthetic engraved-style characters plus, when available,
+    real EMNIST character images (v2 cache).
     """
-    cache_path = settings.model_dir / f"ocr_pretrained_base_{img_size}.keras"
+    cache_path = settings.model_dir / f"ocr_pretrained_base_{img_size}_v2.keras"
     if cache_path.exists():
         try:
             return tf.keras.models.load_model(str(cache_path))
@@ -215,6 +296,14 @@ def _get_or_build_pretrained_base(tf, img_size: int, task=None,
                 })
             except Exception:
                 pass
+
+    # Mix in real EMNIST characters when the dataset is reachable —
+    # real pen/print strokes generalize better than synthetic fonts alone.
+    emnist = _load_emnist_chars(img_size, samples_per_char, rng, task=task)
+    if emnist:
+        exs, eys = emnist
+        xs.extend(exs)
+        ys.extend(eys)
 
     x = np.stack(xs).astype(np.float32)[..., None] / 255.0
     y = np.array(ys, dtype=np.int64)

@@ -251,12 +251,12 @@ const OcrTrainingPanel = ({ project, onClose }) => {
                                     <input type="checkbox" checked={usePretrained} disabled={running}
                                         onChange={e => setUsePretrained(e.target.checked)} />
                                     <span>
-                                        <b>Head start with synthetic characters (recommended)</b> —
-                                        this is NOT an outside OCR model. This platform generates its own
-                                        computer-drawn engraved-style 0–9/A–Z images and teaches the model
-                                        the basic shapes first; your labeled photos then teach it your exact
-                                        font and metal. First use builds this base once (~5–15 min), then
-                                        it's reused instantly.
+                                        <b>Head start with character knowledge (recommended)</b> —
+                                        the model first learns 0–9/A–Z from the EMNIST dataset (~700k real
+                                        labeled character images from NIST) plus this platform's own
+                                        computer-drawn engraved-style characters; your labeled photos then
+                                        teach it your exact font and metal. First use downloads EMNIST
+                                        (~0.5 GB) and builds the base once, then it's reused instantly.
                                     </span>
                                 </label>
                             </div>
