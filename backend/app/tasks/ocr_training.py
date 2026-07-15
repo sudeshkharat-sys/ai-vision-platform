@@ -144,6 +144,128 @@ def _balance_classes(train_by_class: dict, target_per_class: int, rng: random.Ra
     return xs, ys, stats
 
 
+# ── Synthetic pretraining (prior knowledge of characters) ─────────
+
+PRETRAIN_CHARS = [str(d) for d in range(10)] + [chr(c) for c in range(ord("A"), ord("Z") + 1)]
+
+
+def _render_synthetic_char(ch: str, size: int, rng: random.Random):
+    """
+    Render one synthetic 'engraved-looking' character: random font,
+    stroke weight, contrast polarity (darker or lighter than the metal),
+    background texture — then run it through the same augmentation used
+    for real crops.
+    """
+    big = size * 2
+    bg = rng.randint(70, 170)
+    canvas = np.full((big, big), bg, dtype=np.uint8)
+
+    # Background texture / noise (brushed metal-ish)
+    noise = np.random.default_rng(rng.randrange(1 << 30)).normal(0, rng.uniform(4, 14), canvas.shape)
+    canvas = np.clip(canvas.astype(np.float32) + noise, 0, 255).astype(np.uint8)
+
+    font = rng.choice([
+        cv2.FONT_HERSHEY_SIMPLEX, cv2.FONT_HERSHEY_DUPLEX,
+        cv2.FONT_HERSHEY_COMPLEX, cv2.FONT_HERSHEY_TRIPLEX,
+        cv2.FONT_HERSHEY_PLAIN, cv2.FONT_HERSHEY_COMPLEX_SMALL,
+    ])
+    thickness = rng.randint(2, 5)
+    # Engraved chars can read darker (shadow) or lighter (highlight) than the metal
+    delta = rng.randint(50, 110) * (1 if rng.random() < 0.4 else -1)
+    color = int(np.clip(bg + delta, 0, 255))
+
+    # Scale the glyph to roughly fill the canvas
+    fscale = 1.0
+    (tw, th), _ = cv2.getTextSize(ch, font, fscale, thickness)
+    fscale = big * 0.62 / max(tw, th)
+    (tw, th), baseline = cv2.getTextSize(ch, font, fscale, thickness)
+    org = ((big - tw) // 2, (big + th) // 2)
+    cv2.putText(canvas, ch, org, font, fscale, color, thickness, cv2.LINE_AA)
+
+    canvas = cv2.resize(canvas, (size, size), interpolation=cv2.INTER_AREA)
+    return _augment_char(canvas, rng)
+
+
+def _get_or_build_pretrained_base(tf, img_size: int, task=None,
+                                  samples_per_char: int = 250, epochs: int = 10):
+    """
+    Return a base model with general knowledge of 0-9/A-Z, training and
+    caching it on first use (one-time cost, shared by all projects).
+    """
+    cache_path = settings.model_dir / f"ocr_pretrained_base_{img_size}.keras"
+    if cache_path.exists():
+        try:
+            return tf.keras.models.load_model(str(cache_path))
+        except Exception:
+            cache_path.unlink(missing_ok=True)
+
+    rng = random.Random(7)
+    xs, ys = [], []
+    n_chars = len(PRETRAIN_CHARS)
+    for ci, ch in enumerate(PRETRAIN_CHARS):
+        for _ in range(samples_per_char):
+            xs.append(_render_synthetic_char(ch, img_size, rng))
+            ys.append(ci)
+        if task:
+            try:
+                task.update_state(state="STARTED", meta={
+                    "phase": "pretraining",
+                    "detail": "generating synthetic characters",
+                    "current": ci + 1, "total": n_chars,
+                })
+            except Exception:
+                pass
+
+    x = np.stack(xs).astype(np.float32)[..., None] / 255.0
+    y = np.array(ys, dtype=np.int64)
+    perm = np.random.default_rng(7).permutation(len(x))
+    x, y = x[perm], y[perm]
+
+    model = _build_cnn(tf, img_size, n_chars)
+    model.compile(optimizer=tf.keras.optimizers.Adam(1e-3),
+                  loss="sparse_categorical_crossentropy", metrics=["accuracy"])
+
+    class PretrainProgress(tf.keras.callbacks.Callback):
+        def on_epoch_end(self, epoch, logs=None):
+            if task:
+                try:
+                    task.update_state(state="STARTED", meta={
+                        "phase": "pretraining",
+                        "detail": "training base model (one-time, cached)",
+                        "epoch": epoch + 1, "total_epochs": epochs,
+                        "accuracy": _safe_float((logs or {}).get("accuracy")),
+                    })
+                except Exception:
+                    pass
+
+    model.fit(x, y, epochs=epochs, batch_size=128, verbose=0,
+              validation_split=0.1, callbacks=[PretrainProgress()])
+
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    model.save(str(cache_path))
+    return model
+
+
+def _build_cnn(tf, img_size: int, n_classes: int):
+    layers = tf.keras.layers
+    return tf.keras.Sequential([
+        layers.Input(shape=(img_size, img_size, 1)),
+        layers.Conv2D(32, 3, padding="same", activation="relu"),
+        layers.BatchNormalization(),
+        layers.MaxPooling2D(),
+        layers.Conv2D(64, 3, padding="same", activation="relu"),
+        layers.BatchNormalization(),
+        layers.MaxPooling2D(),
+        layers.Conv2D(128, 3, padding="same", activation="relu"),
+        layers.BatchNormalization(),
+        layers.MaxPooling2D(),
+        layers.Flatten(),
+        layers.Dense(256, activation="relu"),
+        layers.Dropout(0.4),
+        layers.Dense(n_classes, activation="softmax"),
+    ])
+
+
 # ── Celery task ───────────────────────────────────────────────────
 
 @celery_app.task(name="app.tasks.ocr_training.train_ocr_model", bind=True)
@@ -158,6 +280,7 @@ def train_ocr_model(
     learning_rate: float = 1e-3,
     fine_tune: bool = False,
     focus_classes: list = None,
+    use_pretrained: bool = True,
 ):
     """
     Train the single-character OCR classifier for a project.
@@ -309,24 +432,24 @@ def train_ocr_model(
         learning_rate = learning_rate / 5
         fine_tuned_from = str(keras_path)
 
-    layers = tf.keras.layers
+    started_from = "scratch"
+    if model is None and use_pretrained:
+        # Start from a base model pretrained on synthetic engraved
+        # characters — gives prior knowledge of what 0-9/A-Z look like,
+        # which matters enormously when real data is scarce.
+        try:
+            base = _get_or_build_pretrained_base(tf, img_size, task=self)
+            feat = tf.keras.Model(base.inputs, base.layers[-2].output)
+            out = tf.keras.layers.Dense(n_classes, activation="softmax")(feat.outputs[0])
+            model = tf.keras.Model(base.inputs, out)
+            started_from = "pretrained_base"
+        except Exception:
+            model = None  # fall back to scratch below
+
     if model is None:
-        model = tf.keras.Sequential([
-            layers.Input(shape=(img_size, img_size, 1)),
-            layers.Conv2D(32, 3, padding="same", activation="relu"),
-            layers.BatchNormalization(),
-            layers.MaxPooling2D(),
-            layers.Conv2D(64, 3, padding="same", activation="relu"),
-            layers.BatchNormalization(),
-            layers.MaxPooling2D(),
-            layers.Conv2D(128, 3, padding="same", activation="relu"),
-            layers.BatchNormalization(),
-            layers.MaxPooling2D(),
-            layers.Flatten(),
-            layers.Dense(256, activation="relu"),
-            layers.Dropout(0.4),
-            layers.Dense(n_classes, activation="softmax"),
-        ])
+        model = _build_cnn(tf, img_size, n_classes)
+    if fine_tuned_from:
+        started_from = "fine_tune"
     model.compile(
         optimizer=tf.keras.optimizers.Adam(learning_rate),
         loss="sparse_categorical_crossentropy",
@@ -474,6 +597,7 @@ def train_ocr_model(
     return {
         "status": "success",
         "mode": "fine_tune" if fine_tuned_from else "full",
+        "started_from": started_from,
         "focus_classes": sorted(focus),
         "model_path": str(tflite_path),
         "classes": classes,

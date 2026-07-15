@@ -35,6 +35,7 @@ class TrainOcrRequest(BaseModel):
     learning_rate: float = 1e-3
     fine_tune: bool = False
     focus_classes: Optional[List[str]] = None
+    use_pretrained: bool = True
 
 
 @router.post("/train/{project_id}")
@@ -50,7 +51,7 @@ async def start_ocr_training(
     task = train_ocr_model.delay(
         project_id, req.epochs, req.img_size, req.target_per_class,
         req.val_ratio, req.batch_size, req.learning_rate,
-        req.fine_tune, req.focus_classes,
+        req.fine_tune, req.focus_classes, req.use_pretrained,
     )
     return {"task_id": task.id, "status": "queued"}
 

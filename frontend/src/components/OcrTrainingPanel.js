@@ -35,6 +35,7 @@ const OcrTrainingPanel = ({ project, onClose }) => {
     const [target, setTarget]     = useState(300);
     const [imgSize, setImgSize]   = useState(64);
     const [fineTune, setFineTune] = useState(false);
+    const [usePretrained, setUsePretrained] = useState(true);
     const [focusChars, setFocusChars] = useState([]);
 
     // running job
@@ -97,6 +98,7 @@ const OcrTrainingPanel = ({ project, onClose }) => {
                 img_size: imgSize,
                 fine_tune: fineTune,
                 focus_classes: fineTune ? focusChars : [],
+                use_pretrained: usePretrained,
             });
             setTaskId(res.data.task_id);
             setRunning(true);
@@ -222,6 +224,22 @@ const OcrTrainingPanel = ({ project, onClose }) => {
                             </label>
                         </div>
 
+                        {!fineTune && (
+                            <div className="ocr-finetune">
+                                <label className="ocr-finetune-toggle">
+                                    <input type="checkbox" checked={usePretrained} disabled={running}
+                                        onChange={e => setUsePretrained(e.target.checked)} />
+                                    <span>
+                                        <b>Start from pre-trained character knowledge (recommended)</b> —
+                                        the model first learns 0–9/A–Z from thousands of computer-generated
+                                        engraved-style characters, then your real photos teach it your exact
+                                        font. Much better results with few photos. First use builds the base
+                                        once (~5–15 min); after that it's instant.
+                                    </span>
+                                </label>
+                            </div>
+                        )}
+
                         {modelInfo?.has_model && (
                             <div className="ocr-finetune">
                                 <label className="ocr-finetune-toggle">
@@ -279,6 +297,10 @@ const OcrTrainingPanel = ({ project, onClose }) => {
                                         {meta?.phase === 'extracting_characters' &&
                                             `Cutting characters… ${meta.current}/${meta.total} photos`}
                                         {meta?.phase === 'augmenting' && 'Balancing classes with augmentation…'}
+                                        {meta?.phase === 'pretraining' &&
+                                            `Building pre-trained base (one-time): ${meta.detail || ''}` +
+                                            (meta.epoch ? ` — epoch ${meta.epoch}/${meta.total_epochs}` :
+                                             meta.current ? ` ${meta.current}/${meta.total}` : '')}
                                         {(!meta || meta?.phase === 'training') &&
                                             `Training — epoch ${meta?.epoch ?? 0}/${meta?.total_epochs ?? epochs}` +
                                             (meta?.batch && meta?.total_batches
