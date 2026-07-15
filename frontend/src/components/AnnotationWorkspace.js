@@ -860,37 +860,58 @@ Do you want to proceed?`;
         <div className="workspace">
             {/* ── Sidebar ── */}
             <aside className="workspace-sidebar">
-                <div className="sidebar-section sidebar-actions">
-                    <p className="sidebar-label">Pipeline</p>
-                    <button className="btn-action" onClick={() => setShowTrainingPanel(true)}>
-                        <Rocket size={14} /> Train Seed Model
-                    </button>
-                    <button className="btn-action btn-action-secondary" onClick={startAutoAnnotation}>
-                        <Sparkles size={14} /> Auto-Annotate
-                    </button>
-                    <button className="btn-action btn-action-al" onClick={() => setShowActiveLearningPanel(true)}>
-                        <Brain size={14} /> Active Learning
-                    </button>
-                    <button
-                        className="btn-action btn-action-review"
-                        onClick={() => setShowReviewPanel(true)}
-                        disabled={images.filter(img => img.status === 'annotated').length === 0}
-                    >
-                        <Eye size={14} /> Review Annotations
-                    </button>
-                    <button className="btn-action btn-action-main" onClick={() => setShowMainTrainingPanel(true)}>
-                        <Target size={14} /> Train Main Model
-                    </button>
-                    <button className="btn-action btn-action-ocr" onClick={() => setShowOcrPanel(true)}>
-                        <Type size={14} /> Train OCR Model
-                    </button>
-                    <button className="btn-action btn-action-labels" onClick={() => setShowLabelsPanel(true)}>
-                        <Tag size={14} /> Edit Labels
-                    </button>
-                    <button className="btn-action btn-action-models" onClick={() => setShowModelsPanel(true)}>
-                        <Package size={14} /> View Models
-                    </button>
-                </div>
+                {project.project_type === 'ocr' ? (
+                    <div className="sidebar-section sidebar-actions">
+                        <p className="sidebar-label">OCR Pipeline</p>
+                        <div className="ocr-flow-hint">
+                            1. Upload plate photos<br />
+                            2. Box + label each character<br />
+                            3. Train → download .tflite
+                        </div>
+                        <button className="btn-action btn-action-ocr" onClick={() => setShowOcrPanel(true)}>
+                            <Type size={14} /> Train OCR Model
+                        </button>
+                        <button
+                            className="btn-action btn-action-review"
+                            onClick={() => setShowReviewPanel(true)}
+                            disabled={images.filter(img => img.status === 'annotated').length === 0}
+                        >
+                            <Eye size={14} /> Review Annotations
+                        </button>
+                        <button className="btn-action btn-action-labels" onClick={() => setShowLabelsPanel(true)}>
+                            <Tag size={14} /> Edit Labels
+                        </button>
+                    </div>
+                ) : (
+                    <div className="sidebar-section sidebar-actions">
+                        <p className="sidebar-label">Pipeline</p>
+                        <button className="btn-action" onClick={() => setShowTrainingPanel(true)}>
+                            <Rocket size={14} /> Train Seed Model
+                        </button>
+                        <button className="btn-action btn-action-secondary" onClick={startAutoAnnotation}>
+                            <Sparkles size={14} /> Auto-Annotate
+                        </button>
+                        <button className="btn-action btn-action-al" onClick={() => setShowActiveLearningPanel(true)}>
+                            <Brain size={14} /> Active Learning
+                        </button>
+                        <button
+                            className="btn-action btn-action-review"
+                            onClick={() => setShowReviewPanel(true)}
+                            disabled={images.filter(img => img.status === 'annotated').length === 0}
+                        >
+                            <Eye size={14} /> Review Annotations
+                        </button>
+                        <button className="btn-action btn-action-main" onClick={() => setShowMainTrainingPanel(true)}>
+                            <Target size={14} /> Train Main Model
+                        </button>
+                        <button className="btn-action btn-action-labels" onClick={() => setShowLabelsPanel(true)}>
+                            <Tag size={14} /> Edit Labels
+                        </button>
+                        <button className="btn-action btn-action-models" onClick={() => setShowModelsPanel(true)}>
+                            <Package size={14} /> View Models
+                        </button>
+                    </div>
+                )}
 
                 <div className="sidebar-section">
                     <p className="sidebar-label">Images ({images.length})</p>

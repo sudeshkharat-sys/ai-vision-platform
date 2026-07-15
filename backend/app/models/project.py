@@ -11,6 +11,8 @@ class Project(Base):
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     classes: Mapped[list[str]] = mapped_column(JSON, default=list)
+    # "detection" (YOLO pipeline) or "ocr" (character-classifier pipeline)
+    project_type: Mapped[str] = mapped_column(String(20), default="detection")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     user_id: Mapped[str | None] = mapped_column(
         String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True

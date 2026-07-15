@@ -30,6 +30,7 @@ class ProjectCreate(BaseModel):
     name: str
     description: Optional[str] = None
     classes: List[str]
+    project_type: str = "detection"  # detection | ocr
 
 class ProjectUpdateRequest(BaseModel):
     name: Optional[str] = None
@@ -45,6 +46,7 @@ class ProjectResponse(BaseModel):
     name: str
     description: Optional[str]
     classes: List[str]
+    project_type: str = "detection"
     created_at: datetime
 
     class Config:

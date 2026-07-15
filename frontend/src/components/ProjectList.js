@@ -176,7 +176,12 @@ function ProjectCard({ project, index, onClick, onDelete }) {
 
             {/* Project name */}
             <div className="pl-card-body">
-                <h3 className="pl-card-name">{project.name}</h3>
+                <h3 className="pl-card-name">
+                    {project.name}
+                    {project.project_type === 'ocr' && (
+                        <span className="pl-card-type-badge">OCR</span>
+                    )}
+                </h3>
                 {project.description && (
                     <p className="pl-card-desc">{project.description}</p>
                 )}
@@ -249,6 +254,7 @@ const ProjectList = ({ onProjectSelect, user }) => {
     const [showForm, setShowForm]           = useState(false);
     const [newName, setNewName]             = useState('');
     const [newClasses, setNewClasses]       = useState('');
+    const [newType, setNewType]             = useState('detection');
 
     // Delete state
     const [deleteTarget, setDeleteTarget]   = useState(null);  // project object to delete
@@ -270,12 +276,14 @@ const ProjectList = ({ onProjectSelect, user }) => {
         setCreating(true);
         axios.post(`${API_URL}/projects`, {
             name: newName.trim(),
-            classes: newClasses.split(',').map(c => c.trim()).filter(Boolean)
+            classes: newClasses.split(',').map(c => c.trim()).filter(Boolean),
+            project_type: newType,
         })
             .then(res => {
                 setProjects(prev => [...prev, res.data]);
                 setNewName('');
                 setNewClasses('');
+                setNewType('detection');
                 setShowForm(false);
             })
             .catch(() => setError('Failed to create project. Please try again.'))
@@ -427,13 +435,36 @@ const ProjectList = ({ onProjectSelect, user }) => {
                                 />
                             </div>
                             <div className="pl-create-field">
+                                <label className="pl-create-label">Project Type</label>
+                                <div className="pl-type-toggle">
+                                    <button
+                                        type="button"
+                                        className={`pl-type-btn ${newType === 'detection' ? 'active' : ''}`}
+                                        onClick={() => setNewType('detection')}
+                                    >
+                                        Object Detection
+                                        <span>Find parts/objects with YOLO boxes</span>
+                                    </button>
+                                    <button
+                                        type="button"
+                                        className={`pl-type-btn ${newType === 'ocr' ? 'active' : ''}`}
+                                        onClick={() => setNewType('ocr')}
+                                    >
+                                        OCR Characters
+                                        <span>Label engraved letters/digits, train a character reader</span>
+                                    </button>
+                                </div>
+                            </div>
+                            <div className="pl-create-field">
                                 <label className="pl-create-label">Classes <span className="pl-create-opt">(optional, comma-separated)</span></label>
                                 <input
                                     className="pl-create-input"
                                     value={newClasses}
                                     onChange={e => setNewClasses(e.target.value)}
                                     onKeyDown={handleKeyDown}
-                                    placeholder="e.g. car, truck, bus, person"
+                                    placeholder={newType === 'ocr'
+                                        ? 'Leave empty to auto-fill 0-9 and A-Z'
+                                        : 'e.g. car, truck, bus, person'}
                                 />
                             </div>
                             <div className="pl-create-actions">

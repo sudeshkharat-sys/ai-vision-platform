@@ -24,10 +24,19 @@ async def create_project(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    if data.project_type not in ("detection", "ocr"):
+        raise HTTPException(status_code=400, detail="project_type must be 'detection' or 'ocr'")
+
+    classes = data.classes
+    if data.project_type == "ocr" and not classes:
+        # Pre-fill the full character set so labeling boxes is one click
+        classes = [str(d) for d in range(10)] + [chr(c) for c in range(ord("A"), ord("Z") + 1)]
+
     project = Project(
         name=data.name,
         description=data.description,
-        classes=data.classes,
+        classes=classes,
+        project_type=data.project_type,
         user_id=current_user.id,
     )
     db.add(project)

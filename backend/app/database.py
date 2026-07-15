@@ -102,3 +102,8 @@ async def init_db() -> None:
         await conn.execute(text(
             "ALTER TABLE projects ADD COLUMN IF NOT EXISTS user_id VARCHAR(36)"
         ))
+        # Migration: project_type distinguishes detection vs OCR projects
+        await conn.execute(text(
+            "ALTER TABLE projects ADD COLUMN IF NOT EXISTS "
+            "project_type VARCHAR(20) DEFAULT 'detection'"
+        ))

@@ -1015,3 +1015,15 @@
   color: #d97706;
   margin-left: 4px;
 }
+
+/* ── OCR project sidebar flow hint ─────────────────────────────── */
+.ocr-flow-hint {
+  font-size: 11.5px;
+  line-height: 1.7;
+  color: #64748b;
+  background: rgba(217, 119, 6, 0.05);
+  border: 1px dashed rgba(217, 119, 6, 0.3);
+  border-radius: 8px;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+}
