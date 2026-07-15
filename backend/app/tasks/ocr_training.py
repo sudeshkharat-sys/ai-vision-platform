@@ -156,12 +156,20 @@ def train_ocr_model(
     val_ratio: float = 0.15,
     batch_size: int = 64,
     learning_rate: float = 1e-3,
+    fine_tune: bool = False,
+    focus_classes: list = None,
 ):
     """
     Train the single-character OCR classifier for a project.
 
     Phases: extract crops → balance/augment → train CNN → evaluate →
     export .tflite + labels.txt.
+
+    fine_tune=True continues from the previously trained model instead of
+    starting from scratch (lower LR, keeps existing knowledge — faster).
+    focus_classes lists characters the model struggles with; their training
+    samples are oversampled ~2.5x so the model sees them far more often,
+    without forgetting the rest.
     """
     # TensorFlow is only needed by this task — import lazily so the
     # YOLO/torch workers don't pay the import cost (or conflict on GPU).
@@ -242,7 +250,19 @@ def train_ocr_model(
     except Exception:
         pass
 
-    train_x, train_y, aug_stats = _balance_classes(train_by_class, target_per_class, rng)
+    focus = {str(c).strip().upper() for c in (focus_classes or []) if str(c).strip()}
+    if focus:
+        # Oversample weak characters: augment them to 2.5x the normal target
+        xs, ys, aug_stats = [], [], {}
+        for cls, crops in train_by_class.items():
+            tgt = int(target_per_class * 2.5) if cls in focus else target_per_class
+            cx, cy, cstats = _balance_classes({cls: crops}, tgt, rng)
+            xs.extend(cx)
+            ys.extend(cy)
+            aug_stats.update(cstats)
+        train_x, train_y = xs, ys
+    else:
+        train_x, train_y, aug_stats = _balance_classes(train_by_class, target_per_class, rng)
 
     def to_tensor(xs, ys):
         x = np.stack(xs).astype(np.float32)[..., None] / 255.0
@@ -257,23 +277,48 @@ def train_ocr_model(
 
     # ── Phase 4: build + train the CNN ───────────────────────────
     n_classes = len(classes)
+    out_dir = settings.model_dir / project_id / "ocr"
+
+    model = None
+    fine_tuned_from = None
+    if fine_tune:
+        keras_path = out_dir / "ocr_model.keras"
+        labels_path = out_dir / "labels.txt"
+        if not keras_path.exists():
+            return {"error": "No previously trained model to fine-tune — run a full training first."}
+        prev_classes = (
+            labels_path.read_text().split() if labels_path.exists() else []
+        )
+        if prev_classes != classes:
+            return {"error": "Character set changed since the last training "
+                             f"(was {len(prev_classes)} classes, now {len(classes)}). "
+                             "Run a full training instead of fine-tune."}
+        model = tf.keras.models.load_model(str(keras_path))
+        if model.input_shape[1] != img_size:
+            return {"error": f"Previous model was trained at {model.input_shape[1]}px, "
+                             f"requested {img_size}px. Use the same size or run a full training."}
+        # Gentler LR so existing knowledge is refined, not overwritten
+        learning_rate = learning_rate / 5
+        fine_tuned_from = str(keras_path)
+
     layers = tf.keras.layers
-    model = tf.keras.Sequential([
-        layers.Input(shape=(img_size, img_size, 1)),
-        layers.Conv2D(32, 3, padding="same", activation="relu"),
-        layers.BatchNormalization(),
-        layers.MaxPooling2D(),
-        layers.Conv2D(64, 3, padding="same", activation="relu"),
-        layers.BatchNormalization(),
-        layers.MaxPooling2D(),
-        layers.Conv2D(128, 3, padding="same", activation="relu"),
-        layers.BatchNormalization(),
-        layers.MaxPooling2D(),
-        layers.Flatten(),
-        layers.Dense(256, activation="relu"),
-        layers.Dropout(0.4),
-        layers.Dense(n_classes, activation="softmax"),
-    ])
+    if model is None:
+        model = tf.keras.Sequential([
+            layers.Input(shape=(img_size, img_size, 1)),
+            layers.Conv2D(32, 3, padding="same", activation="relu"),
+            layers.BatchNormalization(),
+            layers.MaxPooling2D(),
+            layers.Conv2D(64, 3, padding="same", activation="relu"),
+            layers.BatchNormalization(),
+            layers.MaxPooling2D(),
+            layers.Conv2D(128, 3, padding="same", activation="relu"),
+            layers.BatchNormalization(),
+            layers.MaxPooling2D(),
+            layers.Flatten(),
+            layers.Dense(256, activation="relu"),
+            layers.Dropout(0.4),
+            layers.Dense(n_classes, activation="softmax"),
+        ])
     model.compile(
         optimizer=tf.keras.optimizers.Adam(learning_rate),
         loss="sparse_categorical_crossentropy",
@@ -366,7 +411,6 @@ def train_ocr_model(
     val_accuracy = float((preds == y_val).mean())
 
     # ── Phase 6: export .tflite + labels + keras model ───────────
-    out_dir = settings.model_dir / project_id / "ocr"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     keras_path = out_dir / "ocr_model.keras"
@@ -400,6 +444,8 @@ def train_ocr_model(
 
     return {
         "status": "success",
+        "mode": "fine_tune" if fine_tuned_from else "full",
+        "focus_classes": sorted(focus),
         "model_path": str(tflite_path),
         "classes": classes,
         "val_accuracy": round(val_accuracy, 4),

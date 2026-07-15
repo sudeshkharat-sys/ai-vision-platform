@@ -34,6 +34,8 @@ const OcrTrainingPanel = ({ project, onClose }) => {
     const [epochs, setEpochs]     = useState(50);
     const [target, setTarget]     = useState(300);
     const [imgSize, setImgSize]   = useState(64);
+    const [fineTune, setFineTune] = useState(false);
+    const [focusChars, setFocusChars] = useState([]);
 
     // running job
     const [taskId, setTaskId]     = useState(null);
@@ -90,7 +92,11 @@ const OcrTrainingPanel = ({ project, onClose }) => {
         setError(null); setResult(null); setMeta(null);
         try {
             const res = await axios.post(`${API_URL}/ocr/train/${project.id}`, {
-                epochs, target_per_class: target, img_size: imgSize,
+                epochs: fineTune ? Math.min(epochs, 25) : epochs,
+                target_per_class: target,
+                img_size: imgSize,
+                fine_tune: fineTune,
+                focus_classes: fineTune ? focusChars : [],
             });
             setTaskId(res.data.task_id);
             setRunning(true);
@@ -216,10 +222,54 @@ const OcrTrainingPanel = ({ project, onClose }) => {
                             </label>
                         </div>
 
+                        {modelInfo?.has_model && (
+                            <div className="ocr-finetune">
+                                <label className="ocr-finetune-toggle">
+                                    <input type="checkbox" checked={fineTune} disabled={running}
+                                        onChange={e => {
+                                            setFineTune(e.target.checked);
+                                            if (e.target.checked && focusChars.length === 0 && modelInfo?.meta?.per_class_accuracy) {
+                                                // Pre-select characters below 95% from the last run
+                                                setFocusChars(Object.entries(modelInfo.meta.per_class_accuracy)
+                                                    .filter(([, a]) => a < 0.95).map(([c]) => c));
+                                            }
+                                        }} />
+                                    <span>
+                                        <b>Fine-tune existing model</b> — continue from the trained model
+                                        (faster, keeps its knowledge) and push harder on weak characters
+                                    </span>
+                                </label>
+                                {fineTune && (
+                                    <>
+                                        <p className="ocr-hint">
+                                            Focus characters (click to toggle) — these get ~2.5× more
+                                            training samples. The rest still train normally, so nothing is forgotten:
+                                        </p>
+                                        <div className="ocr-focus-chips">
+                                            {(modelInfo?.meta?.classes || chars).map(c => {
+                                                const acc = modelInfo?.meta?.per_class_accuracy?.[c];
+                                                const on = focusChars.includes(c);
+                                                return (
+                                                    <button key={c}
+                                                        className={`ocr-chip ocr-chip--toggle ${on ? 'selected' : ''}`}
+                                                        disabled={running}
+                                                        title={acc != null ? `last accuracy ${pct(acc)}` : ''}
+                                                        onClick={() => setFocusChars(prev =>
+                                                            on ? prev.filter(x => x !== c) : [...prev, c])}>
+                                                        {c}{acc != null && acc < 0.95 ? '!' : ''}
+                                                    </button>
+                                                );
+                                            })}
+                                        </div>
+                                    </>
+                                )}
+                            </div>
+                        )}
+
                         {!running ? (
                             <button className="ocr-btn-train" onClick={startTraining}
                                 disabled={chars.length < 2}>
-                                <Play size={15} /> Train character model
+                                <Play size={15} /> {fineTune ? 'Fine-tune model' : 'Train character model'}
                             </button>
                         ) : (
                             <div className="ocr-progress">

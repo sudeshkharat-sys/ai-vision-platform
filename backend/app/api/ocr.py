@@ -3,6 +3,7 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
+from typing import List, Optional
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -32,6 +33,8 @@ class TrainOcrRequest(BaseModel):
     val_ratio: float = 0.15
     batch_size: int = 64
     learning_rate: float = 1e-3
+    fine_tune: bool = False
+    focus_classes: Optional[List[str]] = None
 
 
 @router.post("/train/{project_id}")
@@ -47,6 +50,7 @@ async def start_ocr_training(
     task = train_ocr_model.delay(
         project_id, req.epochs, req.img_size, req.target_per_class,
         req.val_ratio, req.batch_size, req.learning_rate,
+        req.fine_tune, req.focus_classes,
     )
     return {"task_id": task.id, "status": "queued"}
 

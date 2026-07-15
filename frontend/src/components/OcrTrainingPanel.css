@@ -143,3 +143,24 @@
     border-radius: 8px; padding: 8px 14px; font-size: 12.5px; cursor: pointer;
 }
 .ocr-downloads button:hover { border-color: #dc143c; }
+
+/* fine-tune controls */
+.ocr-finetune {
+    background: #131c30;
+    border: 1px solid #24304a;
+    border-radius: 10px;
+    padding: 12px 14px;
+    margin-bottom: 14px;
+}
+.ocr-finetune-toggle {
+    display: flex; gap: 10px; align-items: flex-start;
+    font-size: 12.5px; color: #cbd5e1; cursor: pointer; line-height: 1.5;
+}
+.ocr-finetune-toggle input { margin-top: 3px; accent-color: #dc143c; }
+.ocr-focus-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.ocr-chip--toggle { cursor: pointer; color: #94a3b8; }
+.ocr-chip--toggle.selected {
+    color: #f87171; border-color: rgba(248, 113, 113, 0.55);
+    background: rgba(248, 113, 113, 0.12);
+}
+.ocr-chip--toggle:disabled { opacity: 0.5; cursor: not-allowed; }
