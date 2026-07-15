@@ -1027,3 +1027,64 @@
   padding: 8px 10px;
   margin-bottom: 8px;
 }
+
+/* ── OCR character picker (type-to-label) ──────────────────────── */
+.class-picker--ocr {
+  width: 340px;
+}
+
+.ocr-char-input {
+  display: block;
+  width: 90px;
+  margin: 14px auto 6px;
+  font-size: 32px;
+  font-weight: 700;
+  text-align: center;
+  text-transform: uppercase;
+  color: #1a1a1a;
+  background: #fff;
+  border: 2px solid #dc143c;
+  border-radius: 10px;
+  padding: 8px 0;
+  outline: none;
+  caret-color: #dc143c;
+}
+
+.ocr-char-input::placeholder {
+  font-size: 14px;
+  font-weight: 400;
+  color: #cbd5e1;
+  text-transform: none;
+}
+
+.ocr-char-hint {
+  font-size: 11px;
+  color: #94a3b8;
+  text-align: center;
+  margin: 0 12px 10px;
+}
+
+.ocr-char-grid {
+  display: grid;
+  grid-template-columns: repeat(9, 1fr);
+  gap: 5px;
+  padding: 0 14px 14px;
+}
+
+.ocr-char-key {
+  aspect-ratio: 1;
+  font-size: 14px;
+  font-weight: 700;
+  color: #334155;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.1s;
+}
+
+.ocr-char-key:hover {
+  background: rgba(220, 20, 60, 0.08);
+  border-color: #dc143c;
+  color: #dc143c;
+}

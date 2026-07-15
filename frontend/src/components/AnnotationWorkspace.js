@@ -29,7 +29,7 @@ const KonvaImage = ({ src, onLoad }) => {
 };
 
 // ── Class Picker ────────────────────────────────────────────────
-const ClassPicker = ({ classes, usedClasses, onConfirm, onCancel, remaining = 0 }) => {
+const ClassPicker = ({ classes, usedClasses, onConfirm, onCancel, remaining = 0, ocrMode = false }) => {
     const [customClass, setCustomClass] = useState('');
     const inputRef = useRef(null);
 
@@ -39,10 +39,50 @@ const ClassPicker = ({ classes, usedClasses, onConfirm, onCancel, remaining = 0 
     const allOptions = [...classes, ...usedOnly]; // presets first, then extra used ones
 
     useEffect(() => {
-        if (allOptions.length === 0 && inputRef.current) {
+        if ((ocrMode || allOptions.length === 0) && inputRef.current) {
             inputRef.current.focus();
         }
     }, []); // eslint-disable-line
+
+    // ── OCR mode: type the character (instant confirm) or click a key ──
+    if (ocrMode) {
+        const chars = [...new Set([...classes, ...usedOnly])];
+        return (
+            <div className="class-picker-overlay" onClick={onCancel}>
+                <div className="class-picker class-picker--ocr" onClick={e => e.stopPropagation()}>
+                    <div className="class-picker-header">
+                        <span>
+                            Which character is this?
+                            {remaining > 0 && (
+                                <span className="class-picker-counter"> — {remaining} left</span>
+                            )}
+                        </span>
+                        <button className="class-picker-close" onClick={onCancel}><X size={16} /></button>
+                    </div>
+                    <input
+                        ref={inputRef}
+                        className="ocr-char-input"
+                        placeholder="type it"
+                        maxLength={1}
+                        value=""
+                        onChange={e => {
+                            const ch = e.target.value.toUpperCase();
+                            if (/^[0-9A-Z]$/.test(ch)) onConfirm(ch);
+                        }}
+                        onKeyDown={e => { if (e.key === 'Escape') onCancel(); }}
+                    />
+                    <p className="ocr-char-hint">Press the key on your keyboard — saves instantly. Or click below:</p>
+                    <div className="ocr-char-grid">
+                        {chars.map(cls => (
+                            <button key={cls} className="ocr-char-key" onClick={() => onConfirm(cls)}>
+                                {cls}
+                            </button>
+                        ))}
+                    </div>
+                </div>
+            </div>
+        );
+    }
 
     const handleConfirmCustom = () => {
         if (customClass.trim()) onConfirm(customClass.trim());
@@ -1223,6 +1263,7 @@ Do you want to proceed?`;
                                     onConfirm={handleClassConfirm}
                                     onCancel={handleClassCancel}
                                     remaining={classifyingAnnId ? aiQueueRef.current.length + 1 : 0}
+                                    ocrMode={project.project_type === 'ocr'}
                                 />
                             )}
                         </div>
