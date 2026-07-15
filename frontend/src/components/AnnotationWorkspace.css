@@ -329,6 +329,17 @@
   border-color: #16a34a;
 }
 
+.btn-action-ocr {
+  background: rgba(217, 119, 6, 0.08);
+  color: #d97706;
+  border: 1px solid rgba(217, 119, 6, 0.25);
+}
+
+.btn-action-ocr:hover:not(:disabled) {
+  background: rgba(217, 119, 6, 0.15);
+  border-color: #d97706;
+}
+
 .btn-action-labels {
   background: rgba(220, 20, 60, 0.06);
   color: #dc143c;

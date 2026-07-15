@@ -11,6 +11,7 @@ celery_app = Celery(
         "app.tasks.ai_prompt",
         "app.tasks.video_processing",
         "app.tasks.active_learning",
+        "app.tasks.ocr_training",
     ],
 )
 

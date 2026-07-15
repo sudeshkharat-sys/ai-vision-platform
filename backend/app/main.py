@@ -8,7 +8,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from contextlib import asynccontextmanager
 from .database import init_db, async_session
-from .api import projects, images, annotations, pipeline, auth, videos
+from .api import projects, images, annotations, pipeline, auth, videos, ocr
 from .config import settings
 from .models.training_job import TrainingJob
 from sqlalchemy import select, update
@@ -82,6 +82,7 @@ app.include_router(images.router, prefix="/api/v1")
 app.include_router(annotations.router, prefix="/api/v1")
 app.include_router(pipeline.router, prefix="/api/v1")
 app.include_router(videos.router, prefix="/api/v1")
+app.include_router(ocr.router, prefix="/api/v1")
 
 app.mount("/uploads", StaticFiles(directory=str(settings.upload_dir)), name="uploads")
 

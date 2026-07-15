@@ -676,6 +676,7 @@ async def force_stop_all(
         "app.tasks.training.train_seed_model",
         "app.tasks.training.train_main_model",
         "app.tasks.auto_annotate.auto_annotate_remaining",
+        "app.tasks.ocr_training.train_ocr_model",
     }
     try:
         active = celery_app.control.inspect(timeout=2).active() or {}

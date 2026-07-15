@@ -30,6 +30,10 @@ transformers>=4.40.0
 sentencepiece>=0.2.1
 protobuf
 ultralytics>=8.1.0
+# OCR character-classifier training + .tflite export (CPU build is
+# sufficient for the small 36-class CNN; avoids clashing with the
+# pre-installed CUDA torch stack)
+tensorflow-cpu>=2.16.0
 
 # Utilities
 loguru>=0.7.2

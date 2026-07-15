@@ -10,8 +10,9 @@ import ModelsPanel from './ModelsPanel';
 import ReviewPanel from './ReviewPanel';
 import VideoPanel from './VideoPanel';
 import ActiveLearningPanel from './ActiveLearningPanel';
+import OcrTrainingPanel from './OcrTrainingPanel';
 import './AnnotationWorkspace.css';
-import { Sparkles, AlertTriangle, X, Upload, Image as ImageIcon, Check, ArrowLeft, ArrowRight, Brain, Rocket, Eye, Target, Tag, Package, Film, Undo2, Redo2, ZoomIn, ZoomOut, Maximize2, Trash2, ImageOff } from 'lucide-react';
+import { Sparkles, AlertTriangle, X, Upload, Image as ImageIcon, Check, ArrowLeft, ArrowRight, Brain, Rocket, Eye, Target, Tag, Package, Film, Undo2, Redo2, ZoomIn, ZoomOut, Maximize2, Trash2, ImageOff, Type } from 'lucide-react';
 
 import { API_URL } from '../config';
 
@@ -148,6 +149,7 @@ const AnnotationWorkspace = ({ project, onProjectUpdated }) => {
     const [showReviewPanel, setShowReviewPanel] = useState(false);
     const [showVideoPanel, setShowVideoPanel] = useState(false);
     const [showActiveLearningPanel, setShowActiveLearningPanel] = useState(false);
+    const [showOcrPanel, setShowOcrPanel] = useState(false);
     const [suggestedImageIds, setSuggestedImageIds] = useState(null);  // Set<id> or null (sidebar highlight)
     const [reviewFilterIds, setReviewFilterIds] = useState(null);      // Set<id> or null (ReviewPanel filter)
     // Local copy of classes so edits from LabelsPanel are reflected instantly
@@ -853,6 +855,9 @@ Do you want to proceed?`;
                     <button className="btn-action btn-action-main" onClick={() => setShowMainTrainingPanel(true)}>
                         <Target size={14} /> Train Main Model
                     </button>
+                    <button className="btn-action btn-action-ocr" onClick={() => setShowOcrPanel(true)}>
+                        <Type size={14} /> Train OCR Model
+                    </button>
                     <button className="btn-action btn-action-labels" onClick={() => setShowLabelsPanel(true)}>
                         <Tag size={14} /> Edit Labels
                     </button>
@@ -1284,6 +1289,12 @@ Do you want to proceed?`;
                         if (type === 'seed') setShowTrainingPanel(true);
                         else setShowMainTrainingPanel(true);
                     }}
+                />
+            )}
+            {showOcrPanel && (
+                <OcrTrainingPanel
+                    project={project}
+                    onClose={() => setShowOcrPanel(false)}
                 />
             )}
             {showVideoPanel && (

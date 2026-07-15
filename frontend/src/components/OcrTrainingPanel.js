@@ -1,0 +1,305 @@
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import axios from 'axios';
+import { Type, X, Download, Play, Square, RefreshCw, Check, AlertTriangle } from 'lucide-react';
+import './OcrTrainingPanel.css';
+
+import { API_URL } from '../config';
+
+const pct = (v) => (v == null ? '—' : `${(v * 100).toFixed(1)}%`);
+
+/* Simple accuracy sparkline over epochs */
+function AccSparkline({ history }) {
+    const vals = (history || []).map(h => h.val_accuracy).filter(v => v != null);
+    if (vals.length < 2) return null;
+    const W = 260, H = 56;
+    const min = Math.min(...vals), max = Math.max(...vals);
+    const range = max - min || 0.01;
+    const pts = vals.map((v, i) =>
+        `${((i / (vals.length - 1)) * W).toFixed(1)},${(H - ((v - min) / range) * (H - 6) - 3).toFixed(1)}`
+    ).join(' ');
+    return (
+        <svg width={W} height={H} className="ocr-sparkline">
+            <polyline points={pts} fill="none" stroke="#4ade80" strokeWidth="2"
+                strokeLinejoin="round" strokeLinecap="round" />
+        </svg>
+    );
+}
+
+const OcrTrainingPanel = ({ project, onClose }) => {
+    const [stats, setStats]       = useState(null);
+    const [modelInfo, setModelInfo] = useState(null);
+    const [error, setError]       = useState(null);
+
+    // training settings
+    const [epochs, setEpochs]     = useState(50);
+    const [target, setTarget]     = useState(300);
+    const [imgSize, setImgSize]   = useState(64);
+
+    // running job
+    const [taskId, setTaskId]     = useState(null);
+    const [running, setRunning]   = useState(false);
+    const [meta, setMeta]         = useState(null);   // live progress meta
+    const [result, setResult]     = useState(null);   // final task result
+    const pollRef = useRef(null);
+
+    const loadStats = useCallback(() => {
+        axios.get(`${API_URL}/ocr/dataset-stats/${project.id}`)
+            .then(res => setStats(res.data))
+            .catch(() => setError('Could not load character dataset stats.'));
+        axios.get(`${API_URL}/ocr/model-status/${project.id}`)
+            .then(res => setModelInfo(res.data))
+            .catch(() => {});
+    }, [project.id]);
+
+    useEffect(() => { loadStats(); }, [loadStats]);
+    useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current); }, []);
+
+    const pollTask = useCallback((id) => {
+        if (pollRef.current) clearInterval(pollRef.current);
+        pollRef.current = setInterval(async () => {
+            try {
+                const res = await axios.get(`${API_URL}/pipeline/task-status/${id}`);
+                const { status, meta: m, result: r, error: err } = res.data;
+                if (status === 'STARTED' && m) setMeta(m);
+                if (status === 'SUCCESS') {
+                    clearInterval(pollRef.current);
+                    setRunning(false);
+                    if (r?.error) { setError(r.error); }
+                    else {
+                        setResult(r);
+                        loadStats();
+                    }
+                    axios.patch(`${API_URL}/pipeline/jobs/${id}`, {
+                        status: r?.error ? 'failure' : 'success',
+                        result_meta: r || {},
+                        finished_at: new Date().toISOString(),
+                    }).catch(() => {});
+                } else if (status === 'FAILURE' || status === 'REVOKED') {
+                    clearInterval(pollRef.current);
+                    setRunning(false);
+                    setError(err || 'Training failed or was stopped.');
+                    axios.patch(`${API_URL}/pipeline/jobs/${id}`, {
+                        status: 'failure', finished_at: new Date().toISOString(),
+                    }).catch(() => {});
+                }
+            } catch { /* transient — keep polling */ }
+        }, 2000);
+    }, [loadStats]);
+
+    const startTraining = async () => {
+        setError(null); setResult(null); setMeta(null);
+        try {
+            const res = await axios.post(`${API_URL}/ocr/train/${project.id}`, {
+                epochs, target_per_class: target, img_size: imgSize,
+            });
+            setTaskId(res.data.task_id);
+            setRunning(true);
+            axios.post(`${API_URL}/pipeline/jobs`, {
+                task_id: res.data.task_id,
+                project_id: project.id,
+                job_type: 'ocr_training',
+            }).catch(() => {});
+            pollTask(res.data.task_id);
+        } catch (e) {
+            setError(e.response?.data?.detail || 'Could not start OCR training.');
+        }
+    };
+
+    const stopTraining = () => {
+        if (!taskId) return;
+        axios.post(`${API_URL}/pipeline/cancel/${taskId}`).catch(() => {});
+    };
+
+    const download = async (fileType, filename) => {
+        try {
+            const res = await axios.get(
+                `${API_URL}/ocr/download/${project.id}/${fileType}`,
+                { responseType: 'blob' }
+            );
+            const url = URL.createObjectURL(new Blob([res.data]));
+            const link = document.createElement('a');
+            link.href = url; link.download = filename;
+            document.body.appendChild(link); link.click();
+            document.body.removeChild(link);
+            URL.revokeObjectURL(url);
+        } catch {
+            setError(`Failed to download ${filename}.`);
+        }
+    };
+
+    const charCounts = stats?.char_counts || {};
+    const chars = Object.keys(charCounts);
+    const maxCount = Math.max(1, ...Object.values(charCounts));
+    const history = meta?.history || result?.history || [];
+    const finalMeta = result || modelInfo?.meta;
+
+    return (
+        <div className="ocr-overlay" onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
+            <div className="ocr-panel">
+                <div className="ocr-header">
+                    <div className="ocr-header-left">
+                        <div className="ocr-header-icon"><Type size={20} /></div>
+                        <div>
+                            <h2>OCR Character Training</h2>
+                            <p>{project.name} — train a character reader (.tflite) from your labeled boxes</p>
+                        </div>
+                    </div>
+                    <div className="ocr-header-actions">
+                        <button className="ocr-btn-icon" onClick={loadStats} title="Refresh"><RefreshCw size={15} /></button>
+                        <button className="ocr-btn-icon" onClick={onClose}><X size={18} /></button>
+                    </div>
+                </div>
+
+                <div className="ocr-body">
+                    {error && (
+                        <div className="ocr-error">
+                            <AlertTriangle size={15} /> {error}
+                            <button onClick={() => setError(null)}><X size={14} /></button>
+                        </div>
+                    )}
+
+                    {/* ── Dataset overview ──────────────────────── */}
+                    <div className="ocr-section">
+                        <h3>Character dataset</h3>
+                        {chars.length === 0 ? (
+                            <p className="ocr-hint">
+                                No single-character labels found yet. In the annotation workspace,
+                                zoom into a plate photo, draw one box around each character and
+                                label it with that character (e.g. <b>U</b>, <b>V</b>, <b>4</b>).
+                                Each box becomes one training image automatically.
+                            </p>
+                        ) : (
+                            <>
+                                <p className="ocr-hint">
+                                    {stats.total_chars} labeled characters, {chars.length} classes,
+                                    from {stats.annotated_images} annotated photos.
+                                    Under-represented characters are balanced by augmentation
+                                    (rotation, lighting, blur, stroke thickness) up to {target}/class.
+                                </p>
+                                <div className="ocr-bars">
+                                    {chars.map(c => (
+                                        <div key={c} className="ocr-bar-col" title={`${c}: ${charCounts[c]}`}>
+                                            <div className="ocr-bar-track">
+                                                <div className="ocr-bar-fill"
+                                                    style={{ height: `${(charCounts[c] / maxCount) * 100}%` }} />
+                                            </div>
+                                            <span className="ocr-bar-char">{c}</span>
+                                            <span className="ocr-bar-count">{charCounts[c]}</span>
+                                        </div>
+                                    ))}
+                                </div>
+                            </>
+                        )}
+                    </div>
+
+                    {/* ── Settings + start ──────────────────────── */}
+                    <div className="ocr-section">
+                        <h3>Training</h3>
+                        <div className="ocr-settings">
+                            <label>Epochs
+                                <input type="number" min="5" max="300" value={epochs}
+                                    disabled={running}
+                                    onChange={e => setEpochs(+e.target.value || 50)} />
+                            </label>
+                            <label>Samples per class (after augmentation)
+                                <input type="number" min="50" max="5000" step="50" value={target}
+                                    disabled={running}
+                                    onChange={e => setTarget(+e.target.value || 300)} />
+                            </label>
+                            <label>Character image size
+                                <select value={imgSize} disabled={running}
+                                    onChange={e => setImgSize(+e.target.value)}>
+                                    <option value={48}>48 × 48</option>
+                                    <option value={64}>64 × 64 (recommended)</option>
+                                    <option value={96}>96 × 96</option>
+                                </select>
+                            </label>
+                        </div>
+
+                        {!running ? (
+                            <button className="ocr-btn-train" onClick={startTraining}
+                                disabled={chars.length < 2}>
+                                <Play size={15} /> Train character model
+                            </button>
+                        ) : (
+                            <div className="ocr-progress">
+                                <div className="ocr-progress-row">
+                                    <span className="ocr-spinner" />
+                                    <span>
+                                        {meta?.phase === 'extracting_characters' &&
+                                            `Cutting characters… ${meta.current}/${meta.total} photos`}
+                                        {meta?.phase === 'augmenting' && 'Balancing classes with augmentation…'}
+                                        {(!meta || meta?.phase === 'training') &&
+                                            `Training — epoch ${meta?.epoch ?? 0}/${meta?.total_epochs ?? epochs}` +
+                                            (meta?.eta_seconds ? ` (~${Math.ceil(meta.eta_seconds / 60)} min left)` : '')}
+                                    </span>
+                                    <button className="ocr-btn-stop" onClick={stopTraining}>
+                                        <Square size={13} /> Stop
+                                    </button>
+                                </div>
+                                {history.length > 0 && (
+                                    <div className="ocr-live">
+                                        <AccSparkline history={history} />
+                                        <span>val accuracy: {pct(history[history.length - 1]?.val_accuracy)}</span>
+                                    </div>
+                                )}
+                            </div>
+                        )}
+                    </div>
+
+                    {/* ── Results / trained model ───────────────── */}
+                    {(result || modelInfo?.has_model) && (
+                        <div className="ocr-section">
+                            <h3>
+                                {result ? <><Check size={15} className="ocr-ok" /> Training complete</> : 'Trained model'}
+                            </h3>
+                            {finalMeta && (
+                                <div className="ocr-results">
+                                    <div className="ocr-result-big">
+                                        <span>{pct(finalMeta.val_accuracy)}</span>
+                                        <small>validation accuracy</small>
+                                    </div>
+                                    {finalMeta.per_class_accuracy && (
+                                        <div className="ocr-perclass">
+                                            {Object.entries(finalMeta.per_class_accuracy).map(([c, a]) => (
+                                                <span key={c}
+                                                    className={`ocr-chip ${a >= 0.95 ? 'ok' : a >= 0.8 ? 'warn' : 'bad'}`}>
+                                                    {c} {pct(a)}
+                                                </span>
+                                            ))}
+                                        </div>
+                                    )}
+                                    {result?.top_confusions?.length > 0 && (
+                                        <p className="ocr-hint">
+                                            Most confused: {result.top_confusions.slice(0, 5)
+                                                .map(t => `${t.pair.replace('->', ' → ')} (${t.count})`).join(', ')}.
+                                            Label more examples of these characters and retrain.
+                                        </p>
+                                    )}
+                                </div>
+                            )}
+                            <div className="ocr-downloads">
+                                <button onClick={() => download('tflite', 'ocr_model.tflite')}>
+                                    <Download size={14} /> ocr_model.tflite
+                                </button>
+                                <button onClick={() => download('labels', 'labels.txt')}>
+                                    <Download size={14} /> labels.txt
+                                </button>
+                                <button onClick={() => download('meta', 'ocr_meta.json')}>
+                                    <Download size={14} /> ocr_meta.json
+                                </button>
+                            </div>
+                            <p className="ocr-hint">
+                                Bundle <b>ocr_model.tflite</b> + <b>labels.txt</b> into the Digi OCR app
+                                (tflite_flutter). Input: one grayscale character crop, resized to
+                                {` ${finalMeta?.img_size || imgSize}×${finalMeta?.img_size || imgSize}`}, values scaled to 0–1.
+                            </p>
+                        </div>
+                    )}
+                </div>
+            </div>
+        </div>
+    );
+};
+
+export default OcrTrainingPanel;
