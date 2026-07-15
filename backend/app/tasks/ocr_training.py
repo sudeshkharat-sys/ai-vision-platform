@@ -180,6 +180,14 @@ def train_ocr_model(
     db = StateDBConnector()
     rng = random.Random(42)
 
+    # Clear any stale stop flag left over from a previous cancel so a
+    # fresh run can't be killed by an old click of the Stop button.
+    try:
+        _r = redis_lib.from_url(settings.redis_url, socket_connect_timeout=1)
+        _r.delete(f"stop_training:{self.request.id}")
+    except Exception:
+        pass
+
     # ── Phase 1: DB reads ────────────────────────────────────────
     with db.get_session() as conn:
         proj, _, img_rows, ann_rows = _fetch_training_data(
@@ -331,6 +339,27 @@ def train_ocr_model(
     celery_task = self
 
     class ProgressCallback(tf.keras.callbacks.Callback):
+        current_epoch = 0
+
+        def on_epoch_begin(self, epoch, logs=None):
+            self.current_epoch = epoch
+
+        def on_train_batch_end(self, batch, logs=None):
+            # Within-epoch progress so long epochs on CPU don't look frozen.
+            # Throttled to every 10 batches to avoid flooding Redis.
+            if batch % 10 != 0:
+                return
+            steps = self.params.get("steps")
+            try:
+                celery_task.update_state(state="STARTED", meta={
+                    "phase": "training",
+                    "epoch": self.current_epoch + 1, "total_epochs": epochs,
+                    "batch": batch + 1, "total_batches": steps,
+                    "history": epoch_history,
+                })
+            except Exception:
+                pass
+
         def on_epoch_end(self, epoch, logs=None):
             logs = logs or {}
             # Cooperative cancel — same Redis flag the YOLO trainer uses

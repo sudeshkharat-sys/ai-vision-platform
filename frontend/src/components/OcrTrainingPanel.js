@@ -281,6 +281,8 @@ const OcrTrainingPanel = ({ project, onClose }) => {
                                         {meta?.phase === 'augmenting' && 'Balancing classes with augmentation…'}
                                         {(!meta || meta?.phase === 'training') &&
                                             `Training — epoch ${meta?.epoch ?? 0}/${meta?.total_epochs ?? epochs}` +
+                                            (meta?.batch && meta?.total_batches
+                                                ? `, batch ${meta.batch}/${meta.total_batches}` : '') +
                                             (meta?.eta_seconds ? ` (~${Math.ceil(meta.eta_seconds / 60)} min left)` : '')}
                                     </span>
                                     <button className="ocr-btn-stop" onClick={stopTraining}>
