@@ -365,6 +365,13 @@ const OcrTrainingPanel = ({ project, onClose }) => {
                                             ))}
                                         </div>
                                     )}
+                                    {result?.started_from === 'pretrained_base' && (
+                                        <p className="ocr-hint">
+                                            {result?.base_info?.emnist_used
+                                                ? `Base knowledge: EMNIST (${result.base_info.emnist_samples} real characters) + ${result.base_info.synthetic_samples} synthetic.`
+                                                : 'Base knowledge: synthetic characters only — EMNIST was NOT downloaded (check server internet).'}
+                                        </p>
+                                    )}
                                     {result?.top_confusions?.length > 0 && (
                                         <p className="ocr-hint">
                                             Most confused: {result.top_confusions.slice(0, 5)

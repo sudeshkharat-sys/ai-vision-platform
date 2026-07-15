@@ -195,24 +195,61 @@ def _segment_characters(gray: np.ndarray):
         out = []
         for i in range(1, n):
             x, y, w, h, area = stats[i]
-            if area < 40:                    # specks
+            if area < 30:                    # specks
                 continue
-            if h < H * 0.04 or h > H * 0.95: # too small / whole image
+            if h < H * 0.03 or h > H * 0.95: # too small / whole image
                 continue
             if w > W * 0.5:                  # merged blob / border
                 continue
             ar = w / h
-            if ar < 0.05 or ar > 1.6:        # not character-shaped ("1" is thin)
+            if ar < 0.04 or ar > 1.6:        # not character-shaped ("1" is thin)
                 continue
             out.append((int(x), int(y), int(w), int(h)))
         return out
 
-    # Characters can be darker or lighter than the metal — try both,
-    # keep whichever polarity finds more character-like shapes.
-    _, inv = cv2.threshold(enh, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-    _, pos = cv2.threshold(enh, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    cand_inv, cand_pos = boxes_for(inv), boxes_for(pos)
-    boxes = cand_inv if len(cand_inv) >= len(cand_pos) else cand_pos
+    # Characters can be darker or lighter than the metal, and global
+    # thresholding misses low-contrast strokes — collect candidates from
+    # BOTH Otsu polarities AND adaptive thresholding, then merge. This
+    # rescues thin chars ('1') and chars visible in only one view ('J').
+    _, otsu_inv = cv2.threshold(enh, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    _, otsu_pos = cv2.threshold(enh, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    block = max(15, (min(H, W) // 12) | 1)  # odd block size scaled to image
+    adap_inv = cv2.adaptiveThreshold(enh, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                                     cv2.THRESH_BINARY_INV, block, 7)
+    adap_pos = cv2.adaptiveThreshold(enh, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                                     cv2.THRESH_BINARY, block, 7)
+
+    def overlap(a, b):
+        """Intersection over the SMALLER box — catches contained fragments."""
+        ax1, ay1, ax2, ay2 = a[0], a[1], a[0] + a[2], a[1] + a[3]
+        bx1, by1, bx2, by2 = b[0], b[1], b[0] + b[2], b[1] + b[3]
+        ix = max(0, min(ax2, bx2) - max(ax1, bx1))
+        iy = max(0, min(ay2, by2) - max(ay1, by1))
+        smaller = min(a[2] * a[3], b[2] * b[3])
+        return (ix * iy) / smaller if smaller else 0.0
+
+    # Primary source: the better Otsu polarity (clean global threshold).
+    # The other views may only ADD boxes that (a) don't overlap something
+    # already found and (b) match the primary's character height — this
+    # rescues missed thin/low-contrast chars without importing noise.
+    cand_inv, cand_pos = boxes_for(otsu_inv), boxes_for(otsu_pos)
+    primary = cand_inv if len(cand_inv) >= len(cand_pos) else cand_pos
+    secondary = cand_pos if primary is cand_inv else cand_inv
+    boxes = list(primary)
+    if boxes:
+        ref_h = float(np.median([b[3] for b in boxes]))
+        for extra in (secondary, boxes_for(adap_inv), boxes_for(adap_pos)):
+            for b in extra:
+                if not (0.7 * ref_h <= b[3] <= 1.4 * ref_h):
+                    continue
+                if all(overlap(b, kept) < 0.5 for kept in boxes):
+                    boxes.append(b)
+    else:
+        # Otsu found nothing at all — fall back to adaptive views
+        for extra in (boxes_for(adap_inv), boxes_for(adap_pos)):
+            for b in extra:
+                if all(overlap(b, kept) < 0.5 for kept in boxes):
+                    boxes.append(b)
     if not boxes:
         return []
 

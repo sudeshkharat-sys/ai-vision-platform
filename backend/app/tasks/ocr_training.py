@@ -299,6 +299,7 @@ def _get_or_build_pretrained_base(tf, img_size: int, task=None,
 
     # Mix in real EMNIST characters when the dataset is reachable —
     # real pen/print strokes generalize better than synthetic fonts alone.
+    n_synth = len(xs)
     emnist = _load_emnist_chars(img_size, samples_per_char, rng, task=task)
     if emnist:
         exs, eys = emnist
@@ -332,6 +333,11 @@ def _get_or_build_pretrained_base(tf, img_size: int, task=None,
 
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     model.save(str(cache_path))
+    cache_path.with_suffix(".json").write_text(json.dumps({
+        "synthetic_samples": n_synth,
+        "emnist_samples": len(xs) - n_synth,
+        "emnist_used": bool(emnist),
+    }))
     return model
 
 
@@ -522,6 +528,7 @@ def train_ocr_model(
         fine_tuned_from = str(keras_path)
 
     started_from = "scratch"
+    base_info = None
     if model is None and use_pretrained:
         # Start from a base model pretrained on synthetic engraved
         # characters — gives prior knowledge of what 0-9/A-Z look like,
@@ -532,6 +539,12 @@ def train_ocr_model(
             out = tf.keras.layers.Dense(n_classes, activation="softmax")(feat.outputs[0])
             model = tf.keras.Model(base.inputs, out)
             started_from = "pretrained_base"
+            info_path = settings.model_dir / f"ocr_pretrained_base_{img_size}_v2.json"
+            if info_path.exists():
+                try:
+                    base_info = json.loads(info_path.read_text())
+                except Exception:
+                    pass
         except Exception:
             model = None  # fall back to scratch below
 
@@ -687,6 +700,7 @@ def train_ocr_model(
         "status": "success",
         "mode": "fine_tune" if fine_tuned_from else "full",
         "started_from": started_from,
+        "base_info": base_info,
         "focus_classes": sorted(focus),
         "model_path": str(tflite_path),
         "classes": classes,
