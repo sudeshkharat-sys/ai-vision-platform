@@ -40,6 +40,8 @@ const OcrTrainingPanel = ({ project, onClose }) => {
 
     // running job
     const [taskId, setTaskId]     = useState(null);
+    const [testing, setTesting]   = useState(false);
+    const [testResult, setTestResult] = useState(null);
     const [running, setRunning]   = useState(false);
     const [meta, setMeta]         = useState(null);   // live progress meta
     const [result, setResult]     = useState(null);   // final task result
@@ -116,6 +118,25 @@ const OcrTrainingPanel = ({ project, onClose }) => {
     const stopTraining = () => {
         if (!taskId) return;
         axios.post(`${API_URL}/pipeline/cancel/${taskId}`).catch(() => {});
+    };
+
+    const handleTestImage = async (e) => {
+        const f = e.target.files?.[0];
+        e.target.value = ''; // allow re-selecting the same file
+        if (!f) return;
+        setTesting(true); setTestResult(null); setError(null);
+        try {
+            const form = new FormData();
+            form.append('file', f);
+            const res = await axios.post(`${API_URL}/ocr/predict/${project.id}`, form, {
+                headers: { 'Content-Type': 'multipart/form-data' },
+            });
+            setTestResult(res.data);
+        } catch (err) {
+            setError(err.response?.data?.detail || 'Prediction failed.');
+        } finally {
+            setTesting(false);
+        }
     };
 
     const download = async (fileType, filename) => {
@@ -363,6 +384,47 @@ const OcrTrainingPanel = ({ project, onClose }) => {
                                     <Download size={14} /> ocr_meta.json
                                 </button>
                             </div>
+                            {/* ── Test window ─────────────────── */}
+                            <div className="ocr-test">
+                                <h3>Test the model</h3>
+                                <p className="ocr-hint">
+                                    Upload a plate photo — the characters are found and read with your
+                                    trained model. For an honest test, use a photo the model was
+                                    NOT trained on.
+                                </p>
+                                <label className={`ocr-btn-test ${testing ? 'busy' : ''}`}>
+                                    {testing
+                                        ? <><span className="ocr-spinner" /> Reading…</>
+                                        : <>📷 Choose test image</>}
+                                    <input type="file" accept="image/*" hidden
+                                        disabled={testing} onChange={handleTestImage} />
+                                </label>
+                                {testResult && (
+                                    <div className="ocr-test-result">
+                                        <div className="ocr-test-text">
+                                            <small>Model read ({testResult.num_found} characters):</small>
+                                            <span>{testResult.text}</span>
+                                        </div>
+                                        {testResult.preview && (
+                                            <img className="ocr-test-preview" src={testResult.preview}
+                                                alt="detected characters" />
+                                        )}
+                                        <div className="ocr-perclass">
+                                            {testResult.characters.map((c, i) => (
+                                                <span key={i}
+                                                    className={`ocr-chip ${c.confidence >= 0.8 ? 'ok' : c.confidence >= 0.5 ? 'warn' : 'bad'}`}>
+                                                    {c.char} {(c.confidence * 100).toFixed(0)}%
+                                                </span>
+                                            ))}
+                                        </div>
+                                        <p className="ocr-hint">
+                                            Green = confident, yellow = unsure, red = probably wrong.
+                                            Wrong characters? Label more examples of them and retrain/fine-tune.
+                                        </p>
+                                    </div>
+                                )}
+                            </div>
+
                             <p className="ocr-hint">
                                 Bundle <b>ocr_model.tflite</b> + <b>labels.txt</b> into the Digi OCR app
                                 (tflite_flutter). Input: one grayscale character crop, resized to

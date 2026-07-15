@@ -1,6 +1,10 @@
+import base64
+import json
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException
+import cv2
+import numpy as np
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from typing import List, Optional
@@ -145,3 +149,158 @@ async def download_ocr_file(
         raise HTTPException(status_code=404, detail="File not found — train the OCR model first")
     return FileResponse(path=str(path), media_type="application/octet-stream",
                         filename=OCR_FILES[file_type])
+
+
+# ── Test window: run the trained model on an uploaded photo ───────
+
+# Model cache: project_id -> (mtime, keras_model, classes, img_size)
+_MODEL_CACHE: dict = {}
+
+
+def _load_project_model(project_id: str):
+    """Load (and cache) the trained Keras model + labels for a project."""
+    out_dir = settings.model_dir / project_id / "ocr"
+    keras_path = out_dir / "ocr_model.keras"
+    if not keras_path.exists():
+        raise HTTPException(status_code=404, detail="No trained OCR model — train one first.")
+
+    mtime = keras_path.stat().st_mtime
+    cached = _MODEL_CACHE.get(project_id)
+    if cached and cached[0] == mtime:
+        return cached[1], cached[2], cached[3]
+
+    import tensorflow as tf  # lazy — only loaded when the test window is used
+    model = tf.keras.models.load_model(str(keras_path))
+    classes = (out_dir / "labels.txt").read_text().split()
+    img_size = model.input_shape[1]
+    _MODEL_CACHE[project_id] = (mtime, model, classes, img_size)
+    return model, classes, img_size
+
+
+def _segment_characters(gray: np.ndarray):
+    """
+    Find character boxes in a plate photo using classical image
+    processing (the same approach the mobile app will use):
+    contrast-enhance, threshold both polarities, take connected
+    components shaped like characters, group into rows, sort
+    left-to-right.  Returns a list of (x, y, w, h) pixel boxes.
+    """
+    H, W = gray.shape
+    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+    enh = clahe.apply(gray)
+    enh = cv2.GaussianBlur(enh, (3, 3), 0)
+
+    def boxes_for(thresh_img):
+        n, _, stats, _ = cv2.connectedComponentsWithStats(thresh_img, connectivity=8)
+        out = []
+        for i in range(1, n):
+            x, y, w, h, area = stats[i]
+            if area < 40:                    # specks
+                continue
+            if h < H * 0.04 or h > H * 0.95: # too small / whole image
+                continue
+            if w > W * 0.5:                  # merged blob / border
+                continue
+            ar = w / h
+            if ar < 0.05 or ar > 1.6:        # not character-shaped ("1" is thin)
+                continue
+            out.append((int(x), int(y), int(w), int(h)))
+        return out
+
+    # Characters can be darker or lighter than the metal — try both,
+    # keep whichever polarity finds more character-like shapes.
+    _, inv = cv2.threshold(enh, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    _, pos = cv2.threshold(enh, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    cand_inv, cand_pos = boxes_for(inv), boxes_for(pos)
+    boxes = cand_inv if len(cand_inv) >= len(cand_pos) else cand_pos
+    if not boxes:
+        return []
+
+    # Keep boxes whose height is close to the median character height
+    med_h = float(np.median([b[3] for b in boxes]))
+    boxes = [b for b in boxes if 0.45 * med_h <= b[3] <= 1.8 * med_h]
+
+    # Group into text rows by vertical overlap with the row's running band
+    boxes.sort(key=lambda b: b[1] + b[3] / 2)
+    rows = []
+    for b in boxes:
+        cy = b[1] + b[3] / 2
+        placed = False
+        for row in rows:
+            ry = np.mean([x[1] + x[3] / 2 for x in row])
+            if abs(cy - ry) < med_h * 0.6:
+                row.append(b)
+                placed = True
+                break
+        if not placed:
+            rows.append([b])
+    for row in rows:
+        row.sort(key=lambda b: b[0])
+    rows.sort(key=lambda r: np.mean([b[1] for b in r]))
+    return [b for row in rows for b in row]
+
+
+@router.post("/predict/{project_id}")
+async def predict_ocr(
+    project_id: str,
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Test window: segment an uploaded photo into characters and read
+    each with the trained model. Returns the text, per-character
+    confidence, and a preview image with boxes drawn.
+    """
+    await get_owned_project(project_id, current_user, db)
+    model, classes, img_size = _load_project_model(project_id)
+
+    data = await file.read()
+    img = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR)
+    if img is None:
+        raise HTTPException(status_code=422, detail="Could not decode image")
+
+    # Work at a sane resolution
+    scale = 1200 / max(img.shape[:2]) if max(img.shape[:2]) > 1200 else 1.0
+    if scale < 1.0:
+        img = cv2.resize(img, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    boxes = _segment_characters(gray)
+    if not boxes:
+        raise HTTPException(status_code=422,
+                            detail="No characters found. Try a tighter crop of the plate area.")
+
+    # Crop each box exactly like training crops (margin, CLAHE, square pad)
+    from ..tasks.ocr_training import _extract_char_crop
+    H, W = gray.shape
+    crops, kept = [], []
+    for (x, y, w, h) in boxes:
+        bbox = [(x + w / 2) / W, (y + h / 2) / H, w / W, h / H]
+        crop = _extract_char_crop(img, bbox, img_size)
+        if crop is not None:
+            crops.append(crop)
+            kept.append((x, y, w, h))
+    if not crops:
+        raise HTTPException(status_code=422, detail="Could not crop any characters")
+
+    batch = np.stack(crops).astype(np.float32)[..., None] / 255.0
+    probs = model.predict(batch, verbose=0)
+
+    results, text = [], ""
+    for (x, y, w, h), p in zip(kept, probs):
+        idx = int(p.argmax())
+        ch, conf = classes[idx], float(p[idx])
+        text += ch
+        results.append({"char": ch, "confidence": round(conf, 3),
+                        "box": [x, y, w, h]})
+        color = (74, 222, 128) if conf >= 0.8 else (21, 170, 250) if conf >= 0.5 else (113, 113, 248)
+        cv2.rectangle(img, (x, y), (x + w, y + h), color, 2)
+        cv2.putText(img, ch, (x, max(18, y - 6)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2, cv2.LINE_AA)
+
+    ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 85])
+    preview = "data:image/jpeg;base64," + base64.b64encode(buf.tobytes()).decode() if ok else None
+
+    return {"text": text, "characters": results, "preview": preview,
+            "num_found": len(results)}

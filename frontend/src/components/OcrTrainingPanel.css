@@ -164,3 +164,29 @@
     background: rgba(248, 113, 113, 0.12);
 }
 .ocr-chip--toggle:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* test window */
+.ocr-test {
+    background: #131c30; border: 1px solid #24304a;
+    border-radius: 10px; padding: 12px 14px; margin: 14px 0;
+}
+.ocr-test h3 { margin: 0 0 6px; font-size: 14px; color: #cbd5e1; }
+.ocr-btn-test {
+    display: inline-flex; align-items: center; gap: 8px;
+    background: #1a2337; border: 1px solid #2a3852; color: #e2e8f0;
+    border-radius: 8px; padding: 9px 16px; font-size: 13px;
+    cursor: pointer; user-select: none;
+}
+.ocr-btn-test:hover { border-color: #dc143c; }
+.ocr-btn-test.busy { opacity: 0.7; cursor: wait; }
+.ocr-test-result { margin-top: 12px; display: flex; flex-direction: column; gap: 10px; }
+.ocr-test-text { display: flex; flex-direction: column; gap: 2px; }
+.ocr-test-text small { font-size: 11px; color: #94a3b8; }
+.ocr-test-text span {
+    font-size: 26px; font-weight: 700; letter-spacing: 3px;
+    color: #e2e8f0; font-family: 'Consolas', monospace;
+    word-break: break-all;
+}
+.ocr-test-preview {
+    max-width: 100%; border-radius: 8px; border: 1px solid #24304a;
+}
