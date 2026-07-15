@@ -251,11 +251,12 @@ const OcrTrainingPanel = ({ project, onClose }) => {
                                     <input type="checkbox" checked={usePretrained} disabled={running}
                                         onChange={e => setUsePretrained(e.target.checked)} />
                                     <span>
-                                        <b>Start from pre-trained character knowledge (recommended)</b> —
-                                        the model first learns 0–9/A–Z from thousands of computer-generated
-                                        engraved-style characters, then your real photos teach it your exact
-                                        font. Much better results with few photos. First use builds the base
-                                        once (~5–15 min); after that it's instant.
+                                        <b>Head start with synthetic characters (recommended)</b> —
+                                        this is NOT an outside OCR model. This platform generates its own
+                                        computer-drawn engraved-style 0–9/A–Z images and teaches the model
+                                        the basic shapes first; your labeled photos then teach it your exact
+                                        font and metal. First use builds this base once (~5–15 min), then
+                                        it's reused instantly.
                                     </span>
                                 </label>
                             </div>

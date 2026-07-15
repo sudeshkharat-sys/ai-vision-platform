@@ -191,6 +191,7 @@ const AnnotationWorkspace = ({ project, onProjectUpdated }) => {
     const [showVideoPanel, setShowVideoPanel] = useState(false);
     const [showActiveLearningPanel, setShowActiveLearningPanel] = useState(false);
     const [showOcrPanel, setShowOcrPanel] = useState(false);
+    const [ocrAutoLabeling, setOcrAutoLabeling] = useState(false);
     const [suggestedImageIds, setSuggestedImageIds] = useState(null);  // Set<id> or null (sidebar highlight)
     const [reviewFilterIds, setReviewFilterIds] = useState(null);      // Set<id> or null (ReviewPanel filter)
     // Local copy of classes so edits from LabelsPanel are reflected instantly
@@ -602,6 +603,25 @@ Do you want to proceed?`;
         setShowReviewPanel(true);
     };
 
+    const handleOcrAutoLabel = async () => {
+        setOcrAutoLabeling(true);
+        try {
+            const res = await axios.post(`${API_URL}/ocr/auto-annotate/${project.id}`, {});
+            showStatus(`✓ ${res.data.detail || `Pre-labeled ${res.data.labeled} characters.`}`);
+            // Refresh image list + current image's annotations
+            const imgRes = await axios.get(`${API_URL}/images/project/${project.id}`);
+            setImages(imgRes.data);
+            if (currentImage) {
+                const annRes = await axios.get(`${API_URL}/annotations/image/${currentImage.id}`);
+                setAnnotations(annRes.data);
+            }
+        } catch (e) {
+            setError(e.response?.data?.detail || 'Auto-labeling failed. Train an OCR model first.');
+        } finally {
+            setOcrAutoLabeling(false);
+        }
+    };
+
     const handleRotateImage = async (direction) => {
         if (!currentImage) return;
         try {
@@ -910,6 +930,14 @@ Do you want to proceed?`;
                         </div>
                         <button className="btn-action btn-action-ocr" onClick={() => setShowOcrPanel(true)}>
                             <Type size={14} /> Train OCR Model
+                        </button>
+                        <button
+                            className="btn-action btn-action-secondary"
+                            onClick={handleOcrAutoLabel}
+                            disabled={ocrAutoLabeling || images.filter(img => img.status === 'pending').length === 0}
+                            title="Use the trained OCR model to pre-label pending photos — review and correct after"
+                        >
+                            <Sparkles size={14} /> {ocrAutoLabeling ? 'Labeling…' : 'Auto-Label Characters'}
                         </button>
                         <button
                             className="btn-action btn-action-review"

@@ -304,3 +304,88 @@ async def predict_ocr(
 
     return {"text": text, "characters": results, "preview": preview,
             "num_found": len(results)}
+
+
+# ── Auto-label: pre-annotate pending photos with the trained model ─
+
+class OcrAutoLabelRequest(BaseModel):
+    image_ids: Optional[List[str]] = None
+    min_conf: float = 0.5
+
+
+@router.post("/auto-annotate/{project_id}")
+async def ocr_auto_annotate(
+    project_id: str,
+    body: OcrAutoLabelRequest = None,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Use the trained OCR model to pre-label pending photos: segment each
+    plate into characters, predict each character, and store the boxes
+    as 'auto' annotations for human review/correction. The OCR
+    equivalent of YOLO's seed-model auto-annotate — labeling gets
+    faster after every training cycle.
+    """
+    await get_owned_project(project_id, current_user, db)
+    model, classes, img_size = _load_project_model(project_id)
+    req = body or OcrAutoLabelRequest()
+
+    q = select(Image).where(Image.project_id == project_id, Image.status == "pending")
+    if req.image_ids:
+        q = select(Image).where(Image.project_id == project_id, Image.id.in_(req.image_ids))
+    result = await db.execute(q)
+    images = result.scalars().all()
+    if not images:
+        return {"processed": 0, "labeled": 0, "detail": "No pending images."}
+
+    from ..tasks.ocr_training import _extract_char_crop
+
+    processed, labeled = 0, 0
+    for img_row in images:
+        path = settings.upload_dir.parent / img_row.filepath.lstrip("/")
+        img = cv2.imread(str(path))
+        if img is None:
+            continue
+        processed += 1
+
+        scale = 1200 / max(img.shape[:2]) if max(img.shape[:2]) > 1200 else 1.0
+        if scale < 1.0:
+            img = cv2.resize(img, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        H, W = gray.shape
+
+        boxes = _segment_characters(gray)
+        crops, kept = [], []
+        for (x, y, w, h) in boxes:
+            bbox = [(x + w / 2) / W, (y + h / 2) / H, w / W, h / H]
+            crop = _extract_char_crop(img, bbox, img_size)
+            if crop is not None:
+                crops.append(crop)
+                kept.append(bbox)
+        if not crops:
+            continue
+
+        batch = np.stack(crops).astype(np.float32)[..., None] / 255.0
+        probs = model.predict(batch, verbose=0)
+
+        added = 0
+        for bbox, p in zip(kept, probs):
+            idx = int(p.argmax())
+            if float(p[idx]) < req.min_conf:
+                continue
+            db.add(Annotation(
+                image_id=img_row.id,
+                class_name=classes[idx],
+                bbox=bbox,
+                source="auto",
+            ))
+            added += 1
+        if added:
+            img_row.status = "annotated"
+            labeled += added
+
+    await db.commit()
+    return {"processed": processed, "labeled": labeled,
+            "detail": f"Pre-labeled {labeled} characters across {processed} photos. "
+                      "Review and correct them, then retrain."}
