@@ -276,7 +276,9 @@ def _segment_characters(gray: np.ndarray):
             if w > W * 0.5:                  # merged blob / border
                 continue
             ar = w / h
-            if ar < 0.04 or ar > 1.6:        # not character-shaped ("1" is thin)
+            # Upper bound is loose on purpose: touching characters merge into
+            # one wide blob (ar up to ~3.5) and are split apart further down.
+            if ar < 0.04 or ar > 3.5:
                 continue
             out.append((int(x), int(y), int(w), int(h)))
         return out
@@ -354,7 +356,43 @@ def _segment_characters(gray: np.ndarray):
     for row in rows:
         row.sort(key=lambda b: b[0])
     rows.sort(key=lambda r: np.mean([b[1] for b in r]))
-    return [b for row in rows for b in row]
+
+    # ── Split merged blobs: a box much wider than the row's typical
+    # character is almost always 2+ touching letters. Cut it at the
+    # thinnest ink columns (the gaps between the characters). ──
+    ink = otsu_inv if primary is cand_inv else otsu_pos
+    ink = cv2.bitwise_or(ink, adap_inv if primary is cand_inv else adap_pos)
+
+    def split_wide(box, med_w):
+        x, y, w, h = box
+        k = int(round(w / max(med_w, 1.0)))
+        if k < 2 or w < 2 * 4:
+            return [box]
+        k = min(k, 8)
+        col = ink[y:y + h, x:x + w].sum(axis=0).astype(np.float32)
+        parts, prev = [], 0
+        for i in range(1, k):
+            target = int(w * i / k)
+            lo = max(prev + 3, target - int(w * 0.12) - 1)
+            hi = min(w - 3, target + int(w * 0.12) + 1)
+            cut = target if lo >= hi else lo + int(np.argmin(col[lo:hi]))
+            parts.append((x + prev, y, cut - prev, h))
+            prev = cut
+        parts.append((x + prev, y, w - prev, h))
+        return [p for p in parts if p[2] >= 3]
+
+    med_w_all = float(np.median([b[2] for row in rows for b in row]))
+    out = []
+    for row in rows:
+        # Prefer the row's own typical width when the row is big enough
+        widths = sorted(b[2] for b in row)
+        med_w = float(widths[len(widths) // 2]) if len(row) >= 4 else med_w_all
+        for b in row:
+            if b[2] > 1.6 * med_w:
+                out.extend(split_wide(b, med_w))
+            else:
+                out.append(b)
+    return out
 
 
 def _segment_in_region(gray: np.ndarray):
