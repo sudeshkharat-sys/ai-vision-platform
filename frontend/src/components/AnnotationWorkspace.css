@@ -535,16 +535,23 @@
   padding: 2px 6px;
 }
 .rotate-slider {
-  width: 110px;
+  width: 140px;
   accent-color: #0891b2;
   cursor: pointer;
 }
-.rotate-slider-value {
+.rotate-angle-input {
+  width: 52px;
+  border: 1px solid #e5e5e5;
+  border-radius: 4px;
   font-size: 11px;
-  color: #444;
-  min-width: 38px;
   text-align: right;
+  color: #444;
+  padding: 1px 3px;
   font-variant-numeric: tabular-nums;
+}
+.fine-rotate-unit {
+  font-size: 11px;
+  color: #999;
 }
 .btn-toolbar--apply {
   background: #0891b2;

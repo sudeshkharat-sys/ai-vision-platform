@@ -1153,16 +1153,26 @@ Do you want to proceed?`;
                                 disabled={isStraightening}
                                 title="Smart rotate — auto-detect the tilt of the engraved text and level the image"
                             ><Wand2 size={14} /></button>
-                            <div className="rotate-slider-group" title="Drag to rotate live against the grid, then Apply to save">
+                            <div className="rotate-slider-group" title="Free rotate — drag the slider (or type an exact angle) to rotate live against the grid, then Apply to save">
                                 <input
                                     type="range"
                                     className="rotate-slider"
-                                    min="-45" max="45" step="0.2"
+                                    min="-180" max="180" step="0.2"
                                     value={previewAngle}
                                     onChange={e => setPreviewAngle(parseFloat(e.target.value))}
                                     onDoubleClick={() => setPreviewAngle(0)}
                                 />
-                                <span className="rotate-slider-value">{previewAngle.toFixed(1)}°</span>
+                                <input
+                                    type="number"
+                                    className="rotate-angle-input"
+                                    min="-180" max="180" step="0.1"
+                                    value={previewAngle}
+                                    onChange={e => {
+                                        const v = parseFloat(e.target.value);
+                                        if (!Number.isNaN(v)) setPreviewAngle(Math.max(-180, Math.min(180, v)));
+                                    }}
+                                />
+                                <span className="fine-rotate-unit">°</span>
                                 {previewAngle !== 0 && (<>
                                     <button className="btn-toolbar btn-toolbar--apply" onClick={handleApplyPreviewRotation} title="Bake this rotation into the image">Apply</button>
                                     <button className="btn-toolbar" onClick={() => setPreviewAngle(0)} title="Discard preview rotation"><X size={12} /></button>
