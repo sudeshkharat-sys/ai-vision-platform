@@ -212,7 +212,7 @@ const AnnotationWorkspace = ({ project, onProjectUpdated }) => {
     // ── Grid overlay + fine rotation ─────────────────────────────
     const [showGrid, setShowGrid] = useState(false);
     const [gridSpacing, setGridSpacing] = useState(50); // image pixels between lines
-    const [fineAngle, setFineAngle] = useState(2);      // degrees per fine-rotate click
+    const [previewAngle, setPreviewAngle] = useState(0); // live rotation preview (degrees, CW+)
     const [isStraightening, setIsStraightening] = useState(false);
 
     // ── Zoom / pan ───────────────────────────────────────────────
@@ -657,14 +657,16 @@ Do you want to proceed?`;
         }
     };
 
-    const handleFineRotate = async (sign) => {
+    // Bake the previewed slider angle into the file on the server
+    const handleApplyPreviewRotation = async () => {
         if (!currentImage) return;
-        const angle = sign * Math.abs(parseFloat(fineAngle) || 0);
-        if (!angle) return;
+        const angle = Math.round(previewAngle * 10) / 10;
+        if (!angle) { setPreviewAngle(0); return; }
         try {
             const res = await axios.post(
                 `${API_URL}/images/${currentImage.id}/rotate-fine?angle=${angle}`
             );
+            setPreviewAngle(0);
             await refreshAfterRotation(currentImage.id, res.data.width, res.data.height);
             showStatus(`✓ Rotated ${angle > 0 ? '+' : ''}${angle}°`);
         } catch {
@@ -779,6 +781,7 @@ Do you want to proceed?`;
     const handleMouseDown = (e) => {
         if (isPanning) return;
         if (pendingAnnotation) return;
+        if (previewAngle !== 0) return; // rotation preview active — apply or reset first
         // Only block when clicking on a visible annotation shape (Rect/Group/Text)
         // Stage and Layer nodes are safe to draw on; KonvaImage has listening=false
         const cls = e.target.getClassName ? e.target.getClassName() : '';
@@ -915,6 +918,7 @@ Do you want to proceed?`;
         setIsDrawing(false);
         setHistory([]);
         setRedoStack([]);
+        setPreviewAngle(0);
     }, [currentImage?.id]);
 
     // Sync transformer to selected annotation node
@@ -1149,17 +1153,20 @@ Do you want to proceed?`;
                                 disabled={isStraightening}
                                 title="Smart rotate — auto-detect the tilt of the engraved text and level the image"
                             ><Wand2 size={14} /></button>
-                            <div className="fine-rotate-group" title="Fine rotate — set step in degrees, then nudge left/right until the plate is level with the grid">
-                                <button className="btn-toolbar" onClick={() => handleFineRotate(-1)}>⟲</button>
+                            <div className="rotate-slider-group" title="Drag to rotate live against the grid, then Apply to save">
                                 <input
-                                    type="number"
-                                    className="fine-rotate-input"
-                                    min="0.1" max="45" step="0.5"
-                                    value={fineAngle}
-                                    onChange={e => setFineAngle(e.target.value)}
+                                    type="range"
+                                    className="rotate-slider"
+                                    min="-45" max="45" step="0.2"
+                                    value={previewAngle}
+                                    onChange={e => setPreviewAngle(parseFloat(e.target.value))}
+                                    onDoubleClick={() => setPreviewAngle(0)}
                                 />
-                                <span className="fine-rotate-unit">°</span>
-                                <button className="btn-toolbar" onClick={() => handleFineRotate(1)}>⟳</button>
+                                <span className="rotate-slider-value">{previewAngle.toFixed(1)}°</span>
+                                {previewAngle !== 0 && (<>
+                                    <button className="btn-toolbar btn-toolbar--apply" onClick={handleApplyPreviewRotation} title="Bake this rotation into the image">Apply</button>
+                                    <button className="btn-toolbar" onClick={() => setPreviewAngle(0)} title="Discard preview rotation"><X size={12} /></button>
+                                </>)}
                             </div>
                             {/* ── Grid overlay toggle + spacing ── */}
                             <button
@@ -1260,33 +1267,17 @@ Do you want to proceed?`;
                                 onMouseUp={handleMouseUp}
                             >
                                 <Layer>
+                                    {/* Rotates live with the slider; grid stays fixed as the level reference */}
+                                    <Group
+                                        x={imgW / 2} y={imgH / 2}
+                                        offsetX={imgW / 2} offsetY={imgH / 2}
+                                        rotation={previewAngle}
+                                    >
                                     <KonvaImage
                                         src={`${API_URL.replace("/api/v1", "")}${currentImage.filepath}${imgVersion[currentImage.id] ? `?v=${imgVersion[currentImage.id]}` : ''}`}
                                         onLoad={handleImageLoad}
                                         listening={false}
                                     />
-                                    {/* ── Alignment grid overlay (image-pixel spacing) ── */}
-                                    {showGrid && (() => {
-                                        const ts = scale * userZoom;
-                                        const lines = [];
-                                        for (let x = gridSpacing, i = 1; x < imgW; x += gridSpacing, i++) {
-                                            lines.push(
-                                                <Line key={`gv${x}`} points={[x, 0, x, imgH]}
-                                                    stroke={i % 5 === 0 ? 'rgba(34,211,238,0.55)' : 'rgba(34,211,238,0.25)'}
-                                                    strokeWidth={(i % 5 === 0 ? 1.4 : 0.8) / ts}
-                                                    listening={false} />
-                                            );
-                                        }
-                                        for (let y = gridSpacing, i = 1; y < imgH; y += gridSpacing, i++) {
-                                            lines.push(
-                                                <Line key={`gh${y}`} points={[0, y, imgW, y]}
-                                                    stroke={i % 5 === 0 ? 'rgba(34,211,238,0.55)' : 'rgba(34,211,238,0.25)'}
-                                                    strokeWidth={(i % 5 === 0 ? 1.4 : 0.8) / ts}
-                                                    listening={false} />
-                                            );
-                                        }
-                                        return lines;
-                                    })()}
                                     {annotations.map(ann => {
                                         const bx = (ann.bbox[0] - ann.bbox[2] / 2) * imgW;
                                         const by = (ann.bbox[1] - ann.bbox[3] / 2) * imgH;
@@ -1380,6 +1371,29 @@ Do you want to proceed?`;
                                             fill="rgba(220,20,60,0.08)"
                                         />
                                     )}
+                                    </Group>
+                                    {/* ── Alignment grid overlay — fixed, drawn above the (possibly rotating) image ── */}
+                                    {showGrid && (() => {
+                                        const ts = scale * userZoom;
+                                        const lines = [];
+                                        for (let x = gridSpacing, i = 1; x < imgW; x += gridSpacing, i++) {
+                                            lines.push(
+                                                <Line key={`gv${x}`} points={[x, 0, x, imgH]}
+                                                    stroke={i % 5 === 0 ? 'rgba(34,211,238,0.55)' : 'rgba(34,211,238,0.25)'}
+                                                    strokeWidth={(i % 5 === 0 ? 1.4 : 0.8) / ts}
+                                                    listening={false} />
+                                            );
+                                        }
+                                        for (let y = gridSpacing, i = 1; y < imgH; y += gridSpacing, i++) {
+                                            lines.push(
+                                                <Line key={`gh${y}`} points={[0, y, imgW, y]}
+                                                    stroke={i % 5 === 0 ? 'rgba(34,211,238,0.55)' : 'rgba(34,211,238,0.25)'}
+                                                    strokeWidth={(i % 5 === 0 ? 1.4 : 0.8) / ts}
+                                                    listening={false} />
+                                            );
+                                        }
+                                        return lines;
+                                    })()}
                                     <Transformer
                                         ref={transformerRef}
                                         rotateEnabled={false}

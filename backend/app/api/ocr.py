@@ -177,6 +177,80 @@ def _load_project_model(project_id: str):
     return model, classes, img_size
 
 
+def _find_text_region(gray: np.ndarray):
+    """
+    Locate the engraved-text band inside a full photo so segmentation
+    doesn't have to fight the whole scene (chassis, background, tools…).
+    Morphological gradient -> threshold -> horizontal closing merges the
+    characters of a line into wide blobs; the union of line-shaped blobs
+    (plus margin) is the region of interest.
+
+    Returns (x, y, w, h) in pixels — the full image when nothing
+    text-like is found or the text already fills the frame.
+    """
+    H, W = gray.shape
+    full = (0, 0, W, H)
+
+    # Percentile-thresholded gradient: engraved strokes have the strongest
+    # edges; Otsu drowns in metal-grain noise so a fixed top-percentile cut
+    # is far more stable on textured surfaces.
+    blur = cv2.GaussianBlur(gray, (5, 5), 0)
+    grad = cv2.morphologyEx(blur, cv2.MORPH_GRADIENT, np.ones((3, 3), np.uint8))
+    thr = max(float(np.percentile(grad, 93)), 20.0)
+    bw = (grad > thr).astype(np.uint8) * 255
+
+    # Connect neighbouring characters into horizontal line blobs
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (max(9, W // 40), 3))
+    connected = cv2.morphologyEx(bw, cv2.MORPH_CLOSE, kernel)
+
+    contours, _ = cv2.findContours(connected, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    lines = []
+    for c in contours:
+        x, y, w, h = cv2.boundingRect(c)
+        if w < W * 0.10 or h < H * 0.015 or h > H * 0.5:
+            continue
+        if w / h < 1.8:          # text lines are much wider than tall
+            continue
+        roi = bw[y:y + h, x:x + w]
+        density = cv2.countNonZero(roi) / float(w * h)
+        if density < 0.12:       # mostly empty box — not dense stroke texture
+            continue
+        # A text line is many separate strokes; a scratch/edge is one blob
+        ncomp, _, cstats, _ = cv2.connectedComponentsWithStats(roi, connectivity=8)
+        strokes = sum(1 for i in range(1, ncomp) if cstats[i][4] >= 15)
+        if strokes < 3:
+            continue
+        lines.append((x, y, w, h, w * h * density))
+
+    if not lines:
+        return full
+
+    # Keep the strongest line plus others with comparable height that sit
+    # vertically nearby (multi-row plates) — rejects far-away texture
+    lines.sort(key=lambda t: t[4], reverse=True)
+    bx, by, bwd, best_h, _ = lines[0]
+    kept = [
+        l for l in lines
+        if 0.4 * best_h <= l[3] <= 2.5 * best_h
+        and abs((l[1] + l[3] / 2) - (by + best_h / 2)) <= 4 * best_h
+    ]
+
+    x0 = min(l[0] for l in kept)
+    y0 = min(l[1] for l in kept)
+    x1 = max(l[0] + l[2] for l in kept)
+    y1 = max(l[1] + l[3] for l in kept)
+
+    # Margin so character strokes at the edge aren't clipped
+    mx, my = int((x1 - x0) * 0.06) + 4, int((y1 - y0) * 0.30) + 4
+    x0, y0 = max(0, x0 - mx), max(0, y0 - my)
+    x1, y1 = min(W, x1 + mx), min(H, y1 + my)
+
+    # Region as big as the frame anyway -> just use the full image
+    if (x1 - x0) * (y1 - y0) > 0.85 * W * H:
+        return full
+    return (x0, y0, x1 - x0, y1 - y0)
+
+
 def _segment_characters(gray: np.ndarray):
     """
     Find character boxes in a plate photo using classical image
@@ -271,10 +345,31 @@ def _segment_characters(gray: np.ndarray):
                 break
         if not placed:
             rows.append([b])
+    # A real character sits in a row with neighbours; once a solid row
+    # (3+ chars) exists, lone stray blobs elsewhere are almost always
+    # scratches, screws or texture — drop single-box rows.
+    if len(rows) > 1 and max(len(r) for r in rows) >= 3:
+        rows = [r for r in rows if len(r) >= 2]
+
     for row in rows:
         row.sort(key=lambda b: b[0])
     rows.sort(key=lambda r: np.mean([b[1] for b in r]))
     return [b for row in rows for b in row]
+
+
+def _segment_in_region(gray: np.ndarray):
+    """
+    Full-photo pipeline: find the text band first, then segment characters
+    inside it and shift the boxes back to whole-image coordinates. Lets the
+    test window / auto-label work on uncropped photos.
+    """
+    rx, ry, rw, rh = _find_text_region(gray)
+    roi = gray[ry:ry + rh, rx:rx + rw]
+    boxes = _segment_characters(roi)
+    if not boxes and (rw, rh) != (gray.shape[1], gray.shape[0]):
+        # Region guess was wrong — retry on the full frame
+        return _segment_characters(gray), (0, 0, gray.shape[1], gray.shape[0])
+    return [(x + rx, y + ry, w, h) for (x, y, w, h) in boxes], (rx, ry, rw, rh)
 
 
 @router.post("/predict/{project_id}")
@@ -303,7 +398,7 @@ async def predict_ocr(
         img = cv2.resize(img, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
 
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    boxes = _segment_characters(gray)
+    boxes, region = _segment_in_region(gray)
     if not boxes:
         raise HTTPException(status_code=422,
                             detail="No characters found. Try a tighter crop of the plate area.")
@@ -335,6 +430,11 @@ async def predict_ocr(
         cv2.rectangle(img, (x, y), (x + w, y + h), color, 2)
         cv2.putText(img, ch, (x, max(18, y - 6)),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2, cv2.LINE_AA)
+
+    # Show which area was auto-detected as the text band
+    rx, ry, rw, rh = region
+    if (rw, rh) != (W, H):
+        cv2.rectangle(img, (rx, ry), (rx + rw, ry + rh), (200, 200, 200), 1)
 
     ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 85])
     preview = "data:image/jpeg;base64," + base64.b64encode(buf.tobytes()).decode() if ok else None
@@ -392,7 +492,7 @@ async def ocr_auto_annotate(
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         H, W = gray.shape
 
-        boxes = _segment_characters(gray)
+        boxes, _region = _segment_in_region(gray)
         crops, kept = [], []
         for (x, y, w, h) in boxes:
             bbox = [(x + w / 2) / W, (y + h / 2) / H, w / W, h / H]
