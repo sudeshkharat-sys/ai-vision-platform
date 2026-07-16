@@ -113,6 +113,127 @@ async def mark_image_empty(
     return image
 
 
+def _rotate_file_and_boxes(file_path, annotations, angle_deg_cw: float):
+    """
+    Rotate the image file on disk by an arbitrary angle (degrees, clockwise)
+    with the canvas expanded so nothing is cropped, then remap every
+    normalized [xc, yc, w, h] bbox into the new frame.
+
+    For non-90° angles an axis-aligned box can only approximate the rotated
+    region, so each box becomes the axis-aligned hull of its rotated corners.
+    Returns (new_width, new_height).
+    """
+    import math
+    from PIL import ImageOps
+
+    with PILImage.open(file_path) as img:
+        img = ImageOps.exif_transpose(img)
+        old_w, old_h = img.size
+        # PIL rotates counter-clockwise for positive angles
+        rotated = img.rotate(
+            -angle_deg_cw, expand=True, resample=PILImage.BICUBIC,
+            fillcolor=(0, 0, 0) if img.mode == "RGB" else 0,
+        )
+        rotated.save(file_path)
+        new_w, new_h = rotated.size
+
+    # Visual CCW rotation of the image by theta maps a pixel (x, y) —
+    # y-axis pointing down — to:
+    #   x' =  (x-cx)·cosθ + (y-cy)·sinθ + cx'
+    #   y' = -(x-cx)·sinθ + (y-cy)·cosθ + cy'
+    theta = math.radians(-angle_deg_cw)
+    cos_t, sin_t = math.cos(theta), math.sin(theta)
+    cx, cy = old_w / 2.0, old_h / 2.0
+    ncx, ncy = new_w / 2.0, new_h / 2.0
+
+    for ann in annotations:
+        if not ann.bbox or len(ann.bbox) != 4:
+            continue
+        xc, yc, w, h = ann.bbox
+        px, py, pw, ph = xc * old_w, yc * old_h, w * old_w, h * old_h
+        corners = [
+            (px - pw / 2, py - ph / 2), (px + pw / 2, py - ph / 2),
+            (px - pw / 2, py + ph / 2), (px + pw / 2, py + ph / 2),
+        ]
+        xs, ys = [], []
+        for x, y in corners:
+            xs.append((x - cx) * cos_t + (y - cy) * sin_t + ncx)
+            ys.append(-(x - cx) * sin_t + (y - cy) * cos_t + ncy)
+        x0, x1 = max(0.0, min(xs)), min(float(new_w), max(xs))
+        y0, y1 = max(0.0, min(ys)), min(float(new_h), max(ys))
+        ann.bbox = [
+            (x0 + x1) / 2 / new_w, (y0 + y1) / 2 / new_h,
+            (x1 - x0) / new_w, (y1 - y0) / new_h,
+        ]
+
+    return new_w, new_h
+
+
+def _detect_text_skew(file_path) -> float:
+    """
+    Estimate the dominant text/edge skew angle in degrees (clockwise-positive,
+    i.e. the amount the content is tilted CW from horizontal). Returns 0.0
+    when no confident estimate is found.
+
+    Works on engraved/stamped plates: edge map -> probabilistic Hough lines ->
+    length-weighted median of near-horizontal segment angles.
+    """
+    import math
+    import cv2
+    import numpy as np
+
+    img = cv2.imread(str(file_path), cv2.IMREAD_GRAYSCALE)
+    if img is None:
+        return 0.0
+    # Downscale big photos so Hough stays fast and noise-tolerant
+    scale = 1200.0 / max(img.shape) if max(img.shape) > 1200 else 1.0
+    if scale < 1.0:
+        img = cv2.resize(img, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+    img = cv2.GaussianBlur(img, (3, 3), 0)
+    edges = cv2.Canny(img, 50, 150)
+    min_len = max(20, int(min(img.shape) * 0.10))
+    lines = cv2.HoughLinesP(
+        edges, 1, np.pi / 180, threshold=60,
+        minLineLength=min_len, maxLineGap=8,
+    )
+    if lines is None:
+        return 0.0
+
+    weighted = []  # (angle_deg, length)
+    for line in lines:
+        x1, y1, x2, y2 = np.ravel(line)[:4]
+        dx, dy = x2 - x1, y2 - y1
+        length = math.hypot(dx, dy)
+        if length < min_len:
+            continue
+        angle = math.degrees(math.atan2(dy, dx))
+        # Fold into [-45, 45): treat vertical strokes as their horizontal complement
+        while angle <= -45:
+            angle += 90
+        while angle > 45:
+            angle -= 90
+        weighted.append((angle, length))
+
+    if not weighted:
+        return 0.0
+
+    # Length-weighted median angle
+    weighted.sort(key=lambda t: t[0])
+    total = sum(l for _, l in weighted)
+    acc = 0.0
+    skew = 0.0
+    for angle, length in weighted:
+        acc += length
+        if acc >= total / 2:
+            skew = angle
+            break
+
+    # Sub-degree tilts aren't worth resampling; huge estimates are unreliable
+    if abs(skew) < 0.3 or abs(skew) > 44.0:
+        return 0.0
+    return skew
+
+
 @router.post("/{image_id}/rotate")
 async def rotate_image(
     image_id: str,
@@ -167,6 +288,100 @@ async def rotate_image(
         "status": "rotated",
         "id": image_id,
         "direction": direction,
+        "width": image.width,
+        "height": image.height,
+    }
+
+
+@router.post("/{image_id}/rotate-fine")
+async def rotate_image_fine(
+    image_id: str,
+    angle: float,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Rotate the image by an arbitrary angle in degrees (positive = clockwise)
+    so a tilted plate can be leveled before drawing character boxes.
+    Existing bboxes are remapped to the axis-aligned hull of their rotated
+    corners — best used before annotating.
+    """
+    if not (-180.0 <= angle <= 180.0) or angle == 0:
+        raise HTTPException(status_code=400, detail="angle must be non-zero, within ±180 degrees")
+
+    image = await get_owned_image(image_id, current_user, db)
+    file_path = settings.upload_dir.parent / image.filepath.lstrip("/")
+    if not file_path.exists():
+        file_path = settings.upload_dir / image.filepath.replace("/uploads/", "", 1)
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="Image file not found on disk")
+
+    result = await db.execute(select(Annotation).where(Annotation.image_id == image_id))
+    anns = result.scalars().all()
+    try:
+        new_w, new_h = _rotate_file_and_boxes(file_path, anns, angle)
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=f"Could not rotate image: {e}")
+
+    image.width, image.height = new_w, new_h
+    await db.commit()
+    await db.refresh(image)
+    return {
+        "status": "rotated",
+        "id": image_id,
+        "angle": angle,
+        "width": image.width,
+        "height": image.height,
+    }
+
+
+@router.post("/{image_id}/auto-straighten")
+async def auto_straighten_image(
+    image_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Smart rotate: detect the dominant tilt of the engraved text/edges and
+    level the image automatically. Returns the correction angle applied
+    (0 when the image already looks straight or no confident estimate).
+    """
+    image = await get_owned_image(image_id, current_user, db)
+    file_path = settings.upload_dir.parent / image.filepath.lstrip("/")
+    if not file_path.exists():
+        file_path = settings.upload_dir / image.filepath.replace("/uploads/", "", 1)
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="Image file not found on disk")
+
+    try:
+        skew = _detect_text_skew(file_path)
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=f"Skew detection failed: {e}")
+
+    if skew == 0.0:
+        return {
+            "status": "already_straight",
+            "id": image_id,
+            "angle": 0.0,
+            "width": image.width,
+            "height": image.height,
+        }
+
+    result = await db.execute(select(Annotation).where(Annotation.image_id == image_id))
+    anns = result.scalars().all()
+    try:
+        # Content is tilted `skew` degrees CW -> correct by rotating CCW
+        new_w, new_h = _rotate_file_and_boxes(file_path, anns, -skew)
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=f"Could not rotate image: {e}")
+
+    image.width, image.height = new_w, new_h
+    await db.commit()
+    await db.refresh(image)
+    return {
+        "status": "rotated",
+        "id": image_id,
+        "angle": -skew,
         "width": image.width,
         "height": image.height,
     }

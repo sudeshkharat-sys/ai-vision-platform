@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import axios from 'axios';
-import { Stage, Layer, Rect, Text, Image, Group, Transformer } from 'react-konva';
+import { Stage, Layer, Rect, Text, Image, Group, Transformer, Line } from 'react-konva';
 import useImage from 'use-image';
 import TrainingPanel from './TrainingPanel';
 import AutoAnnotatePanel from './AutoAnnotatePanel';
@@ -12,7 +12,7 @@ import VideoPanel from './VideoPanel';
 import ActiveLearningPanel from './ActiveLearningPanel';
 import OcrTrainingPanel from './OcrTrainingPanel';
 import './AnnotationWorkspace.css';
-import { Sparkles, AlertTriangle, X, Upload, Image as ImageIcon, Check, ArrowLeft, ArrowRight, Brain, Rocket, Eye, Target, Tag, Package, Film, Undo2, Redo2, ZoomIn, ZoomOut, Maximize2, Trash2, ImageOff, Type, RotateCw, RotateCcw } from 'lucide-react';
+import { Sparkles, AlertTriangle, X, Upload, Image as ImageIcon, Check, ArrowLeft, ArrowRight, Brain, Rocket, Eye, Target, Tag, Package, Film, Undo2, Redo2, ZoomIn, ZoomOut, Maximize2, Trash2, ImageOff, Type, RotateCw, RotateCcw, Grid3x3, Wand2 } from 'lucide-react';
 
 import { API_URL } from '../config';
 
@@ -208,6 +208,12 @@ const AnnotationWorkspace = ({ project, onProjectUpdated }) => {
     const [selectedAnnId, setSelectedAnnId] = useState(null);
     const transformerRef = useRef(null);
     const annNodesRef = useRef({});
+
+    // ── Grid overlay + fine rotation ─────────────────────────────
+    const [showGrid, setShowGrid] = useState(false);
+    const [gridSpacing, setGridSpacing] = useState(50); // image pixels between lines
+    const [fineAngle, setFineAngle] = useState(2);      // degrees per fine-rotate click
+    const [isStraightening, setIsStraightening] = useState(false);
 
     // ── Zoom / pan ───────────────────────────────────────────────
     const [userZoom, setUserZoom] = useState(1);
@@ -622,28 +628,67 @@ Do you want to proceed?`;
         }
     };
 
+    // Shared refresh after any server-side rotation (file changed on disk,
+    // boxes remapped server-side — reload image, annotations, reset undo/zoom)
+    const refreshAfterRotation = async (imageId, width, height) => {
+        const updated = { ...currentImage, width, height };
+        setCurrentImage(updated);
+        setImages(prev => prev.map(im => (im.id === updated.id ? updated : im)));
+        setLoadedImageSize(null);
+        setImgVersion(prev => ({ ...prev, [imageId]: (prev[imageId] || 0) + 1 }));
+        setHistory([]);
+        setRedoStack([]);
+        setSelectedAnnId(null);
+        resetZoom();
+        const annRes = await axios.get(`${API_URL}/annotations/image/${imageId}`);
+        setAnnotations(annRes.data);
+    };
+
     const handleRotateImage = async (direction) => {
         if (!currentImage) return;
         try {
             const res = await axios.post(
                 `${API_URL}/images/${currentImage.id}/rotate?direction=${direction}`
             );
-            const { width, height } = res.data;
-            const updated = { ...currentImage, width, height };
-            setCurrentImage(updated);
-            setImages(prev => prev.map(im => (im.id === updated.id ? updated : im)));
-            setLoadedImageSize(null);
-            setImgVersion(prev => ({ ...prev, [updated.id]: (prev[updated.id] || 0) + 1 }));
-            // Boxes were remapped server-side — old undo states are now stale
-            setHistory([]);
-            setRedoStack([]);
-            setSelectedAnnId(null);
-            resetZoom();
-            const annRes = await axios.get(`${API_URL}/annotations/image/${updated.id}`);
-            setAnnotations(annRes.data);
+            await refreshAfterRotation(currentImage.id, res.data.width, res.data.height);
             showStatus(`✓ Rotated ${direction === 'cw' ? 'clockwise' : 'counter-clockwise'}`);
         } catch {
             setError('Failed to rotate image.');
+        }
+    };
+
+    const handleFineRotate = async (sign) => {
+        if (!currentImage) return;
+        const angle = sign * Math.abs(parseFloat(fineAngle) || 0);
+        if (!angle) return;
+        try {
+            const res = await axios.post(
+                `${API_URL}/images/${currentImage.id}/rotate-fine?angle=${angle}`
+            );
+            await refreshAfterRotation(currentImage.id, res.data.width, res.data.height);
+            showStatus(`✓ Rotated ${angle > 0 ? '+' : ''}${angle}°`);
+        } catch {
+            setError('Failed to rotate image.');
+        }
+    };
+
+    const handleAutoStraighten = async () => {
+        if (!currentImage || isStraightening) return;
+        setIsStraightening(true);
+        try {
+            const res = await axios.post(
+                `${API_URL}/images/${currentImage.id}/auto-straighten`
+            );
+            if (res.data.status === 'already_straight') {
+                showStatus('Image already looks straight — no tilt detected.');
+            } else {
+                await refreshAfterRotation(currentImage.id, res.data.width, res.data.height);
+                showStatus(`✓ Auto-straightened by ${res.data.angle.toFixed(1)}°`);
+            }
+        } catch (e) {
+            setError(e.response?.data?.detail || 'Auto-straighten failed.');
+        } finally {
+            setIsStraightening(false);
         }
     };
 
@@ -1096,6 +1141,46 @@ Do you want to proceed?`;
                             {/* ── Rotate (portrait ↔ landscape; boxes are remapped) ── */}
                             <button className="btn-toolbar" onClick={() => handleRotateImage('ccw')} title="Rotate 90° counter-clockwise"><RotateCcw size={14} /></button>
                             <button className="btn-toolbar" onClick={() => handleRotateImage('cw')} title="Rotate 90° clockwise"><RotateCw size={14} /></button>
+                            {/* ── OCR only: smart rotate + fine nudge + alignment grid ── */}
+                            {project.project_type === 'ocr' && (<>
+                            <button
+                                className={`btn-toolbar btn-toolbar--smart ${isStraightening ? 'busy' : ''}`}
+                                onClick={handleAutoStraighten}
+                                disabled={isStraightening}
+                                title="Smart rotate — auto-detect the tilt of the engraved text and level the image"
+                            ><Wand2 size={14} /></button>
+                            <div className="fine-rotate-group" title="Fine rotate — set step in degrees, then nudge left/right until the plate is level with the grid">
+                                <button className="btn-toolbar" onClick={() => handleFineRotate(-1)}>⟲</button>
+                                <input
+                                    type="number"
+                                    className="fine-rotate-input"
+                                    min="0.1" max="45" step="0.5"
+                                    value={fineAngle}
+                                    onChange={e => setFineAngle(e.target.value)}
+                                />
+                                <span className="fine-rotate-unit">°</span>
+                                <button className="btn-toolbar" onClick={() => handleFineRotate(1)}>⟳</button>
+                            </div>
+                            {/* ── Grid overlay toggle + spacing ── */}
+                            <button
+                                className={`btn-toolbar ${showGrid ? 'btn-toolbar--active' : ''}`}
+                                onClick={() => setShowGrid(g => !g)}
+                                title="Toggle alignment grid — level the plate against the lines before boxing characters"
+                            ><Grid3x3 size={14} /></button>
+                            {showGrid && (
+                                <select
+                                    className="grid-spacing-select"
+                                    value={gridSpacing}
+                                    onChange={e => setGridSpacing(Number(e.target.value))}
+                                    title="Grid spacing (image pixels)"
+                                >
+                                    <option value={20}>20px</option>
+                                    <option value={50}>50px</option>
+                                    <option value={100}>100px</option>
+                                    <option value={200}>200px</option>
+                                </select>
+                            )}
+                            </>)}
                             {/* ── Zoom ── */}
                             <button className="btn-toolbar" onClick={() => { setUserZoom(z => Math.min(15, z * 1.3)); }} title="Zoom in"><ZoomIn size={14} /></button>
                             <span style={{ fontSize: 11, color: '#666', minWidth: 36, textAlign: 'center' }}>{Math.round(userZoom * 100)}%</span>
@@ -1180,6 +1265,28 @@ Do you want to proceed?`;
                                         onLoad={handleImageLoad}
                                         listening={false}
                                     />
+                                    {/* ── Alignment grid overlay (image-pixel spacing) ── */}
+                                    {showGrid && (() => {
+                                        const ts = scale * userZoom;
+                                        const lines = [];
+                                        for (let x = gridSpacing, i = 1; x < imgW; x += gridSpacing, i++) {
+                                            lines.push(
+                                                <Line key={`gv${x}`} points={[x, 0, x, imgH]}
+                                                    stroke={i % 5 === 0 ? 'rgba(34,211,238,0.55)' : 'rgba(34,211,238,0.25)'}
+                                                    strokeWidth={(i % 5 === 0 ? 1.4 : 0.8) / ts}
+                                                    listening={false} />
+                                            );
+                                        }
+                                        for (let y = gridSpacing, i = 1; y < imgH; y += gridSpacing, i++) {
+                                            lines.push(
+                                                <Line key={`gh${y}`} points={[0, y, imgW, y]}
+                                                    stroke={i % 5 === 0 ? 'rgba(34,211,238,0.55)' : 'rgba(34,211,238,0.25)'}
+                                                    strokeWidth={(i % 5 === 0 ? 1.4 : 0.8) / ts}
+                                                    listening={false} />
+                                            );
+                                        }
+                                        return lines;
+                                    })()}
                                     {annotations.map(ann => {
                                         const bx = (ann.bbox[0] - ann.bbox[2] / 2) * imgW;
                                         const by = (ann.bbox[1] - ann.bbox[3] / 2) * imgH;
