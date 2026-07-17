@@ -166,6 +166,29 @@ def _random_string(rng: random.Random, min_len=3, max_len=10) -> str:
     return "".join(rng.choice(CHARSET) for _ in range(n))
 
 
+def _emnist_char_pools(rng: random.Random, per_class: int = 80):
+    """
+    Build per-character pools of REAL character images from EMNIST (NIST),
+    covering the full 0-9/A-Z. Used to composite lines grounded in real
+    character shapes rather than only computer-drawn fonts. Reuses the same
+    loader/cache as the per-char CNN engine (model_dir/emnist). Returns None
+    when EMNIST isn't reachable/cached — caller just skips it.
+    """
+    try:
+        from .ocr_training import _load_emnist_chars
+    except Exception:
+        return None
+    data = _load_emnist_chars(int(IMG_H * 0.8), per_class, rng)
+    if not data:
+        return None
+    xs, ys = data
+    pools = defaultdict(list)
+    for im, li in zip(xs, ys):
+        if 0 <= li < len(CHARSET):
+            pools[CHARSET[li]].append(im)
+    return pools if pools else None
+
+
 # ── Model ─────────────────────────────────────────────────────────
 
 def _build_crnn(tf):
@@ -218,8 +241,9 @@ def train_crnn_model(
     self,
     project_id: str,
     epochs: int = 40,
-    synthetic_lines: int = 4000,
+    synthetic_lines: int = 3000,
     composite_lines: int = 4000,
+    emnist_lines: int = 3000,
     batch_size: int = 32,
     learning_rate: float = 1e-3,
     val_ratio: float = 0.15,
@@ -313,7 +337,23 @@ def train_crnn_model(
         if im is not None:
             X.append(im); Y.append(text); made += 1
 
-    # synthetic rendered lines over the FULL charset (general knowledge)
+    # EMNIST-composited lines: REAL character shapes over the full 0-9/A-Z,
+    # so the model's general knowledge is grounded in real characters, not
+    # only computer-drawn fonts. Skipped automatically if EMNIST isn't
+    # available on this server.
+    emnist_pools = _emnist_char_pools(rng)
+    made_em = 0
+    if emnist_pools:
+        guard = 0
+        pool_chars = [c for c in CHARSET if emnist_pools.get(c)]
+        while made_em < emnist_lines and pool_chars and guard < emnist_lines * 5:
+            guard += 1
+            text = "".join(rng.choice(pool_chars) for _ in range(rng.randint(3, 9)))
+            im = _composite_line(emnist_pools, text, rng)
+            if im is not None:
+                X.append(im); Y.append(text); made_em += 1
+
+    # synthetic rendered lines over the FULL charset (font variety)
     for _ in range(synthetic_lines):
         text = _random_string(rng)
         X.append(_render_synthetic_line(text, rng)); Y.append(text)
@@ -458,7 +498,8 @@ def train_crnn_model(
         "line_accuracy": line_acc, "char_accuracy": char_acc,
         "labeled_chars": have_chars,
         "counts": {"real_lines": len(real_lines), "composite_lines": made,
-                   "synthetic_lines": synthetic_lines},
+                   "emnist_lines": made_em, "synthetic_lines": synthetic_lines},
+        "emnist_used": bool(made_em),
         "top_confusions": [{"pair": p, "count": c} for p, c in top_conf],
         "samples": samples,
     }

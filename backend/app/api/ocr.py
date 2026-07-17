@@ -103,8 +103,9 @@ async def start_tesseract_training(
 
 class TrainCrnnRequest(BaseModel):
     epochs: int = 40
-    synthetic_lines: int = 4000
+    synthetic_lines: int = 3000
     composite_lines: int = 4000
+    emnist_lines: int = 3000
     batch_size: int = 32
     learning_rate: float = 1e-3
     val_ratio: float = 0.15
@@ -126,7 +127,7 @@ async def start_crnn_training(
     req = body or TrainCrnnRequest()
     task = train_crnn_model.delay(
         project_id, req.epochs, req.synthetic_lines, req.composite_lines,
-        req.batch_size, req.learning_rate, req.val_ratio,
+        req.emnist_lines, req.batch_size, req.learning_rate, req.val_ratio,
     )
     return {"task_id": task.id, "status": "queued"}
 
