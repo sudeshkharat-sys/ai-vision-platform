@@ -30,8 +30,12 @@ const OcrTrainingPanel = ({ project, onClose }) => {
     const [modelInfo, setModelInfo] = useState(null);
     const [error, setError]       = useState(null);
 
+    // engine: 'cnn' (TensorFlow character classifier) or 'tesseract' (fine-tuned traineddata)
+    const [engine, setEngine]     = useState('cnn');
+
     // training settings
     const [epochs, setEpochs]     = useState(50);
+    const [maxIterations, setMaxIterations] = useState(800);
     const [target, setTarget]     = useState(300);
     const [imgSize, setImgSize]   = useState(64);
     const [fineTune, setFineTune] = useState(false);
@@ -94,20 +98,24 @@ const OcrTrainingPanel = ({ project, onClose }) => {
     const startTraining = async () => {
         setError(null); setResult(null); setMeta(null);
         try {
-            const res = await axios.post(`${API_URL}/ocr/train/${project.id}`, {
-                epochs: fineTune ? Math.min(epochs, 25) : epochs,
-                target_per_class: target,
-                img_size: imgSize,
-                fine_tune: fineTune,
-                focus_classes: fineTune ? focusChars : [],
-                use_pretrained: usePretrained,
-            });
+            const res = engine === 'tesseract'
+                ? await axios.post(`${API_URL}/ocr/train-tesseract/${project.id}`, {
+                    max_iterations: maxIterations,
+                })
+                : await axios.post(`${API_URL}/ocr/train/${project.id}`, {
+                    epochs: fineTune ? Math.min(epochs, 25) : epochs,
+                    target_per_class: target,
+                    img_size: imgSize,
+                    fine_tune: fineTune,
+                    focus_classes: fineTune ? focusChars : [],
+                    use_pretrained: usePretrained,
+                });
             setTaskId(res.data.task_id);
             setRunning(true);
             axios.post(`${API_URL}/pipeline/jobs`, {
                 task_id: res.data.task_id,
                 project_id: project.id,
-                job_type: 'ocr_training',
+                job_type: engine === 'tesseract' ? 'ocr_tesseract_training' : 'ocr_training',
             }).catch(() => {});
             pollTask(res.data.task_id);
         } catch (e) {
@@ -128,7 +136,8 @@ const OcrTrainingPanel = ({ project, onClose }) => {
         try {
             const form = new FormData();
             form.append('file', f);
-            const res = await axios.post(`${API_URL}/ocr/predict/${project.id}`, form, {
+            const res = await axios.post(
+                `${API_URL}/ocr/predict/${project.id}?engine=${engine}`, form, {
                 headers: { 'Content-Type': 'multipart/form-data' },
             });
             setTestResult(res.data);
@@ -221,9 +230,47 @@ const OcrTrainingPanel = ({ project, onClose }) => {
                         )}
                     </div>
 
+                    {/* ── Engine choice ─────────────────────────── */}
+                    <div className="ocr-section">
+                        <h3>OCR engine</h3>
+                        <div className="ocr-engine-choice">
+                            <label className={`ocr-engine-card ${engine === 'cnn' ? 'selected' : ''}`}>
+                                <input type="radio" name="ocr-engine" value="cnn"
+                                    checked={engine === 'cnn'} disabled={running}
+                                    onChange={() => { setEngine('cnn'); setResult(null); setTestResult(null); }} />
+                                <div>
+                                    <b>TensorFlow character model (.tflite)</b>
+                                    <p>Reads one character at a time from your labeled boxes.
+                                       Pretrained on EMNIST + synthetic engraved characters.
+                                       Runs on-device with tflite_flutter.</p>
+                                </div>
+                            </label>
+                            <label className={`ocr-engine-card ${engine === 'tesseract' ? 'selected' : ''}`}>
+                                <input type="radio" name="ocr-engine" value="tesseract"
+                                    checked={engine === 'tesseract'} disabled={running}
+                                    onChange={() => { setEngine('tesseract'); setResult(null); setTestResult(null); }} />
+                                <div>
+                                    <b>Tesseract fine-tune (.traineddata)</b>
+                                    <p>Starts from Google's pretrained eng model (tessdata_best) and
+                                       fine-tunes it on your labeled boxes, grouped into text lines
+                                       (the tesstrain flow). Drop-in file for flutter_tesseract_ocr.</p>
+                                </div>
+                            </label>
+                        </div>
+                    </div>
+
                     {/* ── Settings + start ──────────────────────── */}
                     <div className="ocr-section">
                         <h3>Training</h3>
+                        {engine === 'tesseract' ? (
+                        <div className="ocr-settings">
+                            <label>Max iterations
+                                <input type="number" min="100" max="10000" step="100"
+                                    value={maxIterations} disabled={running}
+                                    onChange={e => setMaxIterations(+e.target.value || 800)} />
+                            </label>
+                        </div>
+                        ) : (<>
                         <div className="ocr-settings">
                             <label>Epochs
                                 <input type="number" min="5" max="300" value={epochs}
@@ -305,17 +352,29 @@ const OcrTrainingPanel = ({ project, onClose }) => {
                                 )}
                             </div>
                         )}
+                        </>)}
 
                         {!running ? (
                             <button className="ocr-btn-train" onClick={startTraining}
                                 disabled={chars.length < 2}>
-                                <Play size={15} /> {fineTune ? 'Fine-tune model' : 'Train character model'}
+                                <Play size={15} /> {engine === 'tesseract'
+                                    ? 'Fine-tune Tesseract (eng → engraved)'
+                                    : fineTune ? 'Fine-tune model' : 'Train character model'}
                             </button>
                         ) : (
                             <div className="ocr-progress">
                                 <div className="ocr-progress-row">
                                     <span className="ocr-spinner" />
                                     <span>
+                                        {meta?.phase === 'extracting_lines' &&
+                                            `Building text lines… ${meta.current}/${meta.total} photos (${meta.lines ?? 0} lines)`}
+                                        {meta?.phase === 'preparing' && (meta.detail || 'Preparing…')}
+                                        {(meta?.phase === 'preparing_train_lines' || meta?.phase === 'preparing_eval_lines') &&
+                                            `Preparing Tesseract training files… ${meta.current}/${meta.total}`}
+                                        {meta?.phase === 'evaluating' && 'Evaluating on held-out lines…'}
+                                        {meta?.phase === 'training' && meta?.engine === 'tesseract' &&
+                                            `Fine-tuning Tesseract — iteration ${meta.iteration ?? 0}/${meta.total_iterations}` +
+                                            (meta.char_error != null ? ` (char error ${meta.char_error}%)` : '')}
                                         {meta?.phase === 'extracting_characters' &&
                                             `Cutting characters… ${meta.current}/${meta.total} photos`}
                                         {meta?.phase === 'augmenting' && 'Balancing classes with augmentation…'}
@@ -323,7 +382,7 @@ const OcrTrainingPanel = ({ project, onClose }) => {
                                             `Building pre-trained base (one-time): ${meta.detail || ''}` +
                                             (meta.epoch ? ` — epoch ${meta.epoch}/${meta.total_epochs}` :
                                              meta.current ? ` ${meta.current}/${meta.total}` : '')}
-                                        {(!meta || meta?.phase === 'training') &&
+                                        {(!meta || (meta?.phase === 'training' && meta?.engine !== 'tesseract')) &&
                                             `Training — epoch ${meta?.epoch ?? 0}/${meta?.total_epochs ?? epochs}` +
                                             (meta?.batch && meta?.total_batches
                                                 ? `, batch ${meta.batch}/${meta.total_batches}` : '') +
@@ -344,7 +403,7 @@ const OcrTrainingPanel = ({ project, onClose }) => {
                     </div>
 
                     {/* ── Results / trained model ───────────────── */}
-                    {(result || modelInfo?.has_model) && (
+                    {engine === 'cnn' && (result || modelInfo?.has_model) && (
                         <div className="ocr-section">
                             <h3>
                                 {result ? <><Check size={15} className="ocr-ok" /> Training complete</> : 'Trained model'}
@@ -437,6 +496,83 @@ const OcrTrainingPanel = ({ project, onClose }) => {
                                 Bundle <b>ocr_model.tflite</b> + <b>labels.txt</b> into the Digi OCR app
                                 (tflite_flutter). Input: one grayscale character crop, resized to
                                 {` ${finalMeta?.img_size || imgSize}×${finalMeta?.img_size || imgSize}`}, values scaled to 0–1.
+                            </p>
+                        </div>
+                    )}
+
+                    {/* ── Tesseract results / trained model ─────── */}
+                    {engine === 'tesseract' && (result?.engine === 'tesseract' || modelInfo?.tesseract?.has_model) && (
+                        <div className="ocr-section">
+                            <h3>
+                                {result?.engine === 'tesseract'
+                                    ? <><Check size={15} className="ocr-ok" /> Fine-tuning complete</>
+                                    : 'Fine-tuned Tesseract model'}
+                            </h3>
+                            {(() => {
+                                const tm = result?.engine === 'tesseract' ? result : modelInfo?.tesseract?.meta;
+                                if (!tm) return null;
+                                return (
+                                    <div className="ocr-results">
+                                        <div className="ocr-result-big">
+                                            <span>{pct(tm.val_accuracy)}</span>
+                                            <small>character accuracy on held-out lines
+                                                ({tm.val_lines} lines; trained on {tm.train_lines})</small>
+                                        </div>
+                                        {tm.top_confusions?.length > 0 && (
+                                            <p className="ocr-hint">
+                                                Most confused: {tm.top_confusions.slice(0, 5)
+                                                    .map(t => `${t.pair.replace('->', ' → ')} (${t.count})`).join(', ')}.
+                                                Label more examples of these characters and retrain.
+                                            </p>
+                                        )}
+                                        {(tm.eval_lines || []).slice(0, 8).map((l, i) => (
+                                            <p key={i} className="ocr-hint" style={{ margin: '2px 0' }}>
+                                                <b>{l.truth}</b> → read as <b>{l.predicted || '(nothing)'}</b>
+                                                {l.truth === l.predicted ? ' ✓' : ''}
+                                            </p>
+                                        ))}
+                                    </div>
+                                );
+                            })()}
+                            <div className="ocr-downloads">
+                                <button onClick={() => download('traineddata', 'engraved.traineddata')}>
+                                    <Download size={14} /> engraved.traineddata
+                                </button>
+                                <button onClick={() => download('tess_meta', 'tess_meta.json')}>
+                                    <Download size={14} /> tess_meta.json
+                                </button>
+                            </div>
+                            {/* ── Test window ─────────────────── */}
+                            <div className="ocr-test">
+                                <h3>Test the model</h3>
+                                <p className="ocr-hint">
+                                    Upload a plate photo — text lines are found and read with the
+                                    fine-tuned Tesseract model. Use a photo it was NOT trained on.
+                                </p>
+                                <label className={`ocr-btn-test ${testing ? 'busy' : ''}`}>
+                                    {testing
+                                        ? <><span className="ocr-spinner" /> Reading…</>
+                                        : <>📷 Choose test image</>}
+                                    <input type="file" accept="image/*" hidden
+                                        disabled={testing} onChange={handleTestImage} />
+                                </label>
+                                {testResult && (
+                                    <div className="ocr-test-result">
+                                        <div className="ocr-test-text">
+                                            <small>Model read:</small>
+                                            <span>{testResult.text || '(nothing)'}</span>
+                                        </div>
+                                        {testResult.preview && (
+                                            <img className="ocr-test-preview" src={testResult.preview}
+                                                alt="detected text lines" />
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+                            <p className="ocr-hint">
+                                Bundle <b>engraved.traineddata</b> into the Digi OCR app with the
+                                flutter_tesseract_ocr plugin (place it in the app's tessdata folder
+                                and use language code <b>engraved</b>).
                             </p>
                         </div>
                     )}

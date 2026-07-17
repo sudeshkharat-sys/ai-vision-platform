@@ -190,3 +190,16 @@
 .ocr-test-preview {
     max-width: 100%; border-radius: 8px; border: 1px solid #24304a;
 }
+
+/* engine choice */
+.ocr-engine-choice { display: flex; gap: 12px; flex-wrap: wrap; margin: 10px 0 4px; }
+.ocr-engine-card {
+    flex: 1 1 260px; display: flex; gap: 10px; align-items: flex-start;
+    background: #131c30; border: 1px solid #24304a; border-radius: 10px;
+    padding: 12px 14px; cursor: pointer; user-select: none;
+}
+.ocr-engine-card:hover { border-color: #3b4d73; }
+.ocr-engine-card.selected { border-color: #dc143c; background: #16203a; }
+.ocr-engine-card input { margin-top: 3px; accent-color: #dc143c; }
+.ocr-engine-card b { font-size: 13px; color: #e2e8f0; }
+.ocr-engine-card p { margin: 4px 0 0; font-size: 12px; color: #94a3b8; line-height: 1.45; }

@@ -19,6 +19,7 @@ from ..models.user import User
 from ..api.auth import get_current_user
 from ..api.deps import get_owned_project
 from ..tasks.ocr_training import train_ocr_model
+from ..tasks.tesseract_training import train_tesseract_model, CUSTOM_LANG
 
 router = APIRouter(prefix="/ocr", tags=["ocr"])
 
@@ -27,6 +28,12 @@ OCR_FILES = {
     "keras": "ocr_model.keras",
     "labels": "labels.txt",
     "meta": "ocr_meta.json",
+}
+
+# Tesseract engine artifacts live in <project>/ocr_tesseract/
+TESS_FILES = {
+    "traineddata": f"{CUSTOM_LANG}.traineddata",
+    "tess_meta": "tess_meta.json",
 }
 
 
@@ -56,6 +63,32 @@ async def start_ocr_training(
         project_id, req.epochs, req.img_size, req.target_per_class,
         req.val_ratio, req.batch_size, req.learning_rate,
         req.fine_tune, req.focus_classes, req.use_pretrained,
+    )
+    return {"task_id": task.id, "status": "queued"}
+
+
+class TrainTesseractRequest(BaseModel):
+    max_iterations: int = 800
+    val_ratio: float = 0.2
+    learning_rate: float = 1e-4
+
+
+@router.post("/train-tesseract/{project_id}")
+async def start_tesseract_training(
+    project_id: str,
+    body: TrainTesseractRequest = None,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Queue Tesseract LSTM fine-tuning: starts from Google's pretrained
+    eng.traineddata (tessdata_best) and continues training it on this
+    project's labeled character boxes, grouped into text lines.
+    """
+    await get_owned_project(project_id, current_user, db)
+    req = body or TrainTesseractRequest()
+    task = train_tesseract_model.delay(
+        project_id, req.max_iterations, req.val_ratio, req.learning_rate,
     )
     return {"task_id": task.id, "status": "queued"}
 
@@ -129,7 +162,38 @@ async def get_ocr_model_status(
         except Exception:
             meta = None
 
-    return {"has_model": files["tflite"]["exists"], "files": files, "meta": meta}
+    # Tesseract engine artifacts
+    tess_dir = settings.model_dir / project_id / "ocr_tesseract"
+    tess_files = {}
+    for key, name in TESS_FILES.items():
+        path = tess_dir / name
+        if path.exists():
+            stat = path.stat()
+            tess_files[key] = {
+                "exists": True,
+                "size_kb": round(stat.st_size / 1024, 1),
+                "modified_at": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+            }
+        else:
+            tess_files[key] = {"exists": False}
+    tess_meta = None
+    tess_meta_path = tess_dir / TESS_FILES["tess_meta"]
+    if tess_meta_path.exists():
+        try:
+            tess_meta = json.loads(tess_meta_path.read_text())
+        except Exception:
+            tess_meta = None
+
+    return {
+        "has_model": files["tflite"]["exists"],
+        "files": files,
+        "meta": meta,
+        "tesseract": {
+            "has_model": tess_files["traineddata"]["exists"],
+            "files": tess_files,
+            "meta": tess_meta,
+        },
+    }
 
 
 @router.get("/download/{project_id}/{file_type}")
@@ -139,11 +203,20 @@ async def download_ocr_file(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Download a trained OCR artifact: tflite | keras | labels | meta."""
+    """Download a trained OCR artifact:
+    tflite | keras | labels | meta (CNN engine)
+    traineddata | tess_meta (Tesseract engine)."""
     await get_owned_project(project_id, current_user, db)
+    if file_type in TESS_FILES:
+        path = settings.model_dir / project_id / "ocr_tesseract" / TESS_FILES[file_type]
+        if not path.exists():
+            raise HTTPException(status_code=404,
+                                detail="File not found — train the Tesseract model first")
+        return FileResponse(path=str(path), media_type="application/octet-stream",
+                            filename=TESS_FILES[file_type])
     if file_type not in OCR_FILES:
         raise HTTPException(status_code=400,
-                            detail=f"file_type must be one of {list(OCR_FILES)}")
+                            detail=f"file_type must be one of {list(OCR_FILES) + list(TESS_FILES)}")
     path = settings.model_dir / project_id / "ocr" / OCR_FILES[file_type]
     if not path.exists():
         raise HTTPException(status_code=404, detail="File not found — train the OCR model first")
@@ -410,10 +483,90 @@ def _segment_in_region(gray: np.ndarray):
     return [(x + rx, y + ry, w, h) for (x, y, w, h) in boxes], (rx, ry, rw, rh)
 
 
+def _predict_with_tesseract(project_id: str, img: np.ndarray, gray: np.ndarray):
+    """
+    Test-window prediction with the fine-tuned Tesseract model: find the
+    text band, group the segmented character boxes into rows, crop each
+    row and read it with `tesseract --psm 7` using the project's
+    <CUSTOM_LANG>.traineddata. Lines are normalized exactly like the
+    training lines so inference matches training.
+    """
+    import subprocess
+    import tempfile
+    from ..tasks.tesseract_training import _crop_line
+
+    tess_dir = settings.model_dir / project_id / "ocr_tesseract"
+    if not (tess_dir / TESS_FILES["traineddata"]).exists():
+        raise HTTPException(status_code=404,
+                            detail="No fine-tuned Tesseract model — train one first.")
+
+    boxes, region = _segment_in_region(gray)
+    if not boxes:
+        raise HTTPException(status_code=422,
+                            detail="No characters found. Try a tighter crop of the plate area.")
+
+    # Group segmented boxes into rows (same banding rule as segmentation)
+    med_h = float(np.median([b[3] for b in boxes]))
+    boxes = sorted(boxes, key=lambda b: b[1] + b[3] / 2)
+    rows = []
+    for b in boxes:
+        cy = b[1] + b[3] / 2
+        for row in rows:
+            ry = np.mean([x[1] + x[3] / 2 for x in row])
+            if abs(cy - ry) < med_h * 0.6:
+                row.append(b)
+                break
+        else:
+            rows.append([b])
+    for row in rows:
+        row.sort(key=lambda b: b[0])
+    rows.sort(key=lambda r: np.mean([b[1] for b in r]))
+
+    results, text = [], ""
+    with tempfile.TemporaryDirectory() as tmp:
+        for i, row in enumerate(rows):
+            # _crop_line takes (label, x1, y1, x2, y2) tuples
+            line = [("?", x, y, x + w, y + h) for (x, y, w, h) in row]
+            crop = _crop_line(img, line)
+            if crop is None:
+                continue
+            png = Path(tmp) / f"row_{i}.png"
+            cv2.imwrite(str(png), crop)
+            r = subprocess.run([
+                "tesseract", str(png), "stdout",
+                "--tessdata-dir", str(tess_dir), "-l", CUSTOM_LANG,
+                "--psm", "7",
+                "-c", "tessedit_char_whitelist=0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+            ], capture_output=True, text=True)
+            import re as _re
+            line_text = _re.sub(r"\s+", "", r.stdout.upper()) if r.returncode == 0 else ""
+            text += line_text
+            x1 = min(b[0] for b in row)
+            y1 = min(b[1] for b in row)
+            x2 = max(b[0] + b[2] for b in row)
+            y2 = max(b[1] + b[3] for b in row)
+            results.append({"char": line_text, "confidence": None,
+                            "box": [x1, y1, x2 - x1, y2 - y1]})
+            cv2.rectangle(img, (x1, y1), (x2, y2), (74, 222, 128), 2)
+            cv2.putText(img, line_text, (x1, max(18, y1 - 6)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (74, 222, 128), 2, cv2.LINE_AA)
+
+    rx, ry, rw, rh = region
+    H, W = gray.shape
+    if (rw, rh) != (W, H):
+        cv2.rectangle(img, (rx, ry), (rx + rw, ry + rh), (200, 200, 200), 1)
+
+    ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 85])
+    preview = "data:image/jpeg;base64," + base64.b64encode(buf.tobytes()).decode() if ok else None
+    return {"text": text, "characters": results, "preview": preview,
+            "num_found": len(text), "engine": "tesseract"}
+
+
 @router.post("/predict/{project_id}")
 async def predict_ocr(
     project_id: str,
     file: UploadFile = File(...),
+    engine: str = "cnn",
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -421,9 +574,12 @@ async def predict_ocr(
     Test window: segment an uploaded photo into characters and read
     each with the trained model. Returns the text, per-character
     confidence, and a preview image with boxes drawn.
+    engine=cnn (default) uses the TFLite/Keras classifier;
+    engine=tesseract uses the fine-tuned traineddata.
     """
     await get_owned_project(project_id, current_user, db)
-    model, classes, img_size = _load_project_model(project_id)
+    if engine == "cnn":
+        model, classes, img_size = _load_project_model(project_id)
 
     data = await file.read()
     img = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR)
@@ -436,6 +592,10 @@ async def predict_ocr(
         img = cv2.resize(img, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
 
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+    if engine == "tesseract":
+        return _predict_with_tesseract(project_id, img, gray)
+
     boxes, region = _segment_in_region(gray)
     if not boxes:
         raise HTTPException(status_code=422,

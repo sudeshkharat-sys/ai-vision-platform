@@ -12,6 +12,7 @@ celery_app = Celery(
         "app.tasks.video_processing",
         "app.tasks.active_learning",
         "app.tasks.ocr_training",
+        "app.tasks.tesseract_training",
     ],
 )
 
