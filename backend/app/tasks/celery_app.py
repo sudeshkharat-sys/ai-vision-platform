@@ -13,6 +13,7 @@ celery_app = Celery(
         "app.tasks.active_learning",
         "app.tasks.ocr_training",
         "app.tasks.tesseract_training",
+        "app.tasks.crnn_training",
     ],
 )
 

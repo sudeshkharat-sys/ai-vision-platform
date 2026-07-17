@@ -20,6 +20,7 @@ from ..api.auth import get_current_user
 from ..api.deps import get_owned_project
 from ..tasks.ocr_training import train_ocr_model
 from ..tasks.tesseract_training import train_tesseract_model, CUSTOM_LANG
+from ..tasks.crnn_training import train_crnn_model
 
 router = APIRouter(prefix="/ocr", tags=["ocr"])
 
@@ -34,6 +35,13 @@ OCR_FILES = {
 TESS_FILES = {
     "traineddata": f"{CUSTOM_LANG}.traineddata",
     "tess_meta": "tess_meta.json",
+}
+
+# CRNN line-recognizer artifacts live in <project>/ocr_crnn/
+CRNN_FILES = {
+    "crnn_tflite": "ocr_crnn.tflite",
+    "crnn_charset": "charset.txt",
+    "crnn_meta": "crnn_meta.json",
 }
 
 
@@ -89,6 +97,36 @@ async def start_tesseract_training(
     req = body or TrainTesseractRequest()
     task = train_tesseract_model.delay(
         project_id, req.max_iterations, req.val_ratio, req.learning_rate,
+    )
+    return {"task_id": task.id, "status": "queued"}
+
+
+class TrainCrnnRequest(BaseModel):
+    epochs: int = 40
+    synthetic_lines: int = 4000
+    composite_lines: int = 4000
+    batch_size: int = 32
+    learning_rate: float = 1e-3
+    val_ratio: float = 0.15
+
+
+@router.post("/train-crnn/{project_id}")
+async def start_crnn_training(
+    project_id: str,
+    body: TrainCrnnRequest = None,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Queue CRNN+CTC line-recognizer training — a real OCR that reads a whole
+    cropped line at once. Knows the full 0-9/A-Z (from synthetic text) and
+    fine-tunes on this project's labeled engraved lines.
+    """
+    await get_owned_project(project_id, current_user, db)
+    req = body or TrainCrnnRequest()
+    task = train_crnn_model.delay(
+        project_id, req.epochs, req.synthetic_lines, req.composite_lines,
+        req.batch_size, req.learning_rate, req.val_ratio,
     )
     return {"task_id": task.id, "status": "queued"}
 
@@ -184,6 +222,28 @@ async def get_ocr_model_status(
         except Exception:
             tess_meta = None
 
+    # CRNN line-recognizer artifacts
+    crnn_dir = settings.model_dir / project_id / "ocr_crnn"
+    crnn_files = {}
+    for key, name in CRNN_FILES.items():
+        path = crnn_dir / name
+        if path.exists():
+            stat = path.stat()
+            crnn_files[key] = {
+                "exists": True,
+                "size_kb": round(stat.st_size / 1024, 1),
+                "modified_at": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+            }
+        else:
+            crnn_files[key] = {"exists": False}
+    crnn_meta = None
+    crnn_meta_path = crnn_dir / CRNN_FILES["crnn_meta"]
+    if crnn_meta_path.exists():
+        try:
+            crnn_meta = json.loads(crnn_meta_path.read_text())
+        except Exception:
+            crnn_meta = None
+
     return {
         "has_model": files["tflite"]["exists"],
         "files": files,
@@ -192,6 +252,11 @@ async def get_ocr_model_status(
             "has_model": tess_files["traineddata"]["exists"],
             "files": tess_files,
             "meta": tess_meta,
+        },
+        "crnn": {
+            "has_model": crnn_files["crnn_tflite"]["exists"],
+            "files": crnn_files,
+            "meta": crnn_meta,
         },
     }
 
@@ -214,6 +279,13 @@ async def download_ocr_file(
                                 detail="File not found — train the Tesseract model first")
         return FileResponse(path=str(path), media_type="application/octet-stream",
                             filename=TESS_FILES[file_type])
+    if file_type in CRNN_FILES:
+        path = settings.model_dir / project_id / "ocr_crnn" / CRNN_FILES[file_type]
+        if not path.exists():
+            raise HTTPException(status_code=404,
+                                detail="File not found — train the CRNN model first")
+        return FileResponse(path=str(path), media_type="application/octet-stream",
+                            filename=CRNN_FILES[file_type])
     if file_type not in OCR_FILES:
         raise HTTPException(status_code=400,
                             detail=f"file_type must be one of {list(OCR_FILES) + list(TESS_FILES)}")
@@ -633,6 +705,89 @@ def _predict_with_tesseract(project_id: str, img: np.ndarray, gray: np.ndarray):
             "num_found": len(text), "engine": "tesseract"}
 
 
+# CRNN model cache: project_id -> (mtime, keras_model, charset)
+_CRNN_CACHE: dict = {}
+
+
+def _load_crnn(project_id: str):
+    crnn_dir = settings.model_dir / project_id / "ocr_crnn"
+    keras_path = crnn_dir / "ocr_crnn.keras"
+    if not keras_path.exists():
+        raise HTTPException(status_code=404, detail="No trained CRNN model — train one first.")
+    mtime = keras_path.stat().st_mtime
+    cached = _CRNN_CACHE.get(project_id)
+    if cached and cached[0] == mtime:
+        return cached[1], cached[2]
+    import tensorflow as tf
+    model = tf.keras.models.load_model(str(keras_path))
+    charset = (crnn_dir / "charset.txt").read_text().split()
+    _CRNN_CACHE[project_id] = (mtime, model, charset)
+    return model, charset
+
+
+def _predict_with_crnn(project_id: str, img: np.ndarray, gray: np.ndarray):
+    """
+    Read text with the CRNN line recognizer. Uses the project's trained YOLO
+    model to locate the text region(s) — exactly the pipeline the user
+    described (YOLO gives the area, CRNN reads it). If YOLO isn't trained,
+    reads the whole frame as a single line.
+    """
+    from ..tasks.crnn_training import _normalize_line, _greedy_decode, BLANK_INDEX
+
+    model, charset = _load_crnn(project_id)
+
+    # Locate line region(s). YOLO character boxes are grouped into row bands;
+    # each band becomes one line crop for the recognizer.
+    boxes = _yolo_char_boxes(project_id, img)
+    line_regions = []
+    if boxes:
+        med_h = float(np.median([b[3] for b in boxes]))
+        rows = []
+        for b in sorted(boxes, key=lambda b: b[1] + b[3] / 2):
+            cy = b[1] + b[3] / 2
+            for row in rows:
+                ry = np.mean([x[1] + x[3] / 2 for x in row])
+                if abs(cy - ry) < med_h * 0.6:
+                    row.append(b)
+                    break
+            else:
+                rows.append([b])
+        rows.sort(key=lambda r: np.mean([b[1] for b in r]))
+        for row in rows:
+            x1 = max(0, min(b[0] for b in row) - 4)
+            y1 = max(0, min(b[1] for b in row) - 4)
+            x2 = min(gray.shape[1], max(b[0] + b[2] for b in row) + 4)
+            y2 = min(gray.shape[0], max(b[1] + b[3] for b in row) + 4)
+            line_regions.append((x1, y1, x2 - x1, y2 - y1))
+    else:
+        line_regions = [(0, 0, gray.shape[1], gray.shape[0])]
+
+    results, text_lines = [], []
+    for (x, y, w, h) in line_regions:
+        crop = gray[y:y + h, x:x + w]
+        if crop.size == 0:
+            continue
+        norm = _normalize_line(crop).astype(np.float32) / 255.0
+        probs = model.predict(norm[None, ..., None], verbose=0)[0]
+        line_text = _greedy_decode(probs)
+        # mean confidence of the emitted (non-blank) steps
+        best = probs.argmax(axis=1)
+        confs = [float(probs[t, best[t]]) for t in range(len(best)) if best[t] != BLANK_INDEX]
+        conf = round(sum(confs) / len(confs), 3) if confs else None
+        text_lines.append(line_text)
+        results.append({"char": line_text, "confidence": conf, "box": [x, y, w, h]})
+        color = (74, 222, 128)
+        cv2.rectangle(img, (x, y), (x + w, y + h), color, 2)
+        cv2.putText(img, line_text, (x, max(18, y - 6)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2, cv2.LINE_AA)
+
+    ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 85])
+    preview = "data:image/jpeg;base64," + base64.b64encode(buf.tobytes()).decode() if ok else None
+    return {"text": "".join(text_lines), "characters": results, "preview": preview,
+            "num_found": len(text_lines), "engine": "crnn",
+            "detector": "yolo" if boxes else "full_frame"}
+
+
 @router.post("/predict/{project_id}")
 async def predict_ocr(
     project_id: str,
@@ -666,6 +821,8 @@ async def predict_ocr(
 
     if engine == "tesseract":
         return _predict_with_tesseract(project_id, img, gray)
+    if engine == "crnn":
+        return _predict_with_crnn(project_id, img, gray)
 
     # Prefer the project's trained YOLO detector for finding characters —
     # robust on reflective metal where thresholding fires on glare/noise.

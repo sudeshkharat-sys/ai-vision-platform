@@ -30,12 +30,14 @@ const OcrTrainingPanel = ({ project, onClose }) => {
     const [modelInfo, setModelInfo] = useState(null);
     const [error, setError]       = useState(null);
 
-    // engine: 'cnn' (TensorFlow character classifier) or 'tesseract' (fine-tuned traineddata)
+    // engine: 'cnn' (per-char classifier), 'tesseract' (fine-tuned traineddata),
+    // or 'crnn' (CTC line recognizer — reads a whole line at once)
     const [engine, setEngine]     = useState('cnn');
 
     // training settings
     const [epochs, setEpochs]     = useState(50);
     const [maxIterations, setMaxIterations] = useState(800);
+    const [crnnEpochs, setCrnnEpochs] = useState(40);
     const [target, setTarget]     = useState(300);
     const [imgSize, setImgSize]   = useState(64);
     const [fineTune, setFineTune] = useState(false);
@@ -98,7 +100,11 @@ const OcrTrainingPanel = ({ project, onClose }) => {
     const startTraining = async () => {
         setError(null); setResult(null); setMeta(null);
         try {
-            const res = engine === 'tesseract'
+            const res = engine === 'crnn'
+                ? await axios.post(`${API_URL}/ocr/train-crnn/${project.id}`, {
+                    epochs: crnnEpochs,
+                })
+                : engine === 'tesseract'
                 ? await axios.post(`${API_URL}/ocr/train-tesseract/${project.id}`, {
                     max_iterations: maxIterations,
                 })
@@ -115,7 +121,8 @@ const OcrTrainingPanel = ({ project, onClose }) => {
             axios.post(`${API_URL}/pipeline/jobs`, {
                 task_id: res.data.task_id,
                 project_id: project.id,
-                job_type: engine === 'tesseract' ? 'ocr_tesseract_training' : 'ocr_training',
+                job_type: engine === 'crnn' ? 'ocr_crnn_training'
+                    : engine === 'tesseract' ? 'ocr_tesseract_training' : 'ocr_training',
             }).catch(() => {});
             pollTask(res.data.task_id);
         } catch (e) {
@@ -245,6 +252,17 @@ const OcrTrainingPanel = ({ project, onClose }) => {
                                        Runs on-device with tflite_flutter.</p>
                                 </div>
                             </label>
+                            <label className={`ocr-engine-card ${engine === 'crnn' ? 'selected' : ''}`}>
+                                <input type="radio" name="ocr-engine" value="crnn"
+                                    checked={engine === 'crnn'} disabled={running}
+                                    onChange={() => { setEngine('crnn'); setResult(null); setTestResult(null); }} />
+                                <div>
+                                    <b>CRNN line reader (.tflite) — recommended</b>
+                                    <p>A real OCR: reads a whole cropped line at once (YOLO gives the
+                                       text area, this reads it). Knows all 0–9/A–Z out of the box and
+                                       fine-tunes on your engraved font. Exports to TFLite for Flutter.</p>
+                                </div>
+                            </label>
                             <label className={`ocr-engine-card ${engine === 'tesseract' ? 'selected' : ''}`}>
                                 <input type="radio" name="ocr-engine" value="tesseract"
                                     checked={engine === 'tesseract'} disabled={running}
@@ -262,7 +280,20 @@ const OcrTrainingPanel = ({ project, onClose }) => {
                     {/* ── Settings + start ──────────────────────── */}
                     <div className="ocr-section">
                         <h3>Training</h3>
-                        {engine === 'tesseract' ? (
+                        {engine === 'crnn' ? (
+                        <div className="ocr-settings">
+                            <label>Epochs
+                                <input type="number" min="5" max="200" value={crnnEpochs}
+                                    disabled={running}
+                                    onChange={e => setCrnnEpochs(+e.target.value || 40)} />
+                            </label>
+                            <p className="ocr-hint" style={{ flexBasis: '100%' }}>
+                                Trains on your real lines + thousands of lines composited from your
+                                own character crops + synthetic text for full-alphabet knowledge.
+                                First run is the slowest; exports <b>ocr_crnn.tflite</b> + <b>charset.txt</b>.
+                            </p>
+                        </div>
+                        ) : engine === 'tesseract' ? (
                         <div className="ocr-settings">
                             <label>Max iterations
                                 <input type="number" min="100" max="10000" step="100"
@@ -366,6 +397,12 @@ const OcrTrainingPanel = ({ project, onClose }) => {
                                 <div className="ocr-progress-row">
                                     <span className="ocr-spinner" />
                                     <span>
+                                        {meta?.phase === 'building_lines' &&
+                                            `Building text lines… ${meta.current}/${meta.total} photos (${meta.real_lines ?? 0} lines)`}
+                                        {meta?.phase === 'synthesizing' && (meta.detail || 'Synthesizing training lines…')}
+                                        {meta?.phase === 'training' && meta?.engine === 'crnn' &&
+                                            `Training CRNN — epoch ${meta.epoch ?? 0}/${meta.total_epochs}` +
+                                            (meta.eta_seconds ? ` (~${Math.ceil(meta.eta_seconds / 60)} min left)` : '')}
                                         {meta?.phase === 'extracting_lines' &&
                                             `Building text lines… ${meta.current}/${meta.total} photos (${meta.lines ?? 0} lines)`}
                                         {meta?.phase === 'preparing' && (meta.detail || 'Preparing…')}
@@ -382,7 +419,8 @@ const OcrTrainingPanel = ({ project, onClose }) => {
                                             `Building pre-trained base (one-time): ${meta.detail || ''}` +
                                             (meta.epoch ? ` — epoch ${meta.epoch}/${meta.total_epochs}` :
                                              meta.current ? ` ${meta.current}/${meta.total}` : '')}
-                                        {(!meta || (meta?.phase === 'training' && meta?.engine !== 'tesseract')) &&
+                                        {meta?.phase === 'evaluating' && 'Evaluating on held-out lines…'}
+                                        {(!meta || (meta?.phase === 'training' && meta?.engine !== 'tesseract' && meta?.engine !== 'crnn')) &&
                                             `Training — epoch ${meta?.epoch ?? 0}/${meta?.total_epochs ?? epochs}` +
                                             (meta?.batch && meta?.total_batches
                                                 ? `, batch ${meta.batch}/${meta.total_batches}` : '') +
@@ -578,6 +616,95 @@ const OcrTrainingPanel = ({ project, onClose }) => {
                                 Bundle <b>engraved.traineddata</b> into the Digi OCR app with the
                                 flutter_tesseract_ocr plugin (place it in the app's tessdata folder
                                 and use language code <b>engraved</b>).
+                            </p>
+                        </div>
+                    )}
+
+                    {/* ── CRNN results / trained model ──────────── */}
+                    {engine === 'crnn' && (result?.engine === 'crnn' || modelInfo?.crnn?.has_model) && (
+                        <div className="ocr-section">
+                            <h3>
+                                {result?.engine === 'crnn'
+                                    ? <><Check size={15} className="ocr-ok" /> Training complete</>
+                                    : 'Trained CRNN line reader'}
+                            </h3>
+                            {(() => {
+                                const cm = result?.engine === 'crnn' ? result : modelInfo?.crnn?.meta;
+                                if (!cm) return null;
+                                return (
+                                    <div className="ocr-results">
+                                        <div className="ocr-result-big">
+                                            <span>{pct(cm.line_accuracy)}</span>
+                                            <small>whole-line accuracy — {pct(cm.char_accuracy)} per character
+                                                (held-out lines)</small>
+                                        </div>
+                                        {cm.labeled_chars && (
+                                            <p className="ocr-hint">
+                                                Trained-on characters: {cm.labeled_chars.join(' ')}.
+                                                Others are known from synthetic text only — label real
+                                                examples of them to improve.
+                                            </p>
+                                        )}
+                                        {cm.top_confusions?.length > 0 && (
+                                            <p className="ocr-hint">
+                                                Most confused: {cm.top_confusions.slice(0, 5)
+                                                    .map(t => `${t.pair.replace('->', ' → ')} (${t.count})`).join(', ')}.
+                                            </p>
+                                        )}
+                                        {(cm.samples || []).slice(0, 8).map((l, i) => (
+                                            <p key={i} className="ocr-hint" style={{ margin: '2px 0' }}>
+                                                <b>{l.truth}</b> → read as <b>{l.predicted || '(nothing)'}</b>
+                                                {l.truth === l.predicted ? ' ✓' : ''}
+                                            </p>
+                                        ))}
+                                    </div>
+                                );
+                            })()}
+                            <div className="ocr-downloads">
+                                <button onClick={() => download('crnn_tflite', 'ocr_crnn.tflite')}>
+                                    <Download size={14} /> ocr_crnn.tflite
+                                </button>
+                                <button onClick={() => download('crnn_charset', 'charset.txt')}>
+                                    <Download size={14} /> charset.txt
+                                </button>
+                                <button onClick={() => download('crnn_meta', 'crnn_meta.json')}>
+                                    <Download size={14} /> crnn_meta.json
+                                </button>
+                            </div>
+                            <div className="ocr-test">
+                                <h3>Test the model</h3>
+                                <p className="ocr-hint">
+                                    Upload a plate photo — YOLO locates the text area(s) and the CRNN
+                                    reads each line. Use a photo it was NOT trained on.
+                                </p>
+                                <label className={`ocr-btn-test ${testing ? 'busy' : ''}`}>
+                                    {testing
+                                        ? <><span className="ocr-spinner" /> Reading…</>
+                                        : <>📷 Choose test image</>}
+                                    <input type="file" accept="image/*" hidden
+                                        disabled={testing} onChange={handleTestImage} />
+                                </label>
+                                {testResult && (
+                                    <div className="ocr-test-result">
+                                        <div className="ocr-test-text">
+                                            <small>Model read
+                                                {testResult.detector === 'yolo'
+                                                    ? ' (YOLO-located lines):'
+                                                    : ' (whole frame — train YOLO for line detection):'}
+                                            </small>
+                                            <span>{testResult.text || '(nothing)'}</span>
+                                        </div>
+                                        {testResult.preview && (
+                                            <img className="ocr-test-preview" src={testResult.preview}
+                                                alt="detected text lines" />
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+                            <p className="ocr-hint">
+                                Bundle <b>ocr_crnn.tflite</b> + <b>charset.txt</b> into the Digi OCR app.
+                                Input: grayscale line crop 32×256, /255; output: per-timestep character
+                                probabilities decoded with greedy CTC in Dart.
                             </p>
                         </div>
                     )}
