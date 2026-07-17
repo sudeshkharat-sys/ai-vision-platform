@@ -469,7 +469,12 @@ const OcrTrainingPanel = ({ project, onClose }) => {
                                 {testResult && (
                                     <div className="ocr-test-result">
                                         <div className="ocr-test-text">
-                                            <small>Model read ({testResult.num_found} characters):</small>
+                                            <small>
+                                                Model read ({testResult.num_found} characters)
+                                                {testResult.detector === 'yolo'
+                                                    ? ' — boxes found by your trained YOLO detector:'
+                                                    : ' — boxes found by basic image processing (train YOLO on this project for far better detection):'}
+                                            </small>
                                             <span>{testResult.text}</span>
                                         </div>
                                         {testResult.preview && (

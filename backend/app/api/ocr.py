@@ -229,6 +229,74 @@ async def download_ocr_file(
 # Model cache: project_id -> (mtime, keras_model, classes, img_size)
 _MODEL_CACHE: dict = {}
 
+# YOLO character-detector cache: project_id -> (mtime, yolo_model)
+_YOLO_CACHE: dict = {}
+
+
+def _sort_boxes_reading_order(boxes):
+    """Sort (x, y, w, h) boxes into rows (top-to-bottom), left-to-right."""
+    if not boxes:
+        return boxes
+    med_h = float(np.median([b[3] for b in boxes]))
+    boxes = sorted(boxes, key=lambda b: b[1] + b[3] / 2)
+    rows = []
+    for b in boxes:
+        cy = b[1] + b[3] / 2
+        for row in rows:
+            ry = np.mean([x[1] + x[3] / 2 for x in row])
+            if abs(cy - ry) < med_h * 0.6:
+                row.append(b)
+                break
+        else:
+            rows.append([b])
+    for row in rows:
+        row.sort(key=lambda b: b[0])
+    rows.sort(key=lambda r: np.mean([b[1] for b in r]))
+    return [b for row in rows for b in row]
+
+
+def _yolo_char_boxes(project_id: str, img: np.ndarray, conf: float = 0.25):
+    """
+    Detect character boxes with the project's trained YOLO model
+    (seed_best.pt). Returns (x, y, w, h) pixel boxes in reading order,
+    or None when the project has no trained YOLO model — callers fall
+    back to classical segmentation.
+
+    A LEARNED detector is the fix for reflective/engraved surfaces:
+    thresholding sees reflections as characters and misses real ones,
+    while YOLO trained on the same labeled boxes knows what an actual
+    character looks like.
+    """
+    model_path = settings.model_dir.resolve() / project_id / "seed_best.pt"
+    if not model_path.exists():
+        return None
+
+    mtime = model_path.stat().st_mtime
+    cached = _YOLO_CACHE.get(project_id)
+    if cached and cached[0] == mtime:
+        model = cached[1]
+    else:
+        from ultralytics import YOLO  # lazy — heavy import
+        model = YOLO(str(model_path))
+        _YOLO_CACHE[project_id] = (mtime, model)
+
+    results = model.predict(img, conf=conf, verbose=False)
+    boxes = []
+    for r in results:
+        names = r.names
+        for b in r.boxes:
+            label = str(names.get(int(b.cls[0]), "")).strip().upper()
+            if len(label) != 1:
+                continue  # only single-character classes belong to OCR
+            x1, y1, x2, y2 = (float(v) for v in b.xyxy[0])
+            w, h = x2 - x1, y2 - y1
+            if w < 2 or h < 2:
+                continue
+            boxes.append((int(x1), int(y1), int(round(w)), int(round(h))))
+    if not boxes:
+        return None
+    return _sort_boxes_reading_order(boxes)
+
 
 def _load_project_model(project_id: str):
     """Load (and cache) the trained Keras model + labels for a project."""
@@ -500,7 +568,10 @@ def _predict_with_tesseract(project_id: str, img: np.ndarray, gray: np.ndarray):
         raise HTTPException(status_code=404,
                             detail="No fine-tuned Tesseract model — train one first.")
 
-    boxes, region = _segment_in_region(gray)
+    boxes = _yolo_char_boxes(project_id, img)
+    region = (0, 0, gray.shape[1], gray.shape[0])
+    if boxes is None:
+        boxes, region = _segment_in_region(gray)
     if not boxes:
         raise HTTPException(status_code=422,
                             detail="No characters found. Try a tighter crop of the plate area.")
@@ -596,7 +667,14 @@ async def predict_ocr(
     if engine == "tesseract":
         return _predict_with_tesseract(project_id, img, gray)
 
-    boxes, region = _segment_in_region(gray)
+    # Prefer the project's trained YOLO detector for finding characters —
+    # robust on reflective metal where thresholding fires on glare/noise.
+    detector = "yolo"
+    boxes = _yolo_char_boxes(project_id, img)
+    region = (0, 0, gray.shape[1], gray.shape[0])
+    if boxes is None:
+        detector = "classical"
+        boxes, region = _segment_in_region(gray)
     if not boxes:
         raise HTTPException(status_code=422,
                             detail="No characters found. Try a tighter crop of the plate area.")
@@ -638,7 +716,7 @@ async def predict_ocr(
     preview = "data:image/jpeg;base64," + base64.b64encode(buf.tobytes()).decode() if ok else None
 
     return {"text": text, "characters": results, "preview": preview,
-            "num_found": len(results)}
+            "num_found": len(results), "detector": detector}
 
 
 # ── Auto-label: pre-annotate pending photos with the trained model ─
@@ -690,7 +768,9 @@ async def ocr_auto_annotate(
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         H, W = gray.shape
 
-        boxes, _region = _segment_in_region(gray)
+        boxes = _yolo_char_boxes(project_id, img)
+        if boxes is None:
+            boxes, _region = _segment_in_region(gray)
         crops, kept = [], []
         for (x, y, w, h) in boxes:
             bbox = [(x + w / 2) / W, (y + h / 2) / H, w / W, h / H]
