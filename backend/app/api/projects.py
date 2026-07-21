@@ -201,7 +201,6 @@ async def delete_project(
       - Images (SQLAlchemy cascade on project → images → annotations)
       - Training jobs (DB-level FK ON DELETE CASCADE)
       - Uploaded files on disk
-      - Trained models / weights on disk (YOLO .pt, OCR tflite/keras, etc.)
     """
     project = await get_owned_project(project_id, current_user, db)
 
@@ -213,14 +212,6 @@ async def delete_project(
     project_upload_dir = settings.upload_dir / project_id
     if project_upload_dir.exists():
         shutil.rmtree(project_upload_dir, ignore_errors=True)
-
-    # Remove trained models/weights from disk. These are the largest
-    # artifacts (YOLO seed/main .pt, custom_weights/, OCR ocr/ocr_crnn/
-    # ocr_tesseract/) and were previously left behind on every delete,
-    # silently filling the disk.
-    project_model_dir = settings.model_dir / project_id
-    if project_model_dir.exists():
-        shutil.rmtree(project_model_dir, ignore_errors=True)
 
     return {"message": "Project deleted successfully", "id": project_id}
 
