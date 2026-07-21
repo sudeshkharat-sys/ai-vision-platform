@@ -271,9 +271,12 @@ def train_crnn_model(
         return {"error": "No annotated images found"}
     anns_by_image = _group_annotations(ann_rows)
 
-    # ── Phase 2: real lines + per-char crops from the boxes ──────
-    real_lines = []          # (uint8 image, text)
-    char_crops = defaultdict(list)
+    # ── Phase 2: real lines + per-char crops, kept PER SOURCE IMAGE ──
+    # Grouping by image lets us hold out whole plates for validation, so the
+    # reported accuracy reflects generalization to unseen plates instead of
+    # near-duplicate crops from the same photo leaking across the split.
+    lines_by_image = defaultdict(list)                      # image_id -> [(img, text)]
+    crops_by_image = defaultdict(lambda: defaultdict(list)) # image_id -> label -> [crop]
     total = len(img_rows)
     for idx, img_row in enumerate(img_rows):
         real_path = Path(".") / img_row["filepath"].lstrip("/")
@@ -294,25 +297,58 @@ def train_crnn_model(
             y2 = min(ih, int(max(c[4] for c in line)))
             if x2 - x1 < 4 or y2 - y1 < 4:
                 continue
-            real_lines.append((_normalize_line(gray_full[y1:y2, x1:x2]), text))
-            # individual char crops for compositing
+            lines_by_image[img_row["id"]].append(
+                (_normalize_line(gray_full[y1:y2, x1:x2]), text))
+            # individual char crops for compositing (kept per image)
             for (label, cx1, cy1, cx2, cy2) in line:
                 if label not in _CHAR_TO_IDX:
                     continue
                 a1, b1 = max(0, int(cx1)), max(0, int(cy1))
                 a2, b2 = min(iw, int(cx2)), min(ih, int(cy2))
                 if a2 - a1 >= 2 and b2 - b1 >= 2:
-                    char_crops[label].append(_char_strip(gray_full[b1:b2, a1:a2]))
+                    crops_by_image[img_row["id"]][label].append(
+                        _char_strip(gray_full[b1:b2, a1:a2]))
 
         if (idx + 1) % 5 == 0 or idx + 1 == total:
             try:
                 self.update_state(state="STARTED", meta={
                     "phase": "building_lines", "current": idx + 1, "total": total,
-                    "real_lines": len(real_lines)})
+                    "real_lines": sum(len(v) for v in lines_by_image.values())})
             except Exception:
                 pass
 
+    # ── Phase 2b: hold out whole images for validation ───────────
+    # A random per-line split would put near-identical crops from the same
+    # plate on both sides and inflate accuracy. Instead we hold out entire
+    # images (plates) for validation, and composite training data only from
+    # TRAIN images, so a val plate never leaks — even into synthetic data.
+    image_ids = [iid for iid, lines in lines_by_image.items() if lines]
+    all_chars = set()
+    for cbi in crops_by_image.values():
+        all_chars.update(cbi.keys())
+    if not image_ids and not all_chars:
+        return {"error": "No usable character boxes found. Label characters (one box each) first."}
+
+    rng.shuffle(image_ids)
+    n_val_img = max(1, round(len(image_ids) * val_ratio)) if len(image_ids) >= 2 else 0
+    val_image_ids = set(image_ids[:n_val_img])
+    train_image_ids = [iid for iid in image_ids if iid not in val_image_ids]
+    real_val_available = n_val_img > 0
+
+    real_train_lines = [ln for iid in train_image_ids for ln in lines_by_image[iid]]
+    real_val_lines = [ln for iid in val_image_ids for ln in lines_by_image[iid]]
+
+    # Compositing pool = TRAIN images only (fallback to all if we couldn't
+    # hold any out, e.g. a single labeled image).
+    char_crops = defaultdict(list)
+    crop_source_ids = train_image_ids or image_ids
+    for iid in crop_source_ids:
+        for label, crops in crops_by_image[iid].items():
+            char_crops[label].extend(crops)
     have_chars = sorted(char_crops.keys())
+
+    # Downstream training uses `real_lines` = the TRAIN-side real lines.
+    real_lines = real_train_lines
     if not real_lines and not have_chars:
         return {"error": "No usable character boxes found. Label characters (one box each) first."}
 
@@ -359,10 +395,21 @@ def train_crnn_model(
         X.append(_render_synthetic_line(text, rng)); Y.append(text)
 
     # ── Phase 4: split + tensors ─────────────────────────────────
-    combined = list(zip(X, Y))
-    rng.shuffle(combined)
-    n_val = max(1, int(round(len(combined) * val_ratio)))
-    val_set, train_set = combined[:n_val], combined[n_val:]
+    # TRAIN = synthetic + composite + emnist + real lines from TRAIN images.
+    # VAL   = real lines from HELD-OUT plates ONLY, so line/char accuracy is
+    #         honest real-plate generalization, not a synthetic-dominated mix.
+    train_set = list(zip(X, Y))
+    rng.shuffle(train_set)
+    if real_val_available and real_val_lines:
+        val_set = list(real_val_lines)
+    else:
+        # 0-1 labeled plates: can't hold one out. Fall back to a small
+        # synthetic val so training still runs, and flag that the reported
+        # accuracy is NOT measured on real plates.
+        val_set = []
+        for _ in range(64):
+            t = _random_string(rng)
+            val_set.append((_render_synthetic_line(t, rng), t))
 
     def to_arrays(pairs, augment):
         imgs, labels, label_lens = [], [], []
@@ -496,8 +543,17 @@ def train_crnn_model(
         "input": f"grayscale {IMG_H}x{IMG_W}, /255, dark-on-light",
         "time_steps": TIME_STEPS, "charset": CHARSET, "blank_index": BLANK_INDEX,
         "line_accuracy": line_acc, "char_accuracy": char_acc,
+        # Whether the accuracy above was measured on HELD-OUT real plates.
+        # False = only 0-1 labeled plates existed, so it's a synthetic-only
+        # sanity number — label more distinct plates to get a real one.
+        "real_val": bool(real_val_available and real_val_lines),
+        "val_images": int(n_val_img),
+        "train_images": int(len(train_image_ids)),
+        "val_real_lines": int(len(real_val_lines)),
         "labeled_chars": have_chars,
-        "counts": {"real_lines": len(real_lines), "composite_lines": made,
+        "counts": {"real_train_lines": len(real_lines),
+                   "real_val_lines": len(real_val_lines),
+                   "composite_lines": made,
                    "emnist_lines": made_em, "synthetic_lines": synthetic_lines},
         "emnist_used": bool(made_em),
         "top_confusions": [{"pair": p, "count": c} for p, c in top_conf],
@@ -509,6 +565,8 @@ def train_crnn_model(
         "status": "success", "engine": "crnn",
         "model_path": str(tflite_path),
         "line_accuracy": line_acc, "char_accuracy": char_acc,
+        "real_val": meta["real_val"], "val_images": int(n_val_img),
+        "val_real_lines": int(len(real_val_lines)),
         "labeled_chars": have_chars,
         "top_confusions": meta["top_confusions"], "samples": samples[:20],
         "counts": meta["counts"],

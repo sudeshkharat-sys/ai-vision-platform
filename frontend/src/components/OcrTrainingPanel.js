@@ -32,7 +32,7 @@ const OcrTrainingPanel = ({ project, onClose }) => {
 
     // engine: 'cnn' (per-char classifier), 'tesseract' (fine-tuned traineddata),
     // or 'crnn' (CTC line recognizer — reads a whole line at once)
-    const [engine, setEngine]     = useState('cnn');
+    const [engine, setEngine]     = useState('crnn');
 
     // training settings
     const [epochs, setEpochs]     = useState(50);
@@ -636,8 +636,18 @@ const OcrTrainingPanel = ({ project, onClose }) => {
                                         <div className="ocr-result-big">
                                             <span>{pct(cm.line_accuracy)}</span>
                                             <small>whole-line accuracy — {pct(cm.char_accuracy)} per character
-                                                (held-out lines)</small>
+                                                {cm.real_val === false
+                                                    ? ' (synthetic sanity check only)'
+                                                    : ` (held-out plates${cm.val_images ? `: ${cm.val_images}` : ''})`}</small>
                                         </div>
+                                        {cm.real_val === false && (
+                                            <p className="ocr-hint" style={{ color: '#b45309' }}>
+                                                <AlertTriangle size={13} /> Only 0–1 labeled plates were
+                                                available, so no real plate could be held out — this number
+                                                reflects synthetic text, not your parts. Label a few more
+                                                distinct plates and retrain to get a trustworthy accuracy.
+                                            </p>
+                                        )}
                                         {cm.labeled_chars && (
                                             <p className="ocr-hint">
                                                 Trained-on characters: {cm.labeled_chars.join(' ')}.
