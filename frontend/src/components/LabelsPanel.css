@@ -393,6 +393,12 @@
     color: #dc143c;
 }
 
+.lp-icon-btn--images:not(:disabled):hover {
+    background: rgba(99, 102, 241, 0.08);
+    border-color: rgba(99, 102, 241, 0.3);
+    color: #6366f1;
+}
+
 .lp-icon-btn--del:not(:disabled):hover {
     background: rgba(220, 38, 38, 0.08);
     border-color: rgba(220, 38, 38, 0.3);

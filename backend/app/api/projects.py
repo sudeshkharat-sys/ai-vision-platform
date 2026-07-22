@@ -148,6 +148,27 @@ async def delete_class_annotations(
     return {"deleted_count": deleted_count, "class_name": class_name}
 
 
+@router.get("/{project_id}/class-images/{class_name}")
+async def get_class_images(
+    project_id: str,
+    class_name: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> Dict:
+    """Image IDs that have at least one annotation with this class_name —
+    powers 'edit mode': pick a class, jump straight to only the images
+    that use it, to re-annotate or fix it after a detection failure."""
+    await get_owned_project(project_id, current_user, db)
+    result = await db.execute(
+        select(Annotation.image_id)
+        .join(Image, Annotation.image_id == Image.id)
+        .where(Image.project_id == project_id, Annotation.class_name == class_name)
+        .distinct()
+    )
+    image_ids = [row[0] for row in result.fetchall()]
+    return {"class_name": class_name, "image_ids": image_ids, "count": len(image_ids)}
+
+
 @router.get("/{project_id}/class-stats")
 async def get_class_stats(
     project_id: str,

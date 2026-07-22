@@ -58,7 +58,7 @@ const ClassPicker = ({ classes, onConfirm, onCancel }) => {
     );
 };
 
-export default function ReviewPanel({ project, images, onClose, onAnnotationsUpdated, filterImageIds }) {
+export default function ReviewPanel({ project, images, onClose, onAnnotationsUpdated, filterImageIds, filterLabel }) {
     // If filterImageIds is provided (e.g. from AL suggestions), show only those images.
     // Otherwise show the normal annotated/annotating review queue.
     const reviewImages = filterImageIds?.size > 0
@@ -352,7 +352,11 @@ export default function ReviewPanel({ project, images, onClose, onAnnotationsUpd
                 <div className="rp-empty-card">
                     <div className="rp-empty-icon"><Check size={32} /></div>
                     <h3>Nothing to Review</h3>
-                    <p>Run Auto-Annotate first, then come back to review the results here.</p>
+                    <p>
+                        {filterLabel
+                            ? 'None of these images could be loaded — they may have changed since the class list was refreshed.'
+                            : 'Run Auto-Annotate first, then come back to review the results here.'}
+                    </p>
                     <button className="rp-btn rp-btn-neutral" onClick={onClose}>Close</button>
                 </div>
             </div>
@@ -368,8 +372,12 @@ export default function ReviewPanel({ project, images, onClose, onAnnotationsUpd
                     <div className="rp-header-left">
                         <span className="rp-header-icon"><Sparkles size={20} /></span>
                         <div>
-                            <div className="rp-header-title">Review Annotations</div>
-                            <div className="rp-header-sub">{project.name}</div>
+                            <div className="rp-header-title">
+                                {filterLabel ? 'Edit Mode' : 'Review Annotations'}
+                            </div>
+                            <div className="rp-header-sub">
+                                {project.name}{filterLabel ? ` — ${filterLabel}` : ''}
+                            </div>
                         </div>
                     </div>
 

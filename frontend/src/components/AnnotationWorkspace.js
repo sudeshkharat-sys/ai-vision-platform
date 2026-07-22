@@ -194,6 +194,7 @@ const AnnotationWorkspace = ({ project, onProjectUpdated }) => {
     const [ocrAutoLabeling, setOcrAutoLabeling] = useState(false);
     const [suggestedImageIds, setSuggestedImageIds] = useState(null);  // Set<id> or null (sidebar highlight)
     const [reviewFilterIds, setReviewFilterIds] = useState(null);      // Set<id> or null (ReviewPanel filter)
+    const [reviewFilterLabel, setReviewFilterLabel] = useState(null);  // string or null — shown in ReviewPanel header
     // Local copy of classes so edits from LabelsPanel are reflected instantly
     const [localClasses, setLocalClasses] = useState(project.classes || []);
     const [aiPrompt, setAiPrompt] = useState('');
@@ -606,6 +607,18 @@ Do you want to proceed?`;
         const idSet = new Set(imageIds.map(String));
         setSuggestedImageIds(idSet);   // highlight in sidebar
         setReviewFilterIds(idSet);     // open in ReviewPanel
+        setShowReviewPanel(true);
+    };
+
+    // Called from LabelsPanel's "edit images" action — jump into ReviewPanel
+    // showing only the images that use a specific class, so a class that's
+    // failing detection can be renamed, re-boxed, or reassigned without
+    // hunting through the whole project.
+    const handleEditClassImages = (className, imageIds) => {
+        const idSet = new Set(imageIds.map(String));
+        setReviewFilterIds(idSet);
+        setReviewFilterLabel(`Class "${className}" — ${idSet.size} image${idSet.size !== 1 ? 's' : ''}`);
+        setShowLabelsPanel(false);
         setShowReviewPanel(true);
     };
 
@@ -1499,6 +1512,7 @@ Do you want to proceed?`;
                 <LabelsPanel
                     project={{ ...project, classes: localClasses }}
                     onClose={() => setShowLabelsPanel(false)}
+                    onEditClassImages={handleEditClassImages}
                     onLabelsUpdated={(updatedClasses) => {
                         setLocalClasses(updatedClasses);
                         // Remove any used-class entries that were deleted or renamed
@@ -1517,7 +1531,8 @@ Do you want to proceed?`;
                     project={{ ...project, classes: localClasses }}
                     images={images}
                     filterImageIds={reviewFilterIds}
-                    onClose={() => { setShowReviewPanel(false); setReviewFilterIds(null); }}
+                    filterLabel={reviewFilterLabel}
+                    onClose={() => { setShowReviewPanel(false); setReviewFilterIds(null); setReviewFilterLabel(null); }}
                     onAnnotationsUpdated={() => {
                         // Refresh images and reload current image annotations after review
                         axios.get(`${API_URL}/images/project/${project.id}`)

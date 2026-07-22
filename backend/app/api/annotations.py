@@ -4,6 +4,7 @@ from sqlalchemy import select
 from ..database import get_db
 from ..models.annotation import Annotation
 from ..models.image import Image
+from ..models.project import Project
 from ..models.user import User
 from ..schemas.base import AnnotationCreate, AnnotationResponse
 from ..api.auth import get_current_user
@@ -22,6 +23,21 @@ class BboxUpdateBody(BaseModel):
 router = APIRouter(prefix="/annotations", tags=["annotations"])
 
 
+async def _ensure_class_registered(db: AsyncSession, project_id: str, class_name: str):
+    """Add class_name to project.classes if it isn't there yet.
+
+    Training builds data.yaml straight from project.classes and silently
+    skips any annotation whose class_name isn't in that list (see
+    _write_split in tasks/training.py) — so a brand-new class typed while
+    annotating must be registered here, or it vanishes from every future
+    training run with no error.
+    """
+    result = await db.execute(select(Project).where(Project.id == project_id))
+    project = result.scalar_one_or_none()
+    if project and class_name not in project.classes:
+        project.classes = [*project.classes, class_name]
+
+
 @router.post("", response_model=AnnotationResponse)
 async def create_annotation(
     data: AnnotationCreate,
@@ -30,6 +46,7 @@ async def create_annotation(
 ):
     # Verify the target image belongs to the current user
     image = await get_owned_image(data.image_id, current_user, db)
+    await _ensure_class_registered(db, image.project_id, data.class_name)
 
     annotation = Annotation(
         image_id=data.image_id,
@@ -79,6 +96,8 @@ async def classify_annotation(
 ):
     """Assign a class name to an AI-detected annotation and promote it to manual."""
     ann = await get_owned_annotation(annotation_id, current_user, db)
+    image = await get_owned_image(ann.image_id, current_user, db)
+    await _ensure_class_registered(db, image.project_id, data.class_name)
     ann.class_name = data.class_name
     ann.source = "manual"
     await db.commit()

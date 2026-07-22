@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import axios from 'axios';
 import './LabelsPanel.css';
-import { Tag, X, Check, Pencil, Trash2, ChevronUp, ChevronDown, AlertTriangle, Plus } from 'lucide-react';
+import { Tag, X, Check, Pencil, Trash2, ChevronUp, ChevronDown, AlertTriangle, Plus, Images } from 'lucide-react';
 import logoImg from '../logo.png';
 
 import { API_URL } from '../config';
@@ -17,7 +17,7 @@ const colorFor = (idx) => CLASS_COLORS[idx % CLASS_COLORS.length];
 // ══════════════════════════════════════════════════════
 //  LabelsPanel
 // ══════════════════════════════════════════════════════
-const LabelsPanel = ({ project, onClose, onLabelsUpdated }) => {
+const LabelsPanel = ({ project, onClose, onLabelsUpdated, onEditClassImages }) => {
     const [classes, setClasses]               = useState([...(project.classes || [])]);
     const [classCounts, setClassCounts]       = useState({});
     const [countsLoading, setCountsLoading]   = useState(true);
@@ -38,6 +38,9 @@ const LabelsPanel = ({ project, onClose, onLabelsUpdated }) => {
 
     const [saving, setSaving]                 = useState(false);
     const [error, setError]                   = useState(null);
+
+    // "Edit images" state — which class is currently fetching its image list
+    const [loadingEditClass, setLoadingEditClass] = useState(null);
 
     // ── Load annotation counts per class ─────────────────────────
     const loadCounts = useCallback(() => {
@@ -181,6 +184,31 @@ const LabelsPanel = ({ project, onClose, onLabelsUpdated }) => {
             setError('Failed to delete label.');
         } finally {
             setSaving(false);
+        }
+    };
+
+    // ── Edit images for a class ─────────────────────────────────────
+    // Jump into ReviewPanel filtered to only the images that use this
+    // class — for fixing a class after a detection failure: rename it
+    // here, then edit exactly the images it appears on (redraw boxes,
+    // reassign class, or remove it) without hunting through the whole set.
+    const handleEditImages = async (cls) => {
+        if (!onEditClassImages || loadingEditClass) return;
+        setLoadingEditClass(cls);
+        setError(null);
+        try {
+            const res = await axios.get(
+                `${API_URL}/projects/${project.id}/class-images/${encodeURIComponent(cls)}`
+            );
+            if (!res.data.image_ids || res.data.image_ids.length === 0) {
+                setError(`No images contain "${cls}" yet.`);
+                return;
+            }
+            onEditClassImages(cls, res.data.image_ids);
+        } catch {
+            setError('Failed to load images for this class.');
+        } finally {
+            setLoadingEditClass(null);
         }
     };
 
@@ -369,6 +397,16 @@ const LabelsPanel = ({ project, onClose, onLabelsUpdated }) => {
                                                     disabled={saving}
                                                     title="Rename"
                                                 ><Pencil size={14} /></button>
+                                                {onEditClassImages && (
+                                                    <button
+                                                        className="lp-icon-btn lp-icon-btn--images"
+                                                        onClick={() => handleEditImages(cls)}
+                                                        disabled={saving || count === 0 || loadingEditClass === cls}
+                                                        title={count === 0
+                                                            ? 'No images use this class yet'
+                                                            : `Edit the ${count} image${count !== 1 ? 's' : ''} using this class`}
+                                                    ><Images size={14} /></button>
+                                                )}
                                                 <button
                                                     className="lp-icon-btn lp-icon-btn--del"
                                                     onClick={() => confirmDelete(cls)}
