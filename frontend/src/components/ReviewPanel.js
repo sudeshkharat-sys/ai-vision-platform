@@ -59,10 +59,21 @@ const ClassPicker = ({ classes, onConfirm, onCancel }) => {
 };
 
 export default function ReviewPanel({ project, images, onClose, onAnnotationsUpdated, filterImageIds, filterLabel, filterClassName }) {
-    // If filterImageIds is provided (e.g. from AL suggestions), show only those images.
-    // Otherwise show the normal annotated/annotating review queue.
-    const reviewImages = filterImageIds?.size > 0
-        ? images.filter(img => filterImageIds.has(String(img.id)))
+    // Opened from LabelsPanel's "edit images" action — lets the user switch
+    // which class they're targeting without leaving the panel, instead of
+    // being locked to the one class they clicked in first.
+    const isClassEditMode = filterClassName != null;
+
+    // Local copies so switching class inside the panel doesn't need the parent.
+    const [activeClassName, setActiveClassName] = useState(filterClassName || null);
+    const [activeImageIds, setActiveImageIds] = useState(filterImageIds || null);
+    const [classCounts, setClassCounts] = useState({});
+    const [switchingClass, setSwitchingClass] = useState(false);
+
+    // If filterImageIds is provided (e.g. from AL suggestions or class-edit mode),
+    // show only those images. Otherwise show the normal annotated/annotating queue.
+    const reviewImages = activeImageIds?.size > 0
+        ? images.filter(img => activeImageIds.has(String(img.id)))
         : images.filter(img => img.status === 'annotated' || img.status === 'annotating');
 
     const [currentIdx, setCurrentIdx] = useState(0);
@@ -100,6 +111,43 @@ export default function ReviewPanel({ project, images, onClose, onAnnotationsUpd
         setStatusMsg(msg);
         setTimeout(() => setStatusMsg(null), 1800);
     }, []);
+
+    // Annotation counts per class — powers the class dropdown so you can see
+    // which classes actually have boxes before switching to them.
+    const loadClassCounts = useCallback(() => {
+        axios.get(`${API_URL}/projects/${project.id}/class-stats`)
+            .then(res => setClassCounts(res.data))
+            .catch(() => {});
+    }, [project.id]);
+
+    useEffect(() => {
+        if (isClassEditMode) loadClassCounts();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
+    // Switch which class this edit session targets — refetches that class's
+    // images and points the delete button at it, without closing the panel.
+    const handleClassSwitch = useCallback(async (newClassName) => {
+        if (!newClassName || newClassName === activeClassName || switchingClass) return;
+        setSwitchingClass(true);
+        try {
+            const res = await axios.get(
+                `${API_URL}/projects/${project.id}/class-images/${encodeURIComponent(newClassName)}`
+            );
+            const idSet = new Set((res.data.image_ids || []).map(String));
+            setActiveClassName(newClassName);
+            setActiveImageIds(idSet);
+            setCurrentIdx(0);
+            setSelectedIds(new Set());
+            showStatus(idSet.size
+                ? `Now editing "${newClassName}" — ${idSet.size} image${idSet.size !== 1 ? 's' : ''}`
+                : `No images use "${newClassName}" yet`);
+        } catch {
+            showStatus('Failed to load images for that class');
+        } finally {
+            setSwitchingClass(false);
+        }
+    }, [activeClassName, switchingClass, project.id, showStatus]);
 
     // Measure the rp-stage-wrap container directly to avoid image cropping
     // rp-stage-wrap has padding: 12px on all sides, so subtract 24px each axis
@@ -279,22 +327,23 @@ export default function ReviewPanel({ project, images, onClose, onAnnotationsUpd
     // this edit-mode view. Other classes' boxes on the same images are kept —
     // clears the way to redraw fresh boxes for this class (or a renamed one).
     const handleDeleteClassAnnotations = useCallback(async () => {
-        if (!filterClassName) return;
+        if (!activeClassName) return;
         if (!window.confirm(
-            `Delete every "${filterClassName}" box across all ${reviewImages.length} image(s) shown here?\n\nOther boxes on these images are kept. This cannot be undone.`
+            `Delete every "${activeClassName}" box across all ${reviewImages.length} image(s) shown here?\n\nOther boxes on these images are kept. This cannot be undone.`
         )) return;
         try {
             const res = await axios.delete(
-                `${API_URL}/projects/${project.id}/class-annotations/${encodeURIComponent(filterClassName)}`
+                `${API_URL}/projects/${project.id}/class-annotations/${encodeURIComponent(activeClassName)}`
             );
-            setAnnotations(prev => prev.filter(a => a.class_name !== filterClassName));
+            setAnnotations(prev => prev.filter(a => a.class_name !== activeClassName));
             setAnnCountCache({});
+            loadClassCounts();
             onAnnotationsUpdated?.();
-            showStatus(`✕ Deleted ${res.data.deleted_count} "${filterClassName}" box(es)`);
+            showStatus(`✕ Deleted ${res.data.deleted_count} "${activeClassName}" box(es)`);
         } catch {
             showStatus('Failed to delete annotations');
         }
-    }, [filterClassName, project, reviewImages.length, onAnnotationsUpdated, showStatus]);
+    }, [activeClassName, project, reviewImages.length, onAnnotationsUpdated, showStatus, loadClassCounts]);
 
     // Keyboard shortcuts
     useEffect(() => {
@@ -397,6 +446,24 @@ export default function ReviewPanel({ project, images, onClose, onAnnotationsUpd
     const drawnBox = pendingAnnotation || newAnnotation;
     const progressPct = reviewImages.length > 0 ? (reviewedIds.size / reviewImages.length) * 100 : 0;
 
+    // Class dropdown — shared between the normal view and the empty state, so
+    // hitting a class with zero images doesn't trap you with no way out but Close.
+    const classSwitcherEl = isClassEditMode ? (
+        <select
+            className="rp-class-select"
+            value={activeClassName || ''}
+            onChange={e => handleClassSwitch(e.target.value)}
+            disabled={switchingClass}
+            title="Switch which class you're editing"
+        >
+            {(project.classes || []).map(cls => (
+                <option key={cls} value={cls}>
+                    {cls}{classCounts[cls] !== undefined ? ` (${classCounts[cls]})` : ''}
+                </option>
+            ))}
+        </select>
+    ) : null;
+
     // ── Empty state ─────────────────────────────────────────────
     if (reviewImages.length === 0) {
         return (
@@ -405,10 +472,13 @@ export default function ReviewPanel({ project, images, onClose, onAnnotationsUpd
                     <div className="rp-empty-icon"><Check size={32} /></div>
                     <h3>Nothing to Review</h3>
                     <p>
-                        {filterLabel
-                            ? 'None of these images could be loaded — they may have changed since the class list was refreshed.'
-                            : 'Run Auto-Annotate first, then come back to review the results here.'}
+                        {isClassEditMode
+                            ? `No images use "${activeClassName}" right now — pick another class below.`
+                            : filterLabel
+                                ? 'None of these images could be loaded — they may have changed since the class list was refreshed.'
+                                : 'Run Auto-Annotate first, then come back to review the results here.'}
                     </p>
+                    {classSwitcherEl}
                     <button className="rp-btn rp-btn-neutral" onClick={onClose}>Close</button>
                 </div>
             </div>
@@ -425,10 +495,13 @@ export default function ReviewPanel({ project, images, onClose, onAnnotationsUpd
                         <span className="rp-header-icon"><Sparkles size={20} /></span>
                         <div>
                             <div className="rp-header-title">
-                                {filterLabel ? 'Edit Mode' : 'Review Annotations'}
+                                {isClassEditMode ? 'Edit Mode' : 'Review Annotations'}
                             </div>
                             <div className="rp-header-sub">
-                                {project.name}{filterLabel ? ` — ${filterLabel}` : ''}
+                                {project.name}
+                                {isClassEditMode
+                                    ? ` — Class "${activeClassName}" — ${reviewImages.length} image${reviewImages.length !== 1 ? 's' : ''}`
+                                    : (filterLabel ? ` — ${filterLabel}` : '')}
                             </div>
                         </div>
                     </div>
@@ -443,14 +516,17 @@ export default function ReviewPanel({ project, images, onClose, onAnnotationsUpd
                     </div>
 
                     <div className="rp-header-right">
-                        {filterClassName && (
-                            <button
-                                className="rp-delete-all-btn rp-delete-class-btn"
-                                onClick={handleDeleteClassAnnotations}
-                                title={`Delete every "${filterClassName}" box across the images shown here — other classes are kept`}
-                            >
-                                <Trash2 size={15} /> Delete All "{filterClassName}" Boxes
-                            </button>
+                        {isClassEditMode && (
+                            <>
+                                {classSwitcherEl}
+                                <button
+                                    className="rp-delete-all-btn rp-delete-class-btn"
+                                    onClick={handleDeleteClassAnnotations}
+                                    title={`Delete every "${activeClassName}" box across the images shown here — other classes are kept`}
+                                >
+                                    <Trash2 size={15} /> Delete All "{activeClassName}" Boxes
+                                </button>
+                            </>
                         )}
                         <button
                             className="rp-delete-all-btn"

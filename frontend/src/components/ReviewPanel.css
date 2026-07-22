@@ -145,6 +145,22 @@
   border-color: rgba(99, 102, 241, 0.55);
 }
 
+.rp-class-select {
+  background: #ffffff;
+  border: 1px solid rgba(99, 102, 241, 0.35);
+  color: #1a1a1a;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 7px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  max-width: 160px;
+}
+.rp-class-select:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 /* ── Body ─────────────────────────────────────────────────── */
 .rp-body {
   flex: 1;
