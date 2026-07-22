@@ -82,6 +82,8 @@ export default function ReviewPanel({ project, images, onClose, onAnnotationsUpd
     const [stagePos, setStagePos] = useState({ x: 0, y: 0 });
     // Cache of { auto, total } annotation counts per image id (built as user browses)
     const [annCountCache, setAnnCountCache] = useState({});
+    // Checked annotation ids on the current image — for "delete just these" selection
+    const [selectedIds, setSelectedIds] = useState(new Set());
     const stageWrapRef = useRef(null);
 
     const currentImage = reviewImages[currentIdx] || null;
@@ -133,6 +135,7 @@ export default function ReviewPanel({ project, images, onClose, onAnnotationsUpd
         setPendingAnnotation(null);
         setNewAnnotation(null);
         setIsDrawing(false);
+        setSelectedIds(new Set());
     }, [currentImage?.id]);
 
     // Load annotations when current image changes
@@ -216,6 +219,34 @@ export default function ReviewPanel({ project, images, onClose, onAnnotationsUpd
             // silent
         }
     }, [annotations, markReviewed, showStatus]);
+
+    const toggleSelected = useCallback((annId) => {
+        setSelectedIds(prev => {
+            const next = new Set(prev);
+            if (next.has(annId)) next.delete(annId); else next.add(annId);
+            return next;
+        });
+    }, []);
+
+    const toggleSelectAll = useCallback(() => {
+        setSelectedIds(prev =>
+            prev.size === annotations.length ? new Set() : new Set(annotations.map(a => a.id))
+        );
+    }, [annotations]);
+
+    const handleDeleteSelected = useCallback(async () => {
+        if (selectedIds.size === 0) return;
+        if (!window.confirm(`Delete the ${selectedIds.size} checked annotation(s) on this image? This cannot be undone.`)) return;
+        try {
+            await Promise.all([...selectedIds].map(id => axios.delete(`${API_URL}/annotations/${id}`)));
+            setAnnotations(prev => prev.filter(a => !selectedIds.has(a.id)));
+            setSelectedIds(new Set());
+            markReviewed();
+            showStatus(`✕ Deleted ${selectedIds.size} checked annotation(s)`);
+        } catch {
+            showStatus('Failed to delete selected annotations');
+        }
+    }, [selectedIds, markReviewed, showStatus]);
 
     const handleDeleteAllAnnotations = useCallback(async () => {
         if (!annotations.length) return;
@@ -650,6 +681,16 @@ export default function ReviewPanel({ project, images, onClose, onAnnotationsUpd
                         {/* Annotation review panel (right) */}
                         <div className="rp-ann-panel">
                             <div className="rp-ann-panel-header">
+                                {annotations.length > 0 && (
+                                    <input
+                                        type="checkbox"
+                                        className="rp-ann-checkbox rp-ann-select-all"
+                                        checked={selectedIds.size === annotations.length}
+                                        ref={el => { if (el) el.indeterminate = selectedIds.size > 0 && selectedIds.size < annotations.length; }}
+                                        onChange={toggleSelectAll}
+                                        title="Select all annotations on this image"
+                                    />
+                                )}
                                 <span className="rp-ann-panel-title">Annotations</span>
                                 {autoCount > 0 && (
                                     <span className="rp-unverified-pill">{autoCount} to review</span>
@@ -670,8 +711,15 @@ export default function ReviewPanel({ project, images, onClose, onAnnotationsUpd
                                     return (
                                         <div
                                             key={ann.id}
-                                            className={`rp-ann-row ${isAuto ? 'auto' : 'verified'}`}
+                                            className={`rp-ann-row ${isAuto ? 'auto' : 'verified'} ${selectedIds.has(ann.id) ? 'checked' : ''}`}
                                         >
+                                            <input
+                                                type="checkbox"
+                                                className="rp-ann-checkbox"
+                                                checked={selectedIds.has(ann.id)}
+                                                onChange={() => toggleSelected(ann.id)}
+                                                title="Select this annotation for bulk delete"
+                                            />
                                             <span className="rp-ann-dot" style={{ background: dotColor }} />
                                             <span className="rp-ann-class">{ann.class_name}</span>
                                             <span className={`rp-source-tag src-${ann.source}`}>
@@ -713,6 +761,15 @@ export default function ReviewPanel({ project, images, onClose, onAnnotationsUpd
 
                             {/* Bulk actions */}
                             <div className="rp-bulk">
+                                {selectedIds.size > 0 && (
+                                    <button
+                                        className="rp-bulk-btn rp-bulk-delete-selected"
+                                        onClick={handleDeleteSelected}
+                                        title="Delete only the checked annotations"
+                                    >
+                                        <Trash2 size={14} /> Delete Selected ({selectedIds.size})
+                                    </button>
+                                )}
                                 <button
                                     className="rp-bulk-btn rp-bulk-accept"
                                     disabled={autoCount === 0}

@@ -448,6 +448,22 @@
 .rp-ann-row.verified {
   opacity: 0.55;
 }
+.rp-ann-row.checked {
+  border-color: rgba(99, 102, 241, 0.45);
+  background: rgba(99, 102, 241, 0.05);
+  opacity: 1;
+}
+
+.rp-ann-checkbox {
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  accent-color: #6366f1;
+  cursor: pointer;
+}
+.rp-ann-select-all {
+  margin-right: 2px;
+}
 
 .rp-ann-dot {
   width: 7px;
@@ -566,6 +582,14 @@
 }
 .rp-bulk-delete-all:not(:disabled):hover {
   background: rgba(127, 29, 29, 0.12);
+}
+.rp-bulk-delete-selected {
+  background: rgba(99, 102, 241, 0.10);
+  border-color: rgba(99, 102, 241, 0.3);
+  color: #6366f1;
+}
+.rp-bulk-delete-selected:not(:disabled):hover {
+  background: rgba(99, 102, 241, 0.2);
 }
 
 /* ── Footer ───────────────────────────────────────────────── */
