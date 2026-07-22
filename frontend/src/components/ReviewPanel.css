@@ -135,6 +135,16 @@
   border-color: rgba(127, 29, 29, 0.5);
 }
 
+.rp-delete-class-btn {
+  background: rgba(99, 102, 241, 0.08);
+  border-color: rgba(99, 102, 241, 0.3);
+  color: #6366f1;
+}
+.rp-delete-class-btn:hover {
+  background: rgba(99, 102, 241, 0.16);
+  border-color: rgba(99, 102, 241, 0.55);
+}
+
 /* ── Body ─────────────────────────────────────────────────── */
 .rp-body {
   flex: 1;

@@ -195,6 +195,7 @@ const AnnotationWorkspace = ({ project, onProjectUpdated }) => {
     const [suggestedImageIds, setSuggestedImageIds] = useState(null);  // Set<id> or null (sidebar highlight)
     const [reviewFilterIds, setReviewFilterIds] = useState(null);      // Set<id> or null (ReviewPanel filter)
     const [reviewFilterLabel, setReviewFilterLabel] = useState(null);  // string or null — shown in ReviewPanel header
+    const [reviewFilterClassName, setReviewFilterClassName] = useState(null); // raw class name — enables per-class bulk delete in ReviewPanel
     // Local copy of classes so edits from LabelsPanel are reflected instantly
     const [localClasses, setLocalClasses] = useState(project.classes || []);
     const [aiPrompt, setAiPrompt] = useState('');
@@ -618,6 +619,7 @@ Do you want to proceed?`;
         const idSet = new Set(imageIds.map(String));
         setReviewFilterIds(idSet);
         setReviewFilterLabel(`Class "${className}" — ${idSet.size} image${idSet.size !== 1 ? 's' : ''}`);
+        setReviewFilterClassName(className);
         setShowLabelsPanel(false);
         setShowReviewPanel(true);
     };
@@ -1532,7 +1534,13 @@ Do you want to proceed?`;
                     images={images}
                     filterImageIds={reviewFilterIds}
                     filterLabel={reviewFilterLabel}
-                    onClose={() => { setShowReviewPanel(false); setReviewFilterIds(null); setReviewFilterLabel(null); }}
+                    filterClassName={reviewFilterClassName}
+                    onClose={() => {
+                        setShowReviewPanel(false);
+                        setReviewFilterIds(null);
+                        setReviewFilterLabel(null);
+                        setReviewFilterClassName(null);
+                    }}
                     onAnnotationsUpdated={() => {
                         // Refresh images and reload current image annotations after review
                         axios.get(`${API_URL}/images/project/${project.id}`)

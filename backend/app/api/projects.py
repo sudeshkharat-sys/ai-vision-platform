@@ -130,7 +130,13 @@ async def delete_class_annotations(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Delete all annotations that use a specific class_name in a project."""
+    """Delete all annotations that use a specific class_name in a project.
+
+    Only annotations of this class are removed — other boxes on the same
+    image are untouched. Any image left with zero annotations goes back to
+    'pending', matching the single-annotation delete endpoint, so it
+    reappears as needing attention instead of being mistaken for done.
+    """
     await get_owned_project(project_id, current_user, db)
     image_ids_subq = (
         select(Image.id).where(Image.project_id == project_id).scalar_subquery()
@@ -141,9 +147,25 @@ async def delete_class_annotations(
             Annotation.image_id.in_(image_ids_subq),
             Annotation.class_name == class_name,
         )
-        .returning(Annotation.id)
+        .returning(Annotation.id, Annotation.image_id)
     )
-    deleted_count = len(result.fetchall())
+    rows = result.fetchall()
+    deleted_count = len(rows)
+    affected_image_ids = {row.image_id for row in rows}
+
+    if affected_image_ids:
+        remaining = await db.execute(
+            select(Annotation.image_id)
+            .where(Annotation.image_id.in_(affected_image_ids))
+            .distinct()
+        )
+        still_annotated = {row[0] for row in remaining.fetchall()}
+        empty_image_ids = affected_image_ids - still_annotated
+        if empty_image_ids:
+            await db.execute(
+                update(Image).where(Image.id.in_(empty_image_ids)).values(status="pending")
+            )
+
     await db.commit()
     return {"deleted_count": deleted_count, "class_name": class_name}
 

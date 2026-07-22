@@ -58,7 +58,7 @@ const ClassPicker = ({ classes, onConfirm, onCancel }) => {
     );
 };
 
-export default function ReviewPanel({ project, images, onClose, onAnnotationsUpdated, filterImageIds, filterLabel }) {
+export default function ReviewPanel({ project, images, onClose, onAnnotationsUpdated, filterImageIds, filterLabel, filterClassName }) {
     // If filterImageIds is provided (e.g. from AL suggestions), show only those images.
     // Otherwise show the normal annotated/annotating review queue.
     const reviewImages = filterImageIds?.size > 0
@@ -244,6 +244,27 @@ export default function ReviewPanel({ project, images, onClose, onAnnotationsUpd
         }
     }, [project, reviewImages.length, onAnnotationsUpdated, showStatus]);
 
+    // Bulk-remove just the boxes of the filtered class across every image in
+    // this edit-mode view. Other classes' boxes on the same images are kept —
+    // clears the way to redraw fresh boxes for this class (or a renamed one).
+    const handleDeleteClassAnnotations = useCallback(async () => {
+        if (!filterClassName) return;
+        if (!window.confirm(
+            `Delete every "${filterClassName}" box across all ${reviewImages.length} image(s) shown here?\n\nOther boxes on these images are kept. This cannot be undone.`
+        )) return;
+        try {
+            const res = await axios.delete(
+                `${API_URL}/projects/${project.id}/class-annotations/${encodeURIComponent(filterClassName)}`
+            );
+            setAnnotations(prev => prev.filter(a => a.class_name !== filterClassName));
+            setAnnCountCache({});
+            onAnnotationsUpdated?.();
+            showStatus(`✕ Deleted ${res.data.deleted_count} "${filterClassName}" box(es)`);
+        } catch {
+            showStatus('Failed to delete annotations');
+        }
+    }, [filterClassName, project, reviewImages.length, onAnnotationsUpdated, showStatus]);
+
     // Keyboard shortcuts
     useEffect(() => {
         const handler = (e) => {
@@ -391,6 +412,15 @@ export default function ReviewPanel({ project, images, onClose, onAnnotationsUpd
                     </div>
 
                     <div className="rp-header-right">
+                        {filterClassName && (
+                            <button
+                                className="rp-delete-all-btn rp-delete-class-btn"
+                                onClick={handleDeleteClassAnnotations}
+                                title={`Delete every "${filterClassName}" box across the images shown here — other classes are kept`}
+                            >
+                                <Trash2 size={15} /> Delete All "{filterClassName}" Boxes
+                            </button>
+                        )}
                         <button
                             className="rp-delete-all-btn"
                             onClick={handleDeleteAllProjectAnnotations}
