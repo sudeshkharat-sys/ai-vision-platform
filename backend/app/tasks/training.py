@@ -454,6 +454,20 @@ def train_seed_model(
 
     anns_by_image = _group_annotations(ann_rows)
 
+    # ── Character/OCR projects: neutralise identity-changing augments ──
+    # When most classes are single characters (letters/digits), this seed
+    # model is a character detector for the OCR pipeline. The object-detection
+    # augmentation defaults are actively harmful here: horizontal/vertical
+    # flips MIRROR glyphs (S, 6, V, U…) and large rotations blur 6↔9, so the
+    # detector is trained on wrong-identity labels. Auto-clamp them so a
+    # character model can't be silently corrupted by the generic defaults.
+    single_char = [c for c in classes if isinstance(c, str) and len(c.strip()) == 1]
+    is_char_project = bool(classes) and len(single_char) >= 0.6 * len(classes)
+    if is_char_project:
+        aug_fliplr = 0.0
+        aug_flipud = 0.0
+        aug_degrees = min(aug_degrees, 3.0)
+
     # ── Phase 2: Build dataset ───────────────────────────────────
     dataset_path, n_train, n_val, n_test = _build_yolo_dataset(
         img_rows, anns_by_image, classes, project_id,
@@ -482,7 +496,8 @@ def train_seed_model(
         state="STARTED",
         meta={"epoch": 0, "total_epochs": total_epochs, "eta_seconds": None,
               "history": [], "model_name": custom_weights or model_name,
-              "split": {"train": n_train, "val": n_val, "test": n_test}},
+              "split": {"train": n_train, "val": n_val, "test": n_test},
+              "char_project": is_char_project},
     )
 
     # workers=0 is required for Celery daemonic processes; use cache=True so
@@ -556,6 +571,7 @@ def train_seed_model(
         "metrics":    final_metrics,
         "history":    epoch_history,
         "split":      {"train": n_train, "val": n_val, "test": n_test},
+        "char_project": is_char_project,
     }
 
 
