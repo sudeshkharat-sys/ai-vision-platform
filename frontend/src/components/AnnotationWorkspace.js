@@ -192,6 +192,7 @@ const AnnotationWorkspace = ({ project, onProjectUpdated }) => {
     const [showActiveLearningPanel, setShowActiveLearningPanel] = useState(false);
     const [showOcrPanel, setShowOcrPanel] = useState(false);
     const [ocrAutoLabeling, setOcrAutoLabeling] = useState(false);
+    const [seedModelInfo, setSeedModelInfo] = useState(null); // { exists, modified_at } — character detector status for OCR projects
     const [suggestedImageIds, setSuggestedImageIds] = useState(null);  // Set<id> or null (sidebar highlight)
     const [reviewFilterIds, setReviewFilterIds] = useState(null);      // Set<id> or null (ReviewPanel filter)
     const [reviewFilterLabel, setReviewFilterLabel] = useState(null);  // string or null — shown in ReviewPanel header
@@ -603,6 +604,19 @@ Do you want to proceed?`;
         setTimeout(() => setStatusMsg(null), 3500);
     };
 
+    // Character detector (seed YOLO model) status — shown in the OCR sidebar
+    // so it's obvious whether "find the char boxes" step has been trained yet.
+    const loadSeedModelInfo = useCallback(() => {
+        axios.get(`${API_URL}/pipeline/model-details/${project.id}`)
+            .then(res => setSeedModelInfo(res.data.seed || null))
+            .catch(() => {});
+    }, [project.id]);
+
+    useEffect(() => {
+        if (project.project_type === 'ocr') loadSeedModelInfo();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [project.id, project.project_type]);
+
     // Called from ActiveLearningPanel when user clicks "Annotate These"
     const handleAnnotateImages = (imageIds) => {
         const idSet = new Set(imageIds.map(String));
@@ -990,8 +1004,20 @@ Do you want to proceed?`;
                         <div className="ocr-flow-hint">
                             1. Upload plate photos<br />
                             2. Box + label each character<br />
-                            3. Train → download .tflite
+                            3. Train Character Detector (YOLO) — finds each char box<br />
+                            4. Train OCR Model — reads each box<br />
+                            5. Test / download
                         </div>
+                        <button className="btn-action" onClick={() => setShowTrainingPanel(true)}>
+                            <Rocket size={14} /> Train Character Detector
+                        </button>
+                        {seedModelInfo && (
+                            <p className="ocr-seed-status">
+                                {seedModelInfo.exists
+                                    ? '✓ Character detector trained'
+                                    : '— Character detector not trained yet (test window falls back to slower classical detection)'}
+                            </p>
+                        )}
                         <button className="btn-action btn-action-ocr" onClick={() => setShowOcrPanel(true)}>
                             <Type size={14} /> Train OCR Model
                         </button>
@@ -1489,7 +1515,10 @@ Do you want to proceed?`;
             {showTrainingPanel && (
                 <TrainingPanel
                     project={project}
-                    onClose={() => setShowTrainingPanel(false)}
+                    onClose={() => {
+                        setShowTrainingPanel(false);
+                        if (project.project_type === 'ocr') loadSeedModelInfo();
+                    }}
                 />
             )}
             {showAutoAnnotatePanel && (

@@ -1098,6 +1098,14 @@
   margin-bottom: 8px;
 }
 
+.ocr-seed-status {
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: #64748b;
+  margin: -2px 0 8px;
+  padding: 0 2px;
+}
+
 /* ── OCR character picker (type-to-label) ──────────────────────── */
 .class-picker--ocr {
   width: 340px;
