@@ -240,7 +240,10 @@ def _write_split(dataset_path, split_name, split_imgs, anns_by_image, classes,
         if not real_path.exists():
             real_path = settings.upload_dir.parent / Path(img["filepath"].lstrip("/"))
 
-        dest_name = os.path.basename(img["filepath"])
+        # Index-prefixed so a duplicated entry (rare-class oversampling repeats
+        # the same source image several times in split_imgs) gets its own file
+        # instead of silently overwriting the first copy at the same path.
+        dest_name = f"{idx}_{os.path.basename(img['filepath'])}"
         dest_path = dataset_path / "images" / split_name / dest_name
 
         if preprocess:
@@ -277,8 +280,130 @@ def _write_split(dataset_path, split_name, split_imgs, anns_by_image, classes,
                     f.write(f"{cls_idx} {bbox[0]} {bbox[1]} {bbox[2]} {bbox[3]}\n")
 
 
+def _oversample_rare_images(train_imgs, anns_by_image, classes, max_dup=6):
+    """
+    Duplicate whole training images that contain under-represented single-
+    character classes, so YOLO sees rare characters (e.g. a class with only
+    1-2 real boxes) far more often per epoch.
+
+    Only kicks in for character/OCR-detector projects (>=60% single-char
+    classes) — a general detection project's rare class is more likely a
+    genuinely rare real-world case, not an artifact of which photos got
+    uploaded, so it's left to YOLO's normal augmentation there.
+
+    Train split only — never called on val/test, which must stay an
+    untouched, representative sample for honest metrics.
+    """
+    single_char_classes = {c for c in classes if isinstance(c, str) and len(c.strip()) == 1}
+    if not single_char_classes or len(single_char_classes) < 0.6 * len(classes):
+        return train_imgs
+
+    counts = {c: 0 for c in single_char_classes}
+    for img in train_imgs:
+        for ann in anns_by_image.get(img["id"], []):
+            if ann["class_name"] in counts:
+                counts[ann["class_name"]] += 1
+
+    present_counts = [c for c in counts.values() if c > 0]
+    if not present_counts:
+        return train_imgs
+    target = max(present_counts)
+
+    out = []
+    for img in train_imgs:
+        img_classes = {
+            ann["class_name"] for ann in anns_by_image.get(img["id"], [])
+            if ann["class_name"] in counts
+        }
+        if not img_classes:
+            out.append(img)
+            continue
+        rarest = min(counts[c] for c in img_classes)
+        dup = min(max_dup, max(1, round(target / rarest)))
+        out.extend([img] * dup)
+    return out
+
+
+def _emnist_detection_images(classes, anns_by_image, dataset_path, imgsz=640,
+                             per_rare_class=15, rare_ratio=0.5, task=None):
+    """
+    Synthesize extra YOLO training images for under-represented character
+    classes, using real EMNIST character crops (not just augmented copies
+    of the one real photo you have) placed as a standalone box on a plain
+    textured background — giving the detector genuine shape diversity for
+    a class like a single-example 'V'.
+
+    Character/OCR-detector projects only (>=60% single-char classes);
+    silently returns 0 for other projects or when EMNIST can't be fetched
+    (offline). Writes straight into dataset_path/images/train + labels/train.
+    """
+    single_char_classes = [c for c in classes if isinstance(c, str) and len(c.strip()) == 1]
+    if not single_char_classes or len(single_char_classes) < 0.6 * len(classes):
+        return 0
+
+    counts = {c: 0 for c in single_char_classes}
+    for anns in anns_by_image.values():
+        for ann in anns:
+            if ann["class_name"] in counts:
+                counts[ann["class_name"]] += 1
+    present = [n for n in counts.values() if n > 0]
+    if not present:
+        return 0
+    target = max(present)
+    rare_classes = [c for c, n in counts.items() if n < target * rare_ratio]
+    if not rare_classes:
+        return 0
+
+    from .ocr_training import _load_emnist_chars
+    from .crnn_training import CHARSET  # 0-9 then A-Z — same label order EMNIST uses
+
+    rng = random.Random(1234)
+    char_size = max(28, imgsz // 10)
+    pool = _load_emnist_chars(char_size, per_class=per_rare_class * 2, rng=rng, task=task)
+    if pool is None:
+        return 0
+    xs, ys = pool
+    by_class = defaultdict(list)
+    for x, y in zip(xs, ys):
+        if y < len(CHARSET):
+            by_class[CHARSET[y]].append(x)
+
+    img_dir = dataset_path / "images" / "train"
+    lbl_dir = dataset_path / "labels" / "train"
+    img_dir.mkdir(parents=True, exist_ok=True)
+    lbl_dir.mkdir(parents=True, exist_ok=True)
+
+    written = 0
+    for cls in rare_classes:
+        crops = by_class.get(cls)
+        if not crops:
+            continue  # EMNIST has no examples of this symbol at all
+        cls_idx = classes.index(cls)
+        for i in range(per_rare_class):
+            crop = crops[i % len(crops)]
+            bg = rng.randint(170, 230)
+            noise = np.random.default_rng(rng.randrange(1 << 30)).integers(-15, 16, (imgsz, imgsz))
+            canvas = np.clip(np.full((imgsz, imgsz), bg, dtype=np.int16) + noise, 0, 255).astype(np.uint8)
+
+            ch_h = rng.randint(int(imgsz * 0.08), int(imgsz * 0.16))
+            resized = cv2.resize(crop, (ch_h, ch_h), interpolation=cv2.INTER_AREA)
+            x0 = rng.randint(0, imgsz - ch_h)
+            y0 = rng.randint(0, imgsz - ch_h)
+            canvas[y0:y0 + ch_h, x0:x0 + ch_h] = resized
+
+            name = f"emnist_synth_{cls}_{i}"
+            cv2.imwrite(str(img_dir / f"{name}.png"), canvas)
+            xc, yc = (x0 + ch_h / 2) / imgsz, (y0 + ch_h / 2) / imgsz
+            side = ch_h / imgsz
+            with open(lbl_dir / f"{name}.txt", "w") as f:
+                f.write(f"{cls_idx} {xc} {yc} {side} {side}\n")
+            written += 1
+    return written
+
+
 def _build_yolo_dataset(img_rows, anns_by_image, classes, project_id,
-                        train_ratio=0.8, val_ratio=0.15, preprocess=True, task=None):
+                        train_ratio=0.8, val_ratio=0.15, preprocess=True,
+                        imgsz=640, task=None):
     """
     Build a YOLO dataset directory with proper train / val / test splits.
 
@@ -298,6 +423,7 @@ def _build_yolo_dataset(img_rows, anns_by_image, classes, project_id,
         img_rows, train_ratio=train_ratio, val_ratio=val_ratio,
         anns_by_image=anns_by_image,
     )
+    train_imgs = _oversample_rare_images(train_imgs, anns_by_image, classes)
 
     total = len(train_imgs) + len(val_imgs) + len(test_imgs)
 
@@ -322,6 +448,8 @@ def _build_yolo_dataset(img_rows, anns_by_image, classes, project_id,
                      preprocess=preprocess, task=task,
                      progress_offset=len(train_imgs) + len(val_imgs), progress_total=total)
 
+    n_synthetic = _emnist_detection_images(classes, anns_by_image, dataset_path, imgsz=imgsz, task=task)
+
     data_yaml: dict = {
         "path":  str(dataset_path.absolute()),
         "train": "images/train",
@@ -335,7 +463,7 @@ def _build_yolo_dataset(img_rows, anns_by_image, classes, project_id,
     with open(dataset_path / "data.yaml", "w") as f:
         yaml.dump(data_yaml, f)
 
-    return dataset_path, len(train_imgs), len(val_imgs), len(test_imgs)
+    return dataset_path, len(train_imgs) + n_synthetic, len(val_imgs), len(test_imgs)
 
 
 def _make_epoch_callback(celery_task, total_epochs, epoch_history, epoch_start_times, stop_flag):
@@ -471,7 +599,7 @@ def train_seed_model(
     # ── Phase 2: Build dataset ───────────────────────────────────
     dataset_path, n_train, n_val, n_test = _build_yolo_dataset(
         img_rows, anns_by_image, classes, project_id,
-        preprocess=preprocess, task=self,
+        preprocess=preprocess, imgsz=imgsz, task=self,
     )
 
     # ── Phase 3: Train ───────────────────────────────────────────
@@ -646,7 +774,7 @@ def train_main_model(
     # ── Phase 2: Build dataset ───────────────────────────────────
     dataset_path, n_train, n_val, n_test = _build_yolo_dataset(
         img_rows, anns_by_image, classes, f"{project_id}_main",
-        preprocess=preprocess, task=self,
+        preprocess=preprocess, imgsz=imgsz, task=self,
     )
 
     # ── Phase 3: Train ───────────────────────────────────────────

@@ -688,9 +688,13 @@ const OcrTrainingPanel = ({ project, onClose }) => {
                                     <div className="ocr-test-result">
                                         <div className="ocr-test-text">
                                             <small>Model read
-                                                {testResult.detector === 'yolo'
-                                                    ? ' (YOLO-located lines):'
-                                                    : ' (whole frame — train YOLO for line detection):'}
+                                                {testResult.region_source === 'yolo_chars'
+                                                    ? ' (YOLO-located character boxes):'
+                                                    : testResult.region_source === 'yolo_plate'
+                                                        ? ' (YOLO-located plate region):'
+                                                        : testResult.detector === 'yolo'
+                                                            ? ' (YOLO-located lines):'
+                                                            : ' (whole frame — train YOLO for line detection):'}
                                             </small>
                                             <span>{testResult.text || '(nothing)'}</span>
                                         </div>

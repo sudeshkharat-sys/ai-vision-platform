@@ -328,17 +328,15 @@ def _sort_boxes_reading_order(boxes):
     return [b for row in rows for b in row]
 
 
-def _yolo_char_boxes(project_id: str, img: np.ndarray, conf: float = 0.25):
-    """
-    Detect character boxes with the project's trained YOLO model
-    (seed_best.pt). Returns (x, y, w, h) pixel boxes in reading order,
-    or None when the project has no trained YOLO model — callers fall
-    back to classical segmentation.
+PLATE_CLASS_NAME = "PLATE"  # region box that marks the whole plate/text area
 
-    A LEARNED detector is the fix for reflective/engraved surfaces:
-    thresholding sees reflections as characters and misses real ones,
-    while YOLO trained on the same labeled boxes knows what an actual
-    character looks like.
+
+def _yolo_predict_raw(project_id: str, img: np.ndarray, conf: float):
+    """
+    Load (and cache) the project's trained YOLO model and run inference.
+    Returns the raw ultralytics results, or None if no seed model exists.
+    Shared by _yolo_char_boxes and _yolo_plate_region so both read from the
+    one model + one forward pass' worth of caching logic.
     """
     model_path = settings.model_dir.resolve() / project_id / "seed_best.pt"
     if not model_path.exists():
@@ -353,7 +351,25 @@ def _yolo_char_boxes(project_id: str, img: np.ndarray, conf: float = 0.25):
         model = YOLO(str(model_path))
         _YOLO_CACHE[project_id] = (mtime, model)
 
-    results = model.predict(img, conf=conf, verbose=False)
+    return model.predict(img, conf=conf, verbose=False)
+
+
+def _yolo_char_boxes(project_id: str, img: np.ndarray, conf: float = 0.25):
+    """
+    Detect character boxes with the project's trained YOLO model
+    (seed_best.pt). Returns (x, y, w, h) pixel boxes in reading order,
+    or None when the project has no trained YOLO model — callers fall
+    back to classical segmentation.
+
+    A LEARNED detector is the fix for reflective/engraved surfaces:
+    thresholding sees reflections as characters and misses real ones,
+    while YOLO trained on the same labeled boxes knows what an actual
+    character looks like.
+    """
+    results = _yolo_predict_raw(project_id, img, conf)
+    if results is None:
+        return None
+
     boxes = []
     for r in results:
         names = r.names
@@ -369,6 +385,38 @@ def _yolo_char_boxes(project_id: str, img: np.ndarray, conf: float = 0.25):
     if not boxes:
         return None
     return _sort_boxes_reading_order(boxes)
+
+
+def _yolo_plate_region(project_id: str, img: np.ndarray, conf: float = 0.25):
+    """
+    Best "plate" region box from the project's trained YOLO model, as
+    (x, y, w, h) pixels, or None if no seed model / no "plate" class /
+    nothing detected. A project only has this when a "plate" label was
+    added and boxed around the whole plate on training photos.
+
+    This gives a robust text-region crop even on a photo where individual
+    character boxes come back weak or empty — much better than reading the
+    entire raw frame (background, glare, plate edge included).
+    """
+    results = _yolo_predict_raw(project_id, img, conf)
+    if results is None:
+        return None
+
+    best = None  # (confidence, x, y, w, h)
+    for r in results:
+        names = r.names
+        for b in r.boxes:
+            label = str(names.get(int(b.cls[0]), "")).strip().upper()
+            if label != PLATE_CLASS_NAME:
+                continue
+            x1, y1, x2, y2 = (float(v) for v in b.xyxy[0])
+            w, h = x2 - x1, y2 - y1
+            if w < 4 or h < 4:
+                continue
+            score = float(b.conf[0])
+            if best is None or score > best[0]:
+                best = (score, int(x1), int(y1), int(round(w)), int(round(h)))
+    return best[1:] if best else None
 
 
 def _load_project_model(project_id: str):
@@ -624,6 +672,24 @@ def _segment_in_region(gray: np.ndarray):
     return [(x + rx, y + ry, w, h) for (x, y, w, h) in boxes], (rx, ry, rw, rh)
 
 
+def _segment_with_plate_hint(project_id: str, img: np.ndarray, gray: np.ndarray):
+    """
+    Classical character segmentation for when YOLO found no character
+    boxes. Prefers the trained "plate" region (a real detection) as the
+    search area over _find_text_region's morphology-based guess; falls
+    back to that guess when there's no plate class trained.
+    Returns (boxes, region) exactly like _segment_in_region.
+    """
+    plate = _yolo_plate_region(project_id, img)
+    if plate:
+        px, py, pw, ph = plate
+        roi = gray[py:py + ph, px:px + pw]
+        boxes = _segment_characters(roi)
+        if boxes:
+            return [(x + px, y + py, w, h) for (x, y, w, h) in boxes], plate
+    return _segment_in_region(gray)
+
+
 def _predict_with_tesseract(project_id: str, img: np.ndarray, gray: np.ndarray):
     """
     Test-window prediction with the fine-tuned Tesseract model: find the
@@ -644,7 +710,7 @@ def _predict_with_tesseract(project_id: str, img: np.ndarray, gray: np.ndarray):
     boxes = _yolo_char_boxes(project_id, img)
     region = (0, 0, gray.shape[1], gray.shape[0])
     if boxes is None:
-        boxes, region = _segment_in_region(gray)
+        boxes, region = _segment_with_plate_hint(project_id, img, gray)
     if not boxes:
         raise HTTPException(status_code=422,
                             detail="No characters found. Try a tighter crop of the plate area.")
@@ -730,18 +796,24 @@ def _predict_with_crnn(project_id: str, img: np.ndarray, gray: np.ndarray):
     """
     Read text with the CRNN line recognizer. Uses the project's trained YOLO
     model to locate the text region(s) — exactly the pipeline the user
-    described (YOLO gives the area, CRNN reads it). If YOLO isn't trained,
-    reads the whole frame as a single line.
+    described (YOLO gives the area, CRNN reads it).
+
+    Region priority:
+    1. Character boxes grouped into row bands — most precise when the
+       character detector fires confidently.
+    2. The trained "plate" region box (if that class exists) — a robust
+       whole-plate crop when character boxes come back weak or empty.
+    3. The whole frame, as an absolute last resort.
     """
     from ..tasks.crnn_training import _normalize_line, _greedy_decode, BLANK_INDEX
 
     model, charset = _load_crnn(project_id)
 
-    # Locate line region(s). YOLO character boxes are grouped into row bands;
-    # each band becomes one line crop for the recognizer.
     boxes = _yolo_char_boxes(project_id, img)
     line_regions = []
+    region_source = "full_frame"
     if boxes:
+        region_source = "yolo_chars"
         med_h = float(np.median([b[3] for b in boxes]))
         rows = []
         for b in sorted(boxes, key=lambda b: b[1] + b[3] / 2):
@@ -761,7 +833,13 @@ def _predict_with_crnn(project_id: str, img: np.ndarray, gray: np.ndarray):
             y2 = min(gray.shape[0], max(b[1] + b[3] for b in row) + 4)
             line_regions.append((x1, y1, x2 - x1, y2 - y1))
     else:
-        line_regions = [(0, 0, gray.shape[1], gray.shape[0])]
+        plate = _yolo_plate_region(project_id, img)
+        if plate:
+            region_source = "yolo_plate"
+            px, py, pw, ph = plate
+            line_regions = [(px, py, pw, ph)]
+        else:
+            line_regions = [(0, 0, gray.shape[1], gray.shape[0])]
 
     results, text_lines = [], []
     for (x, y, w, h) in line_regions:
@@ -786,7 +864,8 @@ def _predict_with_crnn(project_id: str, img: np.ndarray, gray: np.ndarray):
     preview = "data:image/jpeg;base64," + base64.b64encode(buf.tobytes()).decode() if ok else None
     return {"text": "".join(text_lines), "characters": results, "preview": preview,
             "num_found": len(text_lines), "engine": "crnn",
-            "detector": "yolo" if boxes else "full_frame"}
+            "detector": "yolo" if region_source != "full_frame" else "full_frame",
+            "region_source": region_source}
 
 
 @router.post("/predict/{project_id}")
@@ -832,7 +911,7 @@ async def predict_ocr(
     region = (0, 0, gray.shape[1], gray.shape[0])
     if boxes is None:
         detector = "classical"
-        boxes, region = _segment_in_region(gray)
+        boxes, region = _segment_with_plate_hint(project_id, img, gray)
     if not boxes:
         raise HTTPException(status_code=422,
                             detail="No characters found. Try a tighter crop of the plate area.")
@@ -928,7 +1007,7 @@ async def ocr_auto_annotate(
 
         boxes = _yolo_char_boxes(project_id, img)
         if boxes is None:
-            boxes, _region = _segment_in_region(gray)
+            boxes, _region = _segment_with_plate_hint(project_id, img, gray)
         crops, kept = [], []
         for (x, y, w, h) in boxes:
             bbox = [(x + w / 2) / W, (y + h / 2) / H, w / W, h / H]
