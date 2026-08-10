@@ -1039,6 +1039,9 @@ Do you want to proceed?`;
                         <button className="btn-action btn-action-labels" onClick={() => setShowLabelsPanel(true)}>
                             <Tag size={14} /> Edit Labels
                         </button>
+                        <button className="btn-action btn-action-models" onClick={() => setShowModelsPanel(true)}>
+                            <Package size={14} /> View Models
+                        </button>
                     </div>
                 ) : (
                     <div className="sidebar-section sidebar-actions">
