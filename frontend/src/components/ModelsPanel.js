@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
-import { Eye, Leaf, Target, X, RefreshCw, Brain, HardDrive, TrendingUp, Calendar, Download, RotateCcw, Info, Check, Circle } from 'lucide-react';
+import { Eye, Leaf, Target, X, RefreshCw, Brain, HardDrive, TrendingUp, Calendar, Download, RotateCcw, Info, Check, Circle, Type } from 'lucide-react';
 import './ModelsPanel.css';
 import logoImg from '../logo.png';
 
@@ -262,20 +262,123 @@ function ModelCard({ type, data, onTrain, onDownload, downloading }) {
 }
 
 /* ─────────────────────────────────────────────────────────────────
+   OCR Recognizer (CRNN) Card -- the seed/main cards above only ever
+   covered the YOLO detector; this project may also have a trained CRNN
+   line-reader (tflite + charset.txt + crnn_meta.json under ocr_crnn/),
+   which used to have no presence at all in this panel even though the
+   Download Model Pack button includes its files whenever they exist.
+   ───────────────────────────────────────────────────────────────── */
+function OcrRecognizerCard({ crnn, onDownload, downloading }) {
+    const exists = crnn?.has_model;
+    const meta = crnn?.meta || {};
+    const tfliteFile = crnn?.files?.crnn_tflite;
+
+    return (
+        <div className={`mp-card mp-ocr-card ${exists ? 'mp-card--trained' : 'mp-card--empty'}`}>
+            <div className="mp-card-bar" style={{ background: 'linear-gradient(135deg, #7c5cfc, #4c8bf5)' }} />
+            <div className="mp-card-header">
+                <div className="mp-card-icon" style={{ background: 'linear-gradient(135deg, #7c5cfc, #4c8bf5)' }}>
+                    <Type size={20} />
+                </div>
+                <div className="mp-card-title-wrap">
+                    <h3 className="mp-card-title">OCR Recognizer (CRNN)</h3>
+                    <p className="mp-card-desc">Reads the text inside boxes the detector finds</p>
+                </div>
+                <div className={`mp-card-status ${exists ? 'mp-card-status--ok' : 'mp-card-status--none'}`}>
+                    {exists ? <><Check size={14} /> Trained</> : <><Circle size={14} /> Not trained</>}
+                </div>
+            </div>
+
+            {exists ? (
+                <>
+                    <div className="mp-card-tags">
+                        <span className="mp-tag mp-tag--size">
+                            <HardDrive size={12} /> {tfliteFile?.size_kb != null ? `${tfliteFile.size_kb} KB` : '—'}
+                        </span>
+                        {tfliteFile?.modified_at && (
+                            <span className="mp-tag mp-tag--date">
+                                <Calendar size={12} /> {fmtDate(tfliteFile.modified_at)}
+                            </span>
+                        )}
+                    </div>
+                    <div className="mp-metrics">
+                        <MetricPill label="Line accuracy" value={pct(meta.line_accuracy)} color={mapColor(meta.line_accuracy)} />
+                        <MetricPill label="Char accuracy" value={pct(meta.char_accuracy)} color={mapColor(meta.char_accuracy)} />
+                    </div>
+                    <div className="mp-card-actions">
+                        <button
+                            className="mp-btn-download"
+                            onClick={() => onDownload('crnn_tflite', 'ocr_crnn.tflite')}
+                            disabled={downloading === 'crnn_tflite'}
+                        >
+                            {downloading === 'crnn_tflite'
+                                ? <><span className="mp-spinner" />Downloading…</>
+                                : <><Download size={14} /> Download .tflite</>
+                            }
+                        </button>
+                        <button
+                            className="mp-btn-download"
+                            onClick={() => onDownload('crnn_charset', 'charset.txt')}
+                            disabled={downloading === 'crnn_charset'}
+                        >
+                            {downloading === 'crnn_charset'
+                                ? <><span className="mp-spinner" />Downloading…</>
+                                : <><Download size={14} /> charset.txt</>
+                            }
+                        </button>
+                        <button
+                            className="mp-btn-download"
+                            onClick={() => onDownload('crnn_meta', 'crnn_meta.json')}
+                            disabled={downloading === 'crnn_meta'}
+                        >
+                            {downloading === 'crnn_meta'
+                                ? <><span className="mp-spinner" />Downloading…</>
+                                : <><Download size={14} /> meta.json</>
+                            }
+                        </button>
+                    </div>
+                </>
+            ) : (
+                <div className="mp-card-empty">
+                    <div className="mp-card-empty-icon" style={{ color: '#7c5cfc' }}>
+                        <Type size={36} />
+                    </div>
+                    <p className="mp-card-empty-text">
+                        No trained OCR recognizer yet.<br />
+                        <span>Train it from "Train OCR Model" in the sidebar.</span>
+                    </p>
+                </div>
+            )}
+        </div>
+    );
+}
+
+/* ─────────────────────────────────────────────────────────────────
    Main Panel
    ───────────────────────────────────────────────────────────────── */
 const ModelsPanel = ({ project, onClose, onGoToTrain }) => {
     const [details, setDetails]     = useState(null);
+    const [ocrStatus, setOcrStatus] = useState(null);
     const [loading, setLoading]     = useState(true);
     const [error, setError]         = useState(null);
-    const [downloading, setDownloading] = useState(null); // 'seed' | 'main' | null
+    const [downloading, setDownloading] = useState(null); // 'seed' | 'main' | 'crnn_tflite' | 'crnn_charset' | 'crnn_meta' | null
     const [downloadingPack, setDownloadingPack] = useState(false);
 
     const load = useCallback(() => {
         setLoading(true);
         setError(null);
-        axios.get(`${API_URL}/pipeline/model-details/${project.id}`)
-            .then(res => setDetails(res.data))
+        Promise.all([
+            axios.get(`${API_URL}/pipeline/model-details/${project.id}`),
+            // Whether a class detector even runs OCR isn't known here -- the
+            // status endpoint just reports what's on disk either way, same
+            // as how OcrTrainingPanel already reads it, so it's safe to call
+            // for a plain detection project too (comes back "not trained").
+            axios.get(`${API_URL}/ocr/model-status/${project.id}`).catch(() => null),
+        ])
+            .then(([detailsRes, ocrRes]) => {
+                setDetails(detailsRes.data);
+                setOcrStatus(ocrRes?.data?.crnn || null);
+            })
             .catch(() => setError('Could not load model details.'))
             .finally(() => setLoading(false));
     }, [project.id]);
@@ -326,6 +429,28 @@ const ModelsPanel = ({ project, onClose, onGoToTrain }) => {
             setError('Failed to download model pack -- train a detector and/or the OCR recognizer first.');
         } finally {
             setDownloadingPack(false);
+        }
+    };
+
+    const handleDownloadOcrFile = async (fileType, filename) => {
+        setDownloading(fileType);
+        try {
+            const res = await axios.get(
+                `${API_URL}/ocr/download/${project.id}/${fileType}`,
+                { responseType: 'blob' }
+            );
+            const url  = URL.createObjectURL(new Blob([res.data]));
+            const link = document.createElement('a');
+            link.href     = url;
+            link.download = filename;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            URL.revokeObjectURL(url);
+        } catch {
+            setError(`Failed to download ${filename}.`);
+        } finally {
+            setDownloading(null);
         }
     };
 
@@ -392,6 +517,11 @@ const ModelsPanel = ({ project, onClose, onGoToTrain }) => {
                                 data={details.main}
                                 onTrain={handleTrain}
                                 onDownload={handleDownload}
+                                downloading={downloading}
+                            />
+                            <OcrRecognizerCard
+                                crnn={ocrStatus}
+                                onDownload={handleDownloadOcrFile}
                                 downloading={downloading}
                             />
                         </div>
