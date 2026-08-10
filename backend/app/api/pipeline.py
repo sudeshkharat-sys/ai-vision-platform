@@ -1,9 +1,9 @@
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 from typing import List, Optional
 from datetime import datetime
-import base64, io, cv2, numpy as np
+import base64, io, re, zipfile, cv2, numpy as np
 import redis as redis_lib
 from ..tasks.training import train_seed_model, train_main_model
 from ..tasks.auto_annotate import auto_annotate_remaining
@@ -465,6 +465,69 @@ async def download_model(
         path=str(path),
         media_type="application/octet-stream",
         filename=filename,
+    )
+
+
+def _project_slug(name: str) -> str:
+    """Filesystem/zip-entry-safe stand-in for a project's free-text name --
+    no slugify helper existed anywhere in this codebase before this."""
+    slug = re.sub(r"[^A-Za-z0-9]+", "_", name or "").strip("_").lower()
+    return slug or "project"
+
+
+@router.get("/download-model-pack/{project_id}")
+async def download_model_pack(
+    project_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Bundle everything needed to attach this project's model(s) to a
+    Flutter app into one zip, instead of four separate downloads from two
+    different panels: the trained detector weights (main if it exists,
+    else seed) plus the exported CRNN OCR recognizer's tflite/charset/meta
+    (only included if that export actually ran). Entries are renamed after
+    the project so the zip is self-describing once extracted.
+    """
+    project = await get_owned_project(project_id, current_user, db)
+    slug = _project_slug(project.name)
+
+    project_model_dir = settings.model_dir / project_id
+    main_path = project_model_dir / "main_best.pt"
+    seed_path = project_model_dir / "seed_best.pt"
+    pt_path = main_path if main_path.exists() else (seed_path if seed_path.exists() else None)
+
+    crnn_dir = project_model_dir / "ocr_crnn"
+    tflite_path = crnn_dir / "ocr_crnn.tflite"
+    charset_path = crnn_dir / "charset.txt"
+    meta_path = crnn_dir / "crnn_meta.json"
+
+    entries = []
+    if pt_path is not None:
+        entries.append((pt_path, f"{slug}.pt"))
+    if tflite_path.exists():
+        entries.append((tflite_path, f"{slug}.tflite"))
+    if charset_path.exists():
+        entries.append((charset_path, f"{slug}_charset.txt"))
+    if meta_path.exists():
+        entries.append((meta_path, f"{slug}_meta.json"))
+
+    if not entries:
+        raise HTTPException(
+            status_code=404,
+            detail="No trained model files found for this project yet -- train a detector and/or "
+            "the CRNN OCR recognizer first.",
+        )
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        for src_path, arcname in entries:
+            zf.write(src_path, arcname=arcname)
+    buffer.seek(0)
+
+    return StreamingResponse(
+        buffer,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{slug}.zip"'},
     )
 
 

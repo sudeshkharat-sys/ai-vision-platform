@@ -11,7 +11,9 @@ from ..config import settings
 from ..api.auth import get_current_user
 from ..api.deps import get_owned_project
 from typing import List, Dict
+from pathlib import Path
 import shutil
+import uuid
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
@@ -83,6 +85,78 @@ async def update_project(
     await db.commit()
     await db.refresh(project)
     return project
+
+
+@router.post("/{project_id}/duplicate", response_model=ProjectResponse)
+async def duplicate_project(
+    project_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Copy a project's images, classes, and annotations into a brand new
+    project, so labels can be edited/renamed/deleted there without
+    touching the original while it's still in use. Trained model files
+    and training-job history are deliberately NOT copied -- the new
+    project starts untrained, same as any freshly created one, and needs
+    its own training run once its labels are the way you want them.
+    """
+    source = await get_owned_project(project_id, current_user, db)
+
+    new_project = Project(
+        name=f"{source.name} (Copy)",
+        description=source.description,
+        classes=list(source.classes or []),
+        project_type=source.project_type,
+        user_id=current_user.id,
+    )
+    db.add(new_project)
+    await db.flush()  # assigns new_project.id for the images/annotations below
+
+    result = await db.execute(select(Image).where(Image.project_id == project_id))
+    source_images = result.scalars().all()
+
+    if source_images:
+        image_ids = [img.id for img in source_images]
+        ann_result = await db.execute(select(Annotation).where(Annotation.image_id.in_(image_ids)))
+        anns_by_image: Dict[str, List[Annotation]] = {}
+        for ann in ann_result.scalars().all():
+            anns_by_image.setdefault(ann.image_id, []).append(ann)
+
+        dest_dir = settings.upload_dir / new_project.id
+        dest_dir.mkdir(parents=True, exist_ok=True)
+
+        for img in source_images:
+            # filepath is stored as "/uploads/{project_id}/{filename}", not
+            # an absolute path -- resolve back to the real file on disk via
+            # the upload_dir the same way upload_images() writes it.
+            src_file = settings.upload_dir / project_id / Path(img.filepath).name
+            new_filename = f"{uuid.uuid4()}{src_file.suffix}"
+            dest_file = dest_dir / new_filename
+            if src_file.exists():
+                shutil.copy2(src_file, dest_file)
+
+            new_image = Image(
+                project_id=new_project.id,
+                filename=img.filename,
+                filepath=f"/uploads/{new_project.id}/{new_filename}",
+                width=img.width,
+                height=img.height,
+                status=img.status,
+            )
+            db.add(new_image)
+            await db.flush()  # assigns new_image.id for its annotations below
+
+            for ann in anns_by_image.get(img.id, []):
+                db.add(Annotation(
+                    image_id=new_image.id,
+                    class_name=ann.class_name,
+                    bbox=list(ann.bbox) if ann.bbox else None,
+                    source=ann.source,
+                ))
+
+    await db.commit()
+    await db.refresh(new_project)
+    return new_project
 
 
 @router.patch("/{project_id}/rename-class")

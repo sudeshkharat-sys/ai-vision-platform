@@ -269,6 +269,7 @@ const ModelsPanel = ({ project, onClose, onGoToTrain }) => {
     const [loading, setLoading]     = useState(true);
     const [error, setError]         = useState(null);
     const [downloading, setDownloading] = useState(null); // 'seed' | 'main' | null
+    const [downloadingPack, setDownloadingPack] = useState(false);
 
     const load = useCallback(() => {
         setLoading(true);
@@ -303,6 +304,31 @@ const ModelsPanel = ({ project, onClose, onGoToTrain }) => {
         }
     };
 
+    const handleDownloadPack = async () => {
+        setDownloadingPack(true);
+        try {
+            const res = await axios.get(
+                `${API_URL}/pipeline/download-model-pack/${project.id}`,
+                { responseType: 'blob' }
+            );
+            const disposition = res.headers?.['content-disposition'] || '';
+            const match = disposition.match(/filename="?([^"]+)"?/);
+            const filename = match ? match[1] : `${project.name.replace(/[^A-Za-z0-9]+/g, '_').toLowerCase()}.zip`;
+            const url  = URL.createObjectURL(new Blob([res.data]));
+            const link = document.createElement('a');
+            link.href     = url;
+            link.download = filename;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            URL.revokeObjectURL(url);
+        } catch {
+            setError('Failed to download model pack -- train a detector and/or the OCR recognizer first.');
+        } finally {
+            setDownloadingPack(false);
+        }
+    };
+
     const handleTrain = (type) => {
         onClose();
         onGoToTrain(type);  // 'seed' | 'main'
@@ -322,6 +348,15 @@ const ModelsPanel = ({ project, onClose, onGoToTrain }) => {
                         </div>
                     </div>
                     <div className="mp-header-actions">
+                        <button
+                            className="mp-btn-pack"
+                            onClick={handleDownloadPack}
+                            disabled={downloadingPack}
+                            title="Download detector weights + OCR recognizer files as one zip, ready to attach in the Flutter app builder"
+                        >
+                            <Download size={15} />
+                            {downloadingPack ? 'Packing…' : 'Download Model Pack'}
+                        </button>
                         <button className="mp-btn-refresh" onClick={load} title="Refresh">
                             <RefreshCw size={15} />
                         </button>

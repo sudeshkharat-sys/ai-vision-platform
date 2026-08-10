@@ -709,7 +709,47 @@
     flex-shrink: 0;
 }
 
-/* ── Delete button (inside footer, shows on card hover) ─────────── */
+/* ── Copy + Delete buttons (inside footer, show on card hover) ──── */
+.pl-card-footer-actions {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
+}
+
+.pl-card-copy-btn {
+    flex-shrink: 0;
+    width: 28px;
+    height: 28px;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 7px;
+    color: #999;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    opacity: 0;
+    transition: all 0.15s;
+    padding: 0;
+}
+
+.pl-card:hover .pl-card-copy-btn {
+    opacity: 1;
+}
+
+.pl-card-copy-btn:hover:not(:disabled) {
+    background: rgba(99, 102, 241, 0.1) !important;
+    border-color: rgba(99, 102, 241, 0.3) !important;
+    color: #6366f1 !important;
+    transform: scale(1.1);
+}
+
+.pl-card-copy-btn:disabled {
+    opacity: 0.5 !important;
+    cursor: default;
+}
+
 .pl-card-delete-btn {
     flex-shrink: 0;
     width: 28px;

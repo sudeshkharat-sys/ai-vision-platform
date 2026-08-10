@@ -3,7 +3,7 @@ import axios from 'axios';
 import './ProjectList.css';
 
 import { API_URL } from '../config';
-import { FolderOpen, Tag, Plus, X, Trash2, AlertTriangle, ArrowRight, Calendar, Grid3X3, Sparkles, DatabaseZap } from 'lucide-react';
+import { FolderOpen, Tag, Plus, X, Trash2, AlertTriangle, ArrowRight, Calendar, Grid3X3, Sparkles, DatabaseZap, Copy } from 'lucide-react';
 import logoImg from '../logo.png';
 
 /* ── Per-project gradient palette ─────────────────────────────── */
@@ -138,7 +138,7 @@ function DeleteModal({ project, onConfirm, onFlush, onCancel, deleting }) {
 }
 
 /* ── Project Card ─────────────────────────────────────────────── */
-function ProjectCard({ project, index, onClick, onDelete }) {
+function ProjectCard({ project, index, onClick, onDelete, onDuplicate, duplicating }) {
     const palette = CARD_PALETTES[index % CARD_PALETTES.length];
     const initials = project.name
         .split(' ')
@@ -153,6 +153,11 @@ function ProjectCard({ project, index, onClick, onDelete }) {
     const handleDeleteClick = (e) => {
         e.stopPropagation();  // Don't open the project
         onDelete(project);
+    };
+
+    const handleDuplicateClick = (e) => {
+        e.stopPropagation();  // Don't open the project
+        onDuplicate(project);
     };
 
     return (
@@ -228,15 +233,26 @@ function ProjectCard({ project, index, onClick, onDelete }) {
                     </span>
                 </div>
 
-                {/* Delete button — in footer, visible on card hover */}
-                <button
-                    className="pl-card-delete-btn"
-                    onClick={handleDeleteClick}
-                    title="Delete project"
-                    aria-label="Delete project"
-                >
-                    <Trash2 size={13} />
-                </button>
+                {/* Copy + Delete buttons — in footer, visible on card hover */}
+                <div className="pl-card-footer-actions">
+                    <button
+                        className="pl-card-copy-btn"
+                        onClick={handleDuplicateClick}
+                        disabled={duplicating}
+                        title="Copy project (images + labels, no trained models) -- edit labels without touching the original"
+                        aria-label="Copy project"
+                    >
+                        <Copy size={13} />
+                    </button>
+                    <button
+                        className="pl-card-delete-btn"
+                        onClick={handleDeleteClick}
+                        title="Delete project"
+                        aria-label="Delete project"
+                    >
+                        <Trash2 size={13} />
+                    </button>
+                </div>
             </div>
 
             {/* Hover glow overlay */}
@@ -260,6 +276,9 @@ const ProjectList = ({ onProjectSelect, user }) => {
     const [deleteTarget, setDeleteTarget]   = useState(null);  // project object to delete
     const [deleting, setDeleting]           = useState(false);
     const [deletedIds, setDeletedIds]       = useState(new Set()); // for fade-out animation
+
+    // Duplicate state
+    const [duplicatingId, setDuplicatingId] = useState(null); // project id currently being copied
 
     useEffect(() => {
         if (!user) return;
@@ -320,6 +339,23 @@ const ProjectList = ({ onProjectSelect, user }) => {
 
     const handleDeleteCancel = () => {
         if (!deleting) setDeleteTarget(null);
+    };
+
+    /* ── Duplicate handler ───────────────────────────────────── */
+    // Copies images + annotations + classes into a brand new project so
+    // labels can be edited/renamed/deleted there without touching the
+    // original while it's in use. Trained models are deliberately not
+    // copied -- the new project starts untrained (see backend endpoint).
+    const handleDuplicate = async (project) => {
+        setDuplicatingId(project.id);
+        try {
+            const res = await axios.post(`${API_URL}/projects/${project.id}/duplicate`);
+            setProjects(prev => [...prev, res.data]);
+        } catch {
+            setError(`Failed to copy "${project.name}". Please try again.`);
+        } finally {
+            setDuplicatingId(null);
+        }
     };
 
     const handleFlushConfirm = async (keepModel) => {
@@ -523,6 +559,8 @@ const ProjectList = ({ onProjectSelect, user }) => {
                                         index={i}
                                         onClick={() => onProjectSelect(p)}
                                         onDelete={handleDeleteRequest}
+                                        onDuplicate={handleDuplicate}
+                                        duplicating={duplicatingId === p.id}
                                     />
                                 </div>
                             ))}
