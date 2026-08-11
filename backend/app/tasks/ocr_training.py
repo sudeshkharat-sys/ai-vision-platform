@@ -82,6 +82,37 @@ def _extract_char_crop(img, bbox, size: int, margin: float = 0.12):
 
 # ── Offline augmentation (class balancing) ────────────────────────
 
+def _perspective_warp(img, rng: random.Random, max_shift: float = 0.10):
+    """
+    Mild perspective/shear warp — approximates the foreshortening you get
+    from a side (LHS/RHS) viewing angle on an engine plate, which plain
+    in-plane rotation below does not reproduce (a side view compresses and
+    shears a character, it doesn't just spin it). Kept conservative — a
+    bounded trapezoid skew, not a full 3D tilt — so characters stay legible.
+    """
+    size = img.shape[0]
+    m = max_shift * size
+    src = np.float32([[0, 0], [size, 0], [size, size], [0, size]])
+
+    # One consistent "camera leans left/right" direction per sample, not
+    # independent random jitter per corner — that reads as noise, not angle.
+    side = rng.choice([-1, 1])
+    dx_top = side * rng.uniform(0, m)
+    dx_bot = side * rng.uniform(0, m)
+    dy = rng.uniform(-m * 0.4, m * 0.4)
+    dst = np.float32([
+        [0 + dx_top, 0 + dy],
+        [size - dx_top, 0 - dy],
+        [size - dx_bot, size + dy],
+        [0 + dx_bot, size - dy],
+    ])
+
+    border_val = int(np.median(img))
+    matrix = cv2.getPerspectiveTransform(src, dst)
+    return cv2.warpPerspective(img, matrix, (size, size),
+                               borderMode=cv2.BORDER_CONSTANT, borderValue=border_val)
+
+
 def _augment_char(img, rng: random.Random):
     """One random augmented variant of a character crop."""
     size = img.shape[0]
@@ -99,6 +130,12 @@ def _augment_char(img, rng: random.Random):
     border_val = int(np.median(out))
     out = cv2.warpAffine(out, m, (size, size),
                          borderMode=cv2.BORDER_CONSTANT, borderValue=border_val)
+
+    # Side-viewing-angle perspective skew — on top of (not instead of) the
+    # rotation above, applied to a minority of samples so most training data
+    # still looks like a head-on view.
+    if rng.random() < 0.35:
+        out = _perspective_warp(out, rng)
 
     # Brightness / contrast jitter (lighting variation in the field)
     alpha = rng.uniform(0.75, 1.3)   # contrast
