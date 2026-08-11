@@ -815,6 +815,11 @@
   overflow: hidden;
   cursor: crosshair;
   line-height: 0;
+  /* Without this, the browser's native pinch-zoom/pan competes with Konva's
+     own touch handling — on touch devices a pinch mid-drag could shift the
+     viewport under Konva's coordinates and make a dragged shape appear to
+     jump off-canvas ("vanish"). Konva gets all touch gestures instead. */
+  touch-action: none;
   flex-shrink: 0;
   box-shadow: 0 4px 24px rgba(0, 0, 0, 0.08);
 }
@@ -850,6 +855,16 @@
   font-size: 13px;
   color: #1a1a1a;
   flex: 1;
+}
+
+.annotation-class--editable {
+  cursor: pointer;
+  border-bottom: 1px dashed transparent;
+  transition: border-color 0.12s, color 0.12s;
+}
+.annotation-class--editable:hover {
+  color: #dc143c;
+  border-bottom-color: #dc143c;
 }
 
 .annotation-source {

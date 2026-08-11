@@ -33,7 +33,7 @@ const KonvaImage = ({ src, onLoad }) => {
 // vertex handles when selected. Dragging the fill/outline moves the whole
 // shape; dragging a handle reshapes just that corner — the workflow for
 // tracing a character's true rotated outline instead of an axis-aligned box.
-const PolygonAnnotation = ({ ann, imgW, imgH, color, isSelected, isPanning, totalScale, onSelect, onMoveEnd, onVertexDragEnd }) => {
+const PolygonAnnotation = ({ ann, imgW, imgH, color, isSelected, isPanning, totalScale, onSelect, onRelabel, onMoveEnd, onVertexDragEnd }) => {
     const lineRef = useRef(null);
     const pixelPoints = ann.points.map(([x, y]) => [x * imgW, y * imgH]);
     const flat = pixelPoints.flat();
@@ -42,6 +42,12 @@ const PolygonAnnotation = ({ ann, imgW, imgH, color, isSelected, isPanning, tota
         <Group
             draggable={isSelected && !isPanning}
             onDragEnd={(e) => {
+                // Konva's drag events bubble — dragging a vertex Circle (below) also
+                // fires this handler via bubbling. Only act when the Group itself
+                // (not a child) was the node actually dragged, or a vertex drag would
+                // get misread as a whole-shape move with a bogus offset and corrupt
+                // every point (the annotation appears to "vanish").
+                if (e.target !== e.currentTarget) return;
                 const dx = e.target.x();
                 const dy = e.target.y();
                 if (dx === 0 && dy === 0) return;
@@ -59,6 +65,8 @@ const PolygonAnnotation = ({ ann, imgW, imgH, color, isSelected, isPanning, tota
                 fill={ann.source === 'auto' ? 'rgba(167,139,250,0.07)' : 'rgba(244,63,94,0.07)'}
                 onClick={onSelect}
                 onTap={onSelect}
+                onDblClick={onRelabel}
+                onDblTap={onRelabel}
                 onMouseEnter={e => { e.target.getStage().container().style.cursor = 'move'; }}
                 onMouseLeave={e => { e.target.getStage().container().style.cursor = isPanning ? 'grab' : 'crosshair'; }}
             />
@@ -74,6 +82,7 @@ const PolygonAnnotation = ({ ann, imgW, imgH, color, isSelected, isPanning, tota
                     onClick={(e) => { e.cancelBubble = true; }}
                     onTap={(e) => { e.cancelBubble = true; }}
                     onDragMove={(e) => {
+                        e.cancelBubble = true; // stop the ancestor Group's onDragEnd from misfiring
                         const line = lineRef.current;
                         if (!line) return;
                         const pts = line.points().slice();
@@ -82,7 +91,8 @@ const PolygonAnnotation = ({ ann, imgW, imgH, color, isSelected, isPanning, tota
                         line.points(pts);
                         line.getLayer()?.batchDraw();
                     }}
-                    onDragEnd={() => {
+                    onDragEnd={(e) => {
+                        e.cancelBubble = true; // stop the ancestor Group's onDragEnd from misfiring
                         const line = lineRef.current;
                         const pts = line ? line.points() : flat;
                         const newPixelPoints = [];
@@ -419,6 +429,27 @@ const AnnotationWorkspace = ({ project, onProjectUpdated }) => {
         if (e) e.cancelBubble = true;
         setSelectedAnnId(annId);
     }, []);
+
+    // Double-click any annotation (box or polyline) to fix a wrong label —
+    // reuses the same ClassPicker + PATCH .../classify flow already used for
+    // unclassified AI boxes, just opened for an annotation that already has a class.
+    const handleEditLabel = useCallback((ann, e) => {
+        if (e) e.cancelBubble = true;
+        if (isPanning) return;
+        setSelectedAnnId(null);
+        setClassifyingAnnId(ann.id);
+        if (ann.annotation_type === 'polygon' && ann.points) {
+            setPendingPolyline(ann.points.map(([x, y]) => ({ x: x * imgW, y: y * imgH })));
+        } else {
+            setPendingAnnotation({
+                x: (ann.bbox[0] - ann.bbox[2] / 2) * imgW,
+                y: (ann.bbox[1] - ann.bbox[3] / 2) * imgH,
+                width: ann.bbox[2] * imgW,
+                height: ann.bbox[3] * imgH,
+            });
+        }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [isPanning, imgW, imgH]);
 
     const handleAnnDragEnd = useCallback((e, ann) => {
         const node = e.target;
@@ -1375,10 +1406,10 @@ Do you want to proceed?`;
                                 {isPanning
                                     ? 'Pan mode — drag to move'
                                     : selectedAnnId
-                                        ? 'Drag to move · handles to resize'
+                                        ? 'Drag to move · handles to resize · double-click to fix the label'
                                         : drawMode === 'polyline'
-                                            ? 'Click to place points · double-click or Enter to finish · Esc to cancel'
-                                            : 'Draw a box to annotate'}
+                                            ? 'Click to place points · double-click or Enter to finish · Esc to cancel · double-click a shape to fix its label'
+                                            : 'Draw a box to annotate · double-click a shape to fix its label'}
                             </span>
                             {/* ── Draw mode: Box vs Polyline ── */}
                             <div className="draw-mode-toggle">
@@ -1577,6 +1608,7 @@ Do you want to proceed?`;
                                                         isPanning={isPanning}
                                                         totalScale={totalScale}
                                                         onSelect={(e) => handleAnnClick(ann.id, e)}
+                                                        onRelabel={(e) => handleEditLabel(ann, e)}
                                                         onMoveEnd={(pts) => handlePolygonMoveEnd(ann, pts)}
                                                         onVertexDragEnd={(pts) => handlePolygonVertexEnd(ann, pts)}
                                                     />
@@ -1595,6 +1627,8 @@ Do you want to proceed?`;
                                                         draggable={isSelected && !isPanning}
                                                         onClick={(e) => handleAnnClick(ann.id, e)}
                                                         onTap={(e) => handleAnnClick(ann.id, e)}
+                                                        onDblClick={(e) => handleEditLabel(ann, e)}
+                                                        onDblTap={(e) => handleEditLabel(ann, e)}
                                                         onDragEnd={(e) => handleAnnDragEnd(e, ann)}
                                                         onTransformEnd={(e) => handleAnnTransformEnd(e, ann)}
                                                         onMouseEnter={e => { e.target.getStage().container().style.cursor = 'move'; }}
@@ -1750,7 +1784,11 @@ Do you want to proceed?`;
                                 {annotations.map(ann => (
                                     <div key={ann.id} className="annotation-row">
                                         <span className="annotation-dot" style={{ backgroundColor: ann.source === 'auto' ? '#a78bfa' : '#f43f5e' }}></span>
-                                        <span className="annotation-class">{ann.class_name}</span>
+                                        <span
+                                            className="annotation-class annotation-class--editable"
+                                            title="Tap to fix this label"
+                                            onClick={() => handleEditLabel(ann)}
+                                        >{ann.class_name}</span>
                                         <span className={`annotation-source source-${ann.source}`}>
                                             {ann.source}
                                         </span>
