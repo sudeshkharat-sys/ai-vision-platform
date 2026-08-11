@@ -10,6 +10,7 @@ import ModelsPanel from './ModelsPanel';
 import ReviewPanel from './ReviewPanel';
 import VideoPanel from './VideoPanel';
 import ActiveLearningPanel from './ActiveLearningPanel';
+import OcrActiveLearningPanel from './OcrActiveLearningPanel';
 import OcrTrainingPanel from './OcrTrainingPanel';
 import './AnnotationWorkspace.css';
 import { Sparkles, AlertTriangle, X, Upload, Image as ImageIcon, Check, ArrowLeft, ArrowRight, Brain, Rocket, Eye, Target, Tag, Package, Film, Undo2, Redo2, ZoomIn, ZoomOut, Maximize2, Trash2, ImageOff, Type, RotateCw, RotateCcw, Grid3x3, Wand2, Square, PenTool, RefreshCw } from 'lucide-react';
@@ -274,6 +275,7 @@ const AnnotationWorkspace = ({ project, onProjectUpdated }) => {
     const [showReviewPanel, setShowReviewPanel] = useState(false);
     const [showVideoPanel, setShowVideoPanel] = useState(false);
     const [showActiveLearningPanel, setShowActiveLearningPanel] = useState(false);
+    const [showOcrActiveLearningPanel, setShowOcrActiveLearningPanel] = useState(false);
     const [showOcrPanel, setShowOcrPanel] = useState(false);
     const [ocrAutoLabeling, setOcrAutoLabeling] = useState(false);
     const [seedModelInfo, setSeedModelInfo] = useState(null); // { exists, modified_at } — character detector status for OCR projects
@@ -1254,6 +1256,13 @@ Do you want to proceed?`;
                             <Sparkles size={14} /> {ocrAutoLabeling ? 'Labeling…' : `Auto-Label Characters (${drawMode === 'polyline' ? 'Polyline' : 'Box'})`}
                         </button>
                         <button
+                            className="btn-action btn-action-al"
+                            onClick={() => setShowOcrActiveLearningPanel(true)}
+                            title="Rank pending photos by how uncertain the trained OCR model is, so you label the hardest ones first"
+                        >
+                            <Brain size={14} /> Active Learning
+                        </button>
+                        <button
                             className="btn-action btn-action-review"
                             onClick={() => setShowReviewPanel(true)}
                             disabled={images.filter(img => img.status === 'annotated').length === 0}
@@ -1929,6 +1938,13 @@ Do you want to proceed?`;
                             .then(res => setImages(res.data))
                             .catch(() => {});
                     }}
+                />
+            )}
+            {showOcrActiveLearningPanel && (
+                <OcrActiveLearningPanel
+                    project={project}
+                    onClose={() => setShowOcrActiveLearningPanel(false)}
+                    onAnnotateImages={handleAnnotateImages}
                 />
             )}
         </div>

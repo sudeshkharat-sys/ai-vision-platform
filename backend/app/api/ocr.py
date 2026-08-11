@@ -1053,3 +1053,100 @@ async def ocr_auto_annotate(
     return {"processed": processed, "labeled": labeled,
             "detail": f"Pre-labeled {labeled} characters across {processed} photos. "
                       "Review and correct them, then retrain."}
+
+
+# ── Active Learning (OCR) ───────────────────────────────────────
+# Same idea as the YOLO active-learning module (score_unlabeled_images /
+# suggest_for_review in tasks/active_learning.py) but scoring the trained
+# character classifier instead of a detector: characters the model is least
+# sure about mean that photo is the most useful one for a human to label
+# next. Runs synchronously (classifying small crops is cheap) rather than
+# as a Celery job — no queue/polling needed for a first pass.
+
+class OcrSuggestReviewRequest(BaseModel):
+    budget: int = 10  # 0 = return every scored pending image
+
+
+@router.post("/active-learning/suggest/{project_id}")
+async def ocr_suggest_for_review(
+    project_id: str,
+    body: OcrSuggestReviewRequest = None,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Rank pending images by OCR-model uncertainty — most useful to label first."""
+    await get_owned_project(project_id, current_user, db)
+    model, classes, img_size = _load_project_model(project_id)
+    req = body or OcrSuggestReviewRequest()
+
+    result = await db.execute(
+        select(Image).where(Image.project_id == project_id, Image.status == "pending")
+    )
+    images = result.scalars().all()
+    if not images:
+        return {"status": "success", "total_pending": 0, "total_scored": 0, "suggestions": []}
+
+    from ..tasks.ocr_training import _extract_char_crop
+
+    scored = []
+    for img_row in images:
+        path = settings.upload_dir.parent / img_row.filepath.lstrip("/")
+        img = cv2.imread(str(path))
+        if img is None:
+            continue
+
+        scale = 1200 / max(img.shape[:2]) if max(img.shape[:2]) > 1200 else 1.0
+        if scale < 1.0:
+            img = cv2.resize(img, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        H, W = gray.shape
+
+        boxes = _yolo_char_boxes(project_id, img)
+        if boxes is None:
+            boxes, _region = _segment_with_plate_hint(project_id, img, gray)
+
+        crops = []
+        for (x, y, w, h) in boxes:
+            bbox = [(x + w / 2) / W, (y + h / 2) / H, w / W, h / H]
+            crop = _extract_char_crop(img, bbox, img_size)
+            if crop is not None:
+                crops.append(crop)
+
+        if not crops:
+            # No characters found at all is the hardest case — segmentation
+            # itself may be failing on this photo (angle, glare, low contrast).
+            scored.append({
+                "image_id": img_row.id,
+                "filename": img_row.filename,
+                "char_count": 0,
+                "avg_confidence": 0.0,
+                "min_confidence": 0.0,
+                "reason": "No characters detected — segmentation may be struggling on this photo",
+            })
+            continue
+
+        batch = np.stack(crops).astype(np.float32)[..., None] / 255.0
+        probs = model.predict(batch, verbose=0)
+        max_probs = probs.max(axis=1)
+        avg_conf = float(max_probs.mean())
+        min_conf = float(max_probs.min())
+
+        scored.append({
+            "image_id": img_row.id,
+            "filename": img_row.filename,
+            "char_count": len(crops),
+            "avg_confidence": avg_conf,
+            "min_confidence": min_conf,
+            "reason": f"{len(crops)} chars — lowest confidence {min_conf:.0%}, avg {avg_conf:.0%}",
+        })
+
+    # No-detection images first (hardest), then ascending average confidence
+    scored.sort(key=lambda s: (s["char_count"] > 0, s["avg_confidence"]))
+
+    budget = req.budget if req.budget > 0 else len(scored)
+    return {
+        "status": "success",
+        "total_pending": len(images),
+        "total_scored": len(scored),
+        "suggestions": scored[:budget],
+    }
