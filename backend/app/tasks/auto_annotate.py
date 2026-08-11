@@ -41,6 +41,15 @@ def _resolve_image_path(filepath: str) -> Path | None:
     return None
 
 
+def _bbox_to_points(bbox):
+    """Four corners (TL, TR, BR, BL) of a normalized [xc, yc, w, h] bbox —
+    used as the starting polygon for a fast, adjustable polyline detection
+    instead of a plain axis-aligned box."""
+    xc, yc, w, h = bbox
+    x1, y1, x2, y2 = xc - w / 2, yc - h / 2, xc + w / 2, yc + h / 2
+    return [[x1, y1], [x2, y1], [x2, y2], [x1, y2]]
+
+
 def _nms_filter(ann_rows, iou_threshold=0.5):
     """
     Remove overlapping detections via Non-Maximum Suppression on normalised
@@ -89,7 +98,8 @@ def _nms_filter(ann_rows, iou_threshold=0.5):
 
 @celery_app.task(name="app.tasks.auto_annotate.auto_annotate_remaining", bind=True)
 def auto_annotate_remaining(self, project_id: str, image_ids: list = None,
-                            conf: float = 0.25, use_tta: bool = False):
+                            conf: float = 0.25, use_tta: bool = False,
+                            shape: str = "bbox"):
     """
     Synchronous Celery task — uses StateDBConnector (psycopg2) instead of the
     async SQLAlchemy engine so there is no asyncio event-loop conflict.
@@ -102,6 +112,11 @@ def auto_annotate_remaining(self, project_id: str, image_ids: list = None,
     use_tta : bool
         Enable Test-Time Augmentation — averages predictions over flipped /
         scaled copies of each image for more robust detections.
+    shape : str
+        "bbox" (default) inserts plain axis-aligned boxes. "polygon" inserts
+        each detection as a 4-corner polygon (the box's own corners) so it
+        shows up as an editable polyline ready to drag onto the character's
+        true rotated outline — much faster than drawing one from scratch.
     """
     db = StateDBConnector()
 
@@ -222,14 +237,17 @@ def auto_annotate_remaining(self, project_id: str, image_ids: list = None,
                         continue
                     box_conf = float(box.conf[0].cpu().numpy())
                     xywhn = box.xywhn[0].cpu().numpy().tolist()
+                    points = _bbox_to_points(xywhn) if shape == "polygon" else None
                     ann_rows.append({
-                        "ann_id":     str(uuid.uuid4()),
-                        "image_id":   img["id"],
-                        "class_name": class_name,
-                        "bbox":       xywhn,
-                        "conf":       box_conf,
-                        # Pass as JSON string; PostgreSQL casts to JSONB
-                        "bbox_json":  json.dumps(xywhn),
+                        "ann_id":          str(uuid.uuid4()),
+                        "image_id":        img["id"],
+                        "class_name":      class_name,
+                        "bbox":            xywhn,
+                        "conf":            box_conf,
+                        "annotation_type": "polygon" if shape == "polygon" else "bbox",
+                        # Pass as JSON strings; PostgreSQL casts to JSONB
+                        "bbox_json":       json.dumps(xywhn),
+                        "points_json":     json.dumps(points) if points is not None else None,
                     })
 
             # Per-class NMS to remove overlapping duplicate detections
@@ -244,8 +262,9 @@ def auto_annotate_remaining(self, project_id: str, image_ids: list = None,
             if ann_rows:
                 db.execute_many(
                     conn,
-                    "INSERT INTO annotations (id, image_id, class_name, bbox, source) "
-                    "VALUES (:ann_id, :image_id, :class_name, CAST(:bbox_json AS JSONB), 'auto')",
+                    "INSERT INTO annotations (id, image_id, class_name, bbox, annotation_type, points, source) "
+                    "VALUES (:ann_id, :image_id, :class_name, CAST(:bbox_json AS JSONB), "
+                    ":annotation_type, CAST(:points_json AS JSONB), 'auto')",
                     ann_rows,
                 )
                 db.execute_update(

@@ -107,3 +107,11 @@ async def init_db() -> None:
             "ALTER TABLE projects ADD COLUMN IF NOT EXISTS "
             "project_type VARCHAR(20) DEFAULT 'detection'"
         ))
+        # Migration: polygon/polyline annotations alongside plain bboxes
+        await conn.execute(text(
+            "ALTER TABLE annotations ADD COLUMN IF NOT EXISTS "
+            "annotation_type VARCHAR(20) DEFAULT 'bbox'"
+        ))
+        await conn.execute(text(
+            "ALTER TABLE annotations ADD COLUMN IF NOT EXISTS points JSONB"
+        ))

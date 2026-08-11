@@ -341,6 +341,36 @@
   box-shadow: 0 0 6px rgba(220, 20, 60, 0.4);
   cursor: pointer;
 }
+.aap-conf-row + .aap-conf-row {
+  margin-top: 14px;
+}
+
+/* ── Annotation shape toggle (Box vs Polyline) ──────── */
+.aap-shape-toggle {
+  display: inline-flex;
+  gap: 6px;
+}
+.aap-shape-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: #f5f5f5;
+  border: 1px solid transparent;
+  color: #666666;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 5px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+.aap-shape-btn:hover { background: #e5e5e5; color: #1a1a1a; }
+.aap-shape-btn--active {
+  background: rgba(220,20,60,0.08);
+  border-color: rgba(220,20,60,0.3);
+  color: #dc143c;
+}
+
 .aap-conf-val {
   font-size: 13px;
   font-weight: 700;

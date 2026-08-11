@@ -19,8 +19,31 @@ class ClassifyBody(BaseModel):
 class BboxUpdateBody(BaseModel):
     bbox: list
 
+class PointsUpdateBody(BaseModel):
+    points: List[List[float]]
+
 
 router = APIRouter(prefix="/annotations", tags=["annotations"])
+
+
+def _points_to_bbox(points: list) -> list:
+    """Axis-aligned bounding box [x_center, y_center, w, h] enclosing normalized points.
+
+    Keeps the legacy `bbox` column in sync for polygon annotations so consumers
+    that only understand boxes (YOLO training export, NMS, etc.) keep working.
+    """
+    xs = [p[0] for p in points]
+    ys = [p[1] for p in points]
+    x1, x2 = min(xs), max(xs)
+    y1, y2 = min(ys), max(ys)
+    return [(x1 + x2) / 2, (y1 + y2) / 2, x2 - x1, y2 - y1]
+
+
+def _bbox_to_points(bbox: list) -> list:
+    """Four corners (TL, TR, BR, BL) of a normalized [xc, yc, w, h] bbox."""
+    xc, yc, w, h = bbox
+    x1, y1, x2, y2 = xc - w / 2, yc - h / 2, xc + w / 2, yc + h / 2
+    return [[x1, y1], [x2, y1], [x2, y2], [x1, y2]]
 
 
 async def _ensure_class_registered(db: AsyncSession, project_id: str, class_name: str):
@@ -48,10 +71,16 @@ async def create_annotation(
     image = await get_owned_image(data.image_id, current_user, db)
     await _ensure_class_registered(db, image.project_id, data.class_name)
 
+    bbox = data.bbox
+    if data.annotation_type == "polygon" and data.points and bbox is None:
+        bbox = _points_to_bbox(data.points)
+
     annotation = Annotation(
         image_id=data.image_id,
         class_name=data.class_name,
-        bbox=data.bbox,
+        bbox=bbox,
+        annotation_type=data.annotation_type,
+        points=data.points,
         source=data.source,
     )
     db.add(annotation)
@@ -85,6 +114,65 @@ async def update_annotation_bbox(
     await db.commit()
     await db.refresh(ann)
     return ann
+
+
+@router.patch("/{annotation_id}/points", response_model=AnnotationResponse)
+async def update_annotation_points(
+    annotation_id: str,
+    data: PointsUpdateBody,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Update the vertices of a polygon/polyline annotation (vertex drag editing)."""
+    ann = await get_owned_annotation(annotation_id, current_user, db)
+    if len(data.points) < 3:
+        raise HTTPException(status_code=400, detail="A polygon needs at least 3 points.")
+    ann.points = data.points
+    ann.annotation_type = "polygon"
+    ann.bbox = _points_to_bbox(data.points)
+    await db.commit()
+    await db.refresh(ann)
+    return ann
+
+
+@router.patch("/{annotation_id}/convert-to-polygon", response_model=AnnotationResponse)
+async def convert_annotation_to_polygon(
+    annotation_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Replace a box annotation with its 4-corner polygon equivalent, ready to
+    drag into shape — the starting point for "Replace box with polyline"."""
+    ann = await get_owned_annotation(annotation_id, current_user, db)
+    if ann.annotation_type != "polygon":
+        if not ann.bbox:
+            raise HTTPException(status_code=400, detail="Annotation has no bbox to convert.")
+        ann.points = _bbox_to_points(ann.bbox)
+        ann.annotation_type = "polygon"
+        await db.commit()
+        await db.refresh(ann)
+    return ann
+
+
+@router.patch("/image/{image_id}/convert-to-polygon", response_model=List[AnnotationResponse])
+async def convert_image_annotations_to_polygon(
+    image_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Bulk-convert every box annotation on an image to a polygon — backs the
+    canvas toolbar's "Replace box with polyline" button."""
+    await get_owned_image(image_id, current_user, db)
+    result = await db.execute(select(Annotation).where(Annotation.image_id == image_id))
+    anns = result.scalars().all()
+    for ann in anns:
+        if ann.annotation_type != "polygon" and ann.bbox:
+            ann.points = _bbox_to_points(ann.bbox)
+            ann.annotation_type = "polygon"
+    await db.commit()
+    for ann in anns:
+        await db.refresh(ann)
+    return anns
 
 
 @router.patch("/{annotation_id}/classify", response_model=AnnotationResponse)

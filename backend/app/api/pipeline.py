@@ -272,6 +272,7 @@ class AutoAnnotateRequest(BaseModel):
     image_ids: Optional[List[str]] = None
     conf: float = 0.25
     use_tta: bool = False
+    shape: str = "bbox"  # "bbox" | "polygon" — polygon gives editable polylines
 
 
 @router.post("/auto-annotate/{project_id}")
@@ -285,7 +286,8 @@ async def start_auto_annotation(
     ids     = body.image_ids if body else None
     conf    = body.conf if body else 0.25
     use_tta = body.use_tta if body else False
-    task = auto_annotate_remaining.delay(project_id, ids, conf, use_tta)
+    shape   = body.shape if body else "bbox"
+    task = auto_annotate_remaining.delay(project_id, ids, conf, use_tta, shape)
     return {"task_id": task.id, "status": "queued"}
 
 

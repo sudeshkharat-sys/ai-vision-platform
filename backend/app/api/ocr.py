@@ -24,6 +24,14 @@ from ..tasks.crnn_training import train_crnn_model
 
 router = APIRouter(prefix="/ocr", tags=["ocr"])
 
+
+def _bbox_to_points(bbox):
+    """Four corners (TL, TR, BR, BL) of a normalized [xc, yc, w, h] bbox — the
+    starting polygon for a fast, adjustable polyline instead of a plain box."""
+    xc, yc, w, h = bbox
+    x1, y1, x2, y2 = xc - w / 2, yc - h / 2, xc + w / 2, yc + h / 2
+    return [[x1, y1], [x2, y1], [x2, y2], [x1, y2]]
+
 OCR_FILES = {
     "tflite": "ocr_model.tflite",
     "keras": "ocr_model.keras",
@@ -961,6 +969,8 @@ async def predict_ocr(
 class OcrAutoLabelRequest(BaseModel):
     image_ids: Optional[List[str]] = None
     min_conf: float = 0.5
+    shape: str = "bbox"  # "bbox" | "polygon" — polygon gives editable polylines,
+                          # useful for angled LHS/RHS plate photos
 
 
 @router.post("/auto-annotate/{project_id}")
@@ -1030,6 +1040,8 @@ async def ocr_auto_annotate(
                 image_id=img_row.id,
                 class_name=classes[idx],
                 bbox=bbox,
+                annotation_type="polygon" if req.shape == "polygon" else "bbox",
+                points=_bbox_to_points(bbox) if req.shape == "polygon" else None,
                 source="auto",
             ))
             added += 1

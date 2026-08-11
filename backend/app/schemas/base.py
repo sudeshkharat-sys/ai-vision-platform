@@ -69,6 +69,8 @@ class AnnotationCreate(BaseModel):
     image_id: str
     class_name: str
     bbox: Optional[List[float]] = None
+    annotation_type: str = "bbox"  # "bbox" | "polygon"
+    points: Optional[List[List[float]]] = None  # normalized [[x,y], ...] for polygons
     source: str = "manual"
 
 class AnnotationResponse(BaseModel):
@@ -76,6 +78,8 @@ class AnnotationResponse(BaseModel):
     image_id: str
     class_name: str
     bbox: Optional[List[float]]
+    annotation_type: str = "bbox"
+    points: Optional[List[List[float]]] = None
     source: str
     created_at: datetime
 

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import axios from 'axios';
-import { Stage, Layer, Rect, Text, Image, Group, Transformer, Line } from 'react-konva';
+import { Stage, Layer, Rect, Text, Image, Group, Transformer, Line, Circle } from 'react-konva';
 import useImage from 'use-image';
 import TrainingPanel from './TrainingPanel';
 import AutoAnnotatePanel from './AutoAnnotatePanel';
@@ -12,7 +12,7 @@ import VideoPanel from './VideoPanel';
 import ActiveLearningPanel from './ActiveLearningPanel';
 import OcrTrainingPanel from './OcrTrainingPanel';
 import './AnnotationWorkspace.css';
-import { Sparkles, AlertTriangle, X, Upload, Image as ImageIcon, Check, ArrowLeft, ArrowRight, Brain, Rocket, Eye, Target, Tag, Package, Film, Undo2, Redo2, ZoomIn, ZoomOut, Maximize2, Trash2, ImageOff, Type, RotateCw, RotateCcw, Grid3x3, Wand2 } from 'lucide-react';
+import { Sparkles, AlertTriangle, X, Upload, Image as ImageIcon, Check, ArrowLeft, ArrowRight, Brain, Rocket, Eye, Target, Tag, Package, Film, Undo2, Redo2, ZoomIn, ZoomOut, Maximize2, Trash2, ImageOff, Type, RotateCw, RotateCcw, Grid3x3, Wand2, Square, PenTool, RefreshCw } from 'lucide-react';
 
 import { API_URL } from '../config';
 
@@ -26,6 +26,73 @@ const KonvaImage = ({ src, onLoad }) => {
         }
     }, [image, onLoad]);
     return <Image image={image} />;
+};
+
+// ── Polygon/Polyline annotation shape ─────────────────────────────
+// Renders a closed Line through ann.points (normalized) plus draggable
+// vertex handles when selected. Dragging the fill/outline moves the whole
+// shape; dragging a handle reshapes just that corner — the workflow for
+// tracing a character's true rotated outline instead of an axis-aligned box.
+const PolygonAnnotation = ({ ann, imgW, imgH, color, isSelected, isPanning, totalScale, onSelect, onMoveEnd, onVertexDragEnd }) => {
+    const lineRef = useRef(null);
+    const pixelPoints = ann.points.map(([x, y]) => [x * imgW, y * imgH]);
+    const flat = pixelPoints.flat();
+
+    return (
+        <Group
+            draggable={isSelected && !isPanning}
+            onDragEnd={(e) => {
+                const dx = e.target.x();
+                const dy = e.target.y();
+                if (dx === 0 && dy === 0) return;
+                e.target.x(0);
+                e.target.y(0);
+                onMoveEnd(pixelPoints.map(([x, y]) => [x + dx, y + dy]));
+            }}
+        >
+            <Line
+                ref={lineRef}
+                points={flat}
+                closed
+                stroke={isSelected ? '#facc15' : color}
+                strokeWidth={(isSelected ? 2 : 1.5) / totalScale}
+                fill={ann.source === 'auto' ? 'rgba(167,139,250,0.07)' : 'rgba(244,63,94,0.07)'}
+                onClick={onSelect}
+                onTap={onSelect}
+                onMouseEnter={e => { e.target.getStage().container().style.cursor = 'move'; }}
+                onMouseLeave={e => { e.target.getStage().container().style.cursor = isPanning ? 'grab' : 'crosshair'; }}
+            />
+            {isSelected && pixelPoints.map(([x, y], i) => (
+                <Circle
+                    key={i}
+                    x={x} y={y}
+                    radius={5 / totalScale}
+                    fill="#facc15"
+                    stroke="#fff"
+                    strokeWidth={1 / totalScale}
+                    draggable={!isPanning}
+                    onClick={(e) => { e.cancelBubble = true; }}
+                    onTap={(e) => { e.cancelBubble = true; }}
+                    onDragMove={(e) => {
+                        const line = lineRef.current;
+                        if (!line) return;
+                        const pts = line.points().slice();
+                        pts[i * 2] = e.target.x();
+                        pts[i * 2 + 1] = e.target.y();
+                        line.points(pts);
+                        line.getLayer()?.batchDraw();
+                    }}
+                    onDragEnd={() => {
+                        const line = lineRef.current;
+                        const pts = line ? line.points() : flat;
+                        const newPixelPoints = [];
+                        for (let k = 0; k < pts.length; k += 2) newPixelPoints.push([pts[k], pts[k + 1]]);
+                        onVertexDragEnd(newPixelPoints);
+                    }}
+                />
+            ))}
+        </Group>
+    );
 };
 
 // ── Class Picker ────────────────────────────────────────────────
@@ -174,6 +241,13 @@ const AnnotationWorkspace = ({ project, onProjectUpdated }) => {
     const [isDrawing, setIsDrawing] = useState(false);
     const [newAnnotation, setNewAnnotation] = useState(null);
     const [pendingAnnotation, setPendingAnnotation] = useState(null); // bbox waiting for class
+    // ── Polyline drawing ── 'box' | 'polyline' — polyline traces a shape's
+    // real (possibly rotated/skewed) outline instead of an axis-aligned box,
+    // needed on angled plate photos where boxes of neighboring characters touch.
+    const [drawMode, setDrawMode] = useState('box');
+    const [newPolylinePoints, setNewPolylinePoints] = useState([]); // [{x,y}, ...] while drawing
+    const [polylineCursor, setPolylineCursor] = useState(null); // rubber-band point to last click
+    const [pendingPolyline, setPendingPolyline] = useState(null); // finished points waiting for class
     const [error, setError] = useState(null);
     const [uploading, setUploading] = useState(false);
     const [uploadProgress, setUploadProgress] = useState(null); // 0-100 during upload
@@ -293,11 +367,15 @@ const AnnotationWorkspace = ({ project, onProjectUpdated }) => {
                         const res = await axios.post(`${API_URL}/annotations`, {
                             image_id: action.ann.image_id, class_name: action.ann.class_name,
                             bbox: action.ann.bbox, source: action.ann.source,
+                            annotation_type: action.ann.annotation_type, points: action.ann.points,
                         });
                         setAnnotations(a => [...a, res.data]);
                     } else if (action.type === 'bbox') {
                         await axios.patch(`${API_URL}/annotations/${action.id}`, { bbox: action.oldBbox });
                         setAnnotations(a => a.map(x => x.id === action.id ? { ...x, bbox: action.oldBbox } : x));
+                    } else if (action.type === 'points') {
+                        await axios.patch(`${API_URL}/annotations/${action.id}/points`, { points: action.oldPoints });
+                        setAnnotations(a => a.map(x => x.id === action.id ? { ...x, points: action.oldPoints } : x));
                     }
                 } catch { /* ignore */ }
             })();
@@ -317,6 +395,7 @@ const AnnotationWorkspace = ({ project, onProjectUpdated }) => {
                         const res = await axios.post(`${API_URL}/annotations`, {
                             image_id: action.ann.image_id, class_name: action.ann.class_name,
                             bbox: action.ann.bbox, source: action.ann.source,
+                            annotation_type: action.ann.annotation_type, points: action.ann.points,
                         });
                         setAnnotations(a => [...a, res.data]);
                     } else if (action.type === 'delete') {
@@ -325,6 +404,9 @@ const AnnotationWorkspace = ({ project, onProjectUpdated }) => {
                     } else if (action.type === 'bbox') {
                         await axios.patch(`${API_URL}/annotations/${action.id}`, { bbox: action.newBbox });
                         setAnnotations(a => a.map(x => x.id === action.id ? { ...x, bbox: action.newBbox } : x));
+                    } else if (action.type === 'points') {
+                        await axios.patch(`${API_URL}/annotations/${action.id}/points`, { points: action.newPoints });
+                        setAnnotations(a => a.map(x => x.id === action.id ? { ...x, points: action.newPoints } : x));
                     }
                 } catch { /* ignore */ }
             })();
@@ -381,6 +463,27 @@ const AnnotationWorkspace = ({ project, onProjectUpdated }) => {
         axios.patch(`${API_URL}/annotations/${ann.id}`, { bbox: newBbox })
             .then(res => setAnnotations(prev => prev.map(a => a.id === ann.id ? res.data : a)))
             .catch(() => setError('Failed to resize annotation.'));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [imgW, imgH, pushHistory]);
+
+    // Whole-shape drag of a polygon/polyline annotation
+    const handlePolygonMoveEnd = useCallback((ann, newPixelPoints) => {
+        const newPoints = newPixelPoints.map(([x, y]) => [x / imgW, y / imgH]);
+        pushHistory({ type: 'points', id: ann.id, oldPoints: ann.points, newPoints });
+        axios.patch(`${API_URL}/annotations/${ann.id}/points`, { points: newPoints })
+            .then(res => setAnnotations(prev => prev.map(a => a.id === ann.id ? res.data : a)))
+            .catch(() => setError('Failed to move annotation.'));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [imgW, imgH, pushHistory]);
+
+    // Single-vertex drag — reshapes the polygon to hug the true character outline.
+    // Selection is intentionally kept so corners can be nudged one after another.
+    const handlePolygonVertexEnd = useCallback((ann, newPixelPoints) => {
+        const newPoints = newPixelPoints.map(([x, y]) => [x / imgW, y / imgH]);
+        pushHistory({ type: 'points', id: ann.id, oldPoints: ann.points, newPoints });
+        axios.patch(`${API_URL}/annotations/${ann.id}/points`, { points: newPoints })
+            .then(res => setAnnotations(prev => prev.map(a => a.id === ann.id ? res.data : a)))
+            .catch(() => setError('Failed to reshape annotation.'));
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [imgW, imgH, pushHistory]);
 
@@ -641,7 +744,9 @@ Do you want to proceed?`;
     const handleOcrAutoLabel = async () => {
         setOcrAutoLabeling(true);
         try {
-            const res = await axios.post(`${API_URL}/ocr/auto-annotate/${project.id}`, {});
+            const res = await axios.post(`${API_URL}/ocr/auto-annotate/${project.id}`, {
+                shape: drawMode === 'polyline' ? 'polygon' : 'bbox',
+            });
             showStatus(`✓ ${res.data.detail || `Pre-labeled ${res.data.labeled} characters.`}`);
             // Refresh image list + current image's annotations
             const imgRes = await axios.get(`${API_URL}/images/project/${project.id}`);
@@ -809,19 +914,29 @@ Do you want to proceed?`;
 
     const handleMouseDown = (e) => {
         if (isPanning) return;
-        if (pendingAnnotation) return;
+        if (pendingAnnotation || pendingPolyline) return;
         if (previewAngle !== 0) return; // rotation preview active — apply or reset first
-        // Only block when clicking on a visible annotation shape (Rect/Group/Text)
+        // Only block when clicking on a visible annotation shape (Rect/Line/Circle/Group/Text)
         // Stage and Layer nodes are safe to draw on; KonvaImage has listening=false
         const cls = e.target.getClassName ? e.target.getClassName() : '';
-        if (cls === 'Rect' || cls === 'Group' || cls === 'Text') return;
+        if (cls === 'Rect' || cls === 'Group' || cls === 'Text' || cls === 'Line' || cls === 'Circle') return;
         setSelectedAnnId(null);
         const pos = e.target.getStage().getRelativePointerPosition();
+
+        if (drawMode === 'polyline') {
+            setNewPolylinePoints(prev => [...prev, pos]);
+            return;
+        }
         setIsDrawing(true);
         setNewAnnotation({ x: pos.x, y: pos.y, width: 0, height: 0 });
     };
 
     const handleMouseMove = (e) => {
+        if (drawMode === 'polyline') {
+            if (newPolylinePoints.length === 0) return;
+            setPolylineCursor(e.target.getStage().getRelativePointerPosition());
+            return;
+        }
         if (!isDrawing) return;
         const pos = e.target.getStage().getRelativePointerPosition();
         setNewAnnotation(prev => ({
@@ -832,6 +947,7 @@ Do you want to proceed?`;
     };
 
     const handleMouseUp = () => {
+        if (drawMode === 'polyline') return; // finished via double-click / Enter
         setIsDrawing(false);
         if (!newAnnotation || Math.abs(newAnnotation.width) < 5 || Math.abs(newAnnotation.height) < 5) {
             setNewAnnotation(null);
@@ -845,12 +961,77 @@ Do you want to proceed?`;
         setPendingAnnotation({ x, y, width: w, height: h });
     };
 
+    // Switching tools mid-draw discards whatever was in progress
+    const changeDrawMode = (mode) => {
+        setDrawMode(mode);
+        setIsDrawing(false);
+        setNewAnnotation(null);
+        setNewPolylinePoints([]);
+        setPolylineCursor(null);
+    };
+
+    const finishPolyline = useCallback(() => {
+        if (newPolylinePoints.length < 3) {
+            setNewPolylinePoints([]);
+            setPolylineCursor(null);
+            return;
+        }
+        setPendingPolyline(newPolylinePoints);
+        setNewPolylinePoints([]);
+        setPolylineCursor(null);
+    }, [newPolylinePoints]);
+
+    const cancelPolyline = useCallback(() => {
+        setNewPolylinePoints([]);
+        setPolylineCursor(null);
+    }, []);
+
+    const handleConvertToPolyline = async () => {
+        if (!currentImage) return;
+        const boxCount = annotations.filter(a => a.annotation_type !== 'polygon').length;
+        if (boxCount === 0) { showStatus('No box annotations left to convert.'); return; }
+        try {
+            const res = await axios.patch(`${API_URL}/annotations/image/${currentImage.id}/convert-to-polygon`);
+            setAnnotations(res.data);
+            setSelectedAnnId(null);
+            showStatus(`✓ Converted ${boxCount} box annotation${boxCount !== 1 ? 's' : ''} to polylines — drag the corners to fit`);
+        } catch {
+            setError('Failed to convert annotations to polylines.');
+        }
+    };
+
     const handleClassConfirm = (className) => {
         const ann = pendingAnnotation;
+        const polyline = pendingPolyline;
         const annId = classifyingAnnId;
         setPendingAnnotation(null);
+        setPendingPolyline(null);
         setNewAnnotation(null);
         setClassifyingAnnId(null);
+
+        if (polyline && !annId) {
+            // New drawn polyline — POST it with normalized points (backend derives the AABB bbox)
+            const points = polyline.map(p => [p.x / imgW, p.y / imgH]);
+            axios.post(`${API_URL}/annotations`, {
+                image_id: currentImage.id,
+                class_name: className,
+                annotation_type: 'polygon',
+                points,
+            })
+                .then(res => {
+                    setAnnotations(prev => [...prev, res.data]);
+                    pushHistory({ type: 'add', ann: res.data });
+                    setImages(prev => prev.map(img =>
+                        img.id === currentImage.id ? { ...img, status: 'annotated' } : img
+                    ));
+                    setAllUsedClasses(prev =>
+                        prev.includes(className) ? prev : [...prev, className]
+                    );
+                    showStatus(`Annotation added: ${className}`);
+                })
+                .catch(() => setError("Failed to save annotation."));
+            return;
+        }
 
         if (annId) {
             // Classifying an existing AI-detected annotation — PATCH it
@@ -896,6 +1077,7 @@ Do you want to proceed?`;
     const handleClassCancel = () => {
         const wasAI = !!classifyingAnnId;
         setPendingAnnotation(null);
+        setPendingPolyline(null);
         setNewAnnotation(null);
         setClassifyingAnnId(null);
         if (wasAI) {
@@ -945,6 +1127,9 @@ Do you want to proceed?`;
         setPendingAnnotation(null);
         setNewAnnotation(null);
         setIsDrawing(false);
+        setPendingPolyline(null);
+        setNewPolylinePoints([]);
+        setPolylineCursor(null);
         setHistory([]);
         setRedoStack([]);
         setPreviewAngle(0);
@@ -974,7 +1159,13 @@ Do you want to proceed?`;
                 e.preventDefault();
                 handleRedo();
             }
-            if (e.key === 'Escape') setSelectedAnnId(null);
+            if (e.key === 'Escape') {
+                setSelectedAnnId(null);
+                cancelPolyline();
+            }
+            if (e.key === 'Enter' && drawMode === 'polyline' && newPolylinePoints.length >= 3) {
+                finishPolyline();
+            }
             if ((e.key === 'Delete' || e.key === 'Backspace') && selectedAnnId) {
                 handleRejectAnnotation(selectedAnnId);
             }
@@ -989,10 +1180,12 @@ Do you want to proceed?`;
             window.removeEventListener('keyup', onKeyUp);
         };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [handleUndo, handleRedo, selectedAnnId]);
+    }, [handleUndo, handleRedo, selectedAnnId, drawMode, newPolylinePoints, finishPolyline, cancelPolyline]);
 
     // The box to draw while mouse is held or while picker is open
     const drawnBox = pendingAnnotation || newAnnotation;
+    const drawnPolylinePoints = pendingPolyline || newPolylinePoints;
+    const boxAnnotationCount = annotations.filter(a => a.annotation_type !== 'polygon').length;
 
     return (
         <div className="workspace">
@@ -1025,9 +1218,9 @@ Do you want to proceed?`;
                             className="btn-action btn-action-secondary"
                             onClick={handleOcrAutoLabel}
                             disabled={ocrAutoLabeling || images.filter(img => img.status === 'pending').length === 0}
-                            title="Use the trained OCR model to pre-label pending photos — review and correct after"
+                            title={`Use the trained OCR model to pre-label pending photos as ${drawMode === 'polyline' ? 'polylines' : 'boxes'} (current canvas tool) — review and correct after`}
                         >
-                            <Sparkles size={14} /> {ocrAutoLabeling ? 'Labeling…' : 'Auto-Label Characters'}
+                            <Sparkles size={14} /> {ocrAutoLabeling ? 'Labeling…' : `Auto-Label Characters (${drawMode === 'polyline' ? 'Polyline' : 'Box'})`}
                         </button>
                         <button
                             className="btn-action btn-action-review"
@@ -1178,7 +1371,34 @@ Do you want to proceed?`;
                         <div className="canvas-toolbar">
                             <span className="canvas-filename">{currentImage.filename}</span>
                             <span className="canvas-dims">{imgW} × {imgH}px</span>
-                            <span className="canvas-hint" title="Scroll to zoom · hold Space + drag to pan">{isPanning ? 'Pan mode — drag to move' : selectedAnnId ? 'Drag to move · handles to resize' : 'Draw a box to annotate'}</span>
+                            <span className="canvas-hint" title="Scroll to zoom · hold Space + drag to pan">
+                                {isPanning
+                                    ? 'Pan mode — drag to move'
+                                    : selectedAnnId
+                                        ? 'Drag to move · handles to resize'
+                                        : drawMode === 'polyline'
+                                            ? 'Click to place points · double-click or Enter to finish · Esc to cancel'
+                                            : 'Draw a box to annotate'}
+                            </span>
+                            {/* ── Draw mode: Box vs Polyline ── */}
+                            <div className="draw-mode-toggle">
+                                <button
+                                    className={`btn-toolbar ${drawMode === 'box' ? 'btn-toolbar--active' : ''}`}
+                                    onClick={() => changeDrawMode('box')}
+                                    title="Box tool — axis-aligned rectangle"
+                                ><Square size={14} /></button>
+                                <button
+                                    className={`btn-toolbar ${drawMode === 'polyline' ? 'btn-toolbar--active' : ''}`}
+                                    onClick={() => changeDrawMode('polyline')}
+                                    title="Polyline tool — trace the character's true outline. Best for angled LHS/RHS plate views where boxes would touch."
+                                ><PenTool size={14} /></button>
+                            </div>
+                            <button
+                                className="btn-toolbar btn-toolbar--labeled"
+                                onClick={handleConvertToPolyline}
+                                disabled={boxAnnotationCount === 0}
+                                title="Replace this image's box annotations with adjustable polylines, so you can drag each corner onto the real (rotated) character outline"
+                            ><RefreshCw size={14} /> Box → Polyline</button>
                             {/* ── Undo / Redo ── */}
                             <button className="btn-toolbar" onClick={handleUndo} disabled={!history.length} title="Undo (Ctrl+Z)"><Undo2 size={14} /></button>
                             <button className="btn-toolbar" onClick={handleRedo} disabled={!redoStack.length} title="Redo (Ctrl+Y)"><Redo2 size={14} /></button>
@@ -1319,6 +1539,7 @@ Do you want to proceed?`;
                                 onMouseDown={handleMouseDown}
                                 onMouseMove={handleMouseMove}
                                 onMouseUp={handleMouseUp}
+                                onDblClick={drawMode === 'polyline' ? finishPolyline : undefined}
                             >
                                 <Layer>
                                     {/* Rotates live with the slider; grid stays fixed as the level reference */}
@@ -1347,25 +1568,39 @@ Do you want to proceed?`;
                                         const labelH = fontSize + padY * 2;
                                         return (
                                             <React.Fragment key={ann.id}>
-                                                <Rect
-                                                    ref={node => { if (node) annNodesRef.current[ann.id] = node; else delete annNodesRef.current[ann.id]; }}
-                                                    x={bx} y={by} width={bw} height={bh}
-                                                    stroke={isSelected ? '#facc15' : color}
-                                                    strokeWidth={(isSelected ? 2 : 1.5) / totalScale}
-                                                    fill={unclassified
-                                                        ? 'rgba(245,158,11,0.10)'
-                                                        : ann.source === 'auto'
-                                                            ? 'rgba(167,139,250,0.07)'
-                                                            : 'rgba(244,63,94,0.07)'}
-                                                    dash={unclassified ? [6 / totalScale, 3 / totalScale] : undefined}
-                                                    draggable={isSelected && !isPanning}
-                                                    onClick={(e) => handleAnnClick(ann.id, e)}
-                                                    onTap={(e) => handleAnnClick(ann.id, e)}
-                                                    onDragEnd={(e) => handleAnnDragEnd(e, ann)}
-                                                    onTransformEnd={(e) => handleAnnTransformEnd(e, ann)}
-                                                    onMouseEnter={e => { e.target.getStage().container().style.cursor = 'move'; }}
-                                                    onMouseLeave={e => { e.target.getStage().container().style.cursor = isPanning ? 'grab' : 'crosshair'; }}
-                                                />
+                                                {ann.annotation_type === 'polygon' && ann.points ? (
+                                                    <PolygonAnnotation
+                                                        ann={ann}
+                                                        imgW={imgW} imgH={imgH}
+                                                        color={color}
+                                                        isSelected={isSelected}
+                                                        isPanning={isPanning}
+                                                        totalScale={totalScale}
+                                                        onSelect={(e) => handleAnnClick(ann.id, e)}
+                                                        onMoveEnd={(pts) => handlePolygonMoveEnd(ann, pts)}
+                                                        onVertexDragEnd={(pts) => handlePolygonVertexEnd(ann, pts)}
+                                                    />
+                                                ) : (
+                                                    <Rect
+                                                        ref={node => { if (node) annNodesRef.current[ann.id] = node; else delete annNodesRef.current[ann.id]; }}
+                                                        x={bx} y={by} width={bw} height={bh}
+                                                        stroke={isSelected ? '#facc15' : color}
+                                                        strokeWidth={(isSelected ? 2 : 1.5) / totalScale}
+                                                        fill={unclassified
+                                                            ? 'rgba(245,158,11,0.10)'
+                                                            : ann.source === 'auto'
+                                                                ? 'rgba(167,139,250,0.07)'
+                                                                : 'rgba(244,63,94,0.07)'}
+                                                        dash={unclassified ? [6 / totalScale, 3 / totalScale] : undefined}
+                                                        draggable={isSelected && !isPanning}
+                                                        onClick={(e) => handleAnnClick(ann.id, e)}
+                                                        onTap={(e) => handleAnnClick(ann.id, e)}
+                                                        onDragEnd={(e) => handleAnnDragEnd(e, ann)}
+                                                        onTransformEnd={(e) => handleAnnTransformEnd(e, ann)}
+                                                        onMouseEnter={e => { e.target.getStage().container().style.cursor = 'move'; }}
+                                                        onMouseLeave={e => { e.target.getStage().container().style.cursor = isPanning ? 'grab' : 'crosshair'; }}
+                                                    />
+                                                )}
                                                 {/* Label background */}
                                                 <Rect
                                                     x={bx} y={by - labelH}
@@ -1425,6 +1660,37 @@ Do you want to proceed?`;
                                             fill="rgba(220,20,60,0.08)"
                                         />
                                     )}
+                                    {drawnPolylinePoints.length > 0 && (() => {
+                                        const ts = scale * userZoom;
+                                        const flat = drawnPolylinePoints.flatMap(p => [p.x, p.y]);
+                                        const withCursor = (!pendingPolyline && polylineCursor)
+                                            ? [...flat, polylineCursor.x, polylineCursor.y]
+                                            : flat;
+                                        return (
+                                            <>
+                                                <Line
+                                                    points={withCursor}
+                                                    closed={!!pendingPolyline}
+                                                    stroke="#dc143c"
+                                                    strokeWidth={2 / ts}
+                                                    dash={[6 / ts, 3 / ts]}
+                                                    fill={pendingPolyline ? 'rgba(220,20,60,0.08)' : undefined}
+                                                    listening={false}
+                                                />
+                                                {drawnPolylinePoints.map((p, i) => (
+                                                    <Circle
+                                                        key={i}
+                                                        x={p.x} y={p.y}
+                                                        radius={4 / ts}
+                                                        fill={i === 0 ? '#facc15' : '#dc143c'}
+                                                        stroke="#fff"
+                                                        strokeWidth={1 / ts}
+                                                        listening={false}
+                                                    />
+                                                ))}
+                                            </>
+                                        );
+                                    })()}
                                     </Group>
                                     {/* ── Alignment grid overlay — fixed, drawn above the (possibly rotating) image ── */}
                                     {showGrid && (() => {
@@ -1459,7 +1725,7 @@ Do you want to proceed?`;
                             </Stage>
 
                             {/* Class picker floats over the canvas */}
-                            {pendingAnnotation && (
+                            {(pendingAnnotation || pendingPolyline) && (
                                 <ClassPicker
                                     classes={localClasses}
                                     usedClasses={allUsedClasses}

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import axios from 'axios';
 import './AutoAnnotatePanel.css';
-import { Sparkles, X, RefreshCw, Square, AlertTriangle, Check, ChevronLeft, Clock, Clipboard } from 'lucide-react';
+import { Sparkles, X, RefreshCw, Square, AlertTriangle, Check, ChevronLeft, Clock, Clipboard, PenTool } from 'lucide-react';
 import logoImg from '../logo.png';
 
 import { API_URL, BASE_URL } from '../config';
@@ -94,6 +94,7 @@ const AutoAnnotatePanel = ({ project, onClose, onAnnotationsUpdated }) => {
     const [loadingImages, setLoadingImages] = useState(true);
     const [selectedIds, setSelectedIds] = useState(new Set());
     const [conf, setConf]               = useState(0.10);
+    const [shape, setShape]             = useState('bbox'); // 'bbox' | 'polygon'
     const [jobs, setJobs]               = useState([]);
     const [activeJobId, setActiveJobId] = useState(null);
     const [launching, setLaunching]     = useState(false);
@@ -405,7 +406,7 @@ const AutoAnnotatePanel = ({ project, onClose, onAnnotationsUpdated }) => {
         try {
             const res = await axios.post(
                 `${API_URL}/pipeline/auto-annotate/${project.id}`,
-                { image_ids: ids, conf }
+                { image_ids: ids, conf, shape }
             );
             const taskId = res.data.task_id;
             const job = makeJob(taskId, ids.length);
@@ -541,6 +542,24 @@ const AutoAnnotatePanel = ({ project, onClose, onAnnotationsUpdated }) => {
                                             className="aap-conf-slider"
                                         />
                                         <span className="aap-conf-val">{Math.round(conf * 100)}%</span>
+                                    </div>
+                                </div>
+                                <div className="aap-conf-row">
+                                    <label className="aap-conf-label">
+                                        Annotation shape
+                                        <span className="aap-conf-hint">Polyline gives editable corners — drag to hug rotated/angled shapes</span>
+                                    </label>
+                                    <div className="aap-shape-toggle">
+                                        <button
+                                            type="button"
+                                            className={`aap-shape-btn ${shape === 'bbox' ? 'aap-shape-btn--active' : ''}`}
+                                            onClick={() => setShape('bbox')}
+                                        ><Square size={13} /> Box</button>
+                                        <button
+                                            type="button"
+                                            className={`aap-shape-btn ${shape === 'polygon' ? 'aap-shape-btn--active' : ''}`}
+                                            onClick={() => setShape('polygon')}
+                                        ><PenTool size={13} /> Polyline</button>
                                     </div>
                                 </div>
                             </section>
