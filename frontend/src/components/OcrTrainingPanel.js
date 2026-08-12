@@ -38,6 +38,15 @@ const OcrTrainingPanel = ({ project, onClose }) => {
     const [epochs, setEpochs]     = useState(50);
     const [maxIterations, setMaxIterations] = useState(800);
     const [crnnEpochs, setCrnnEpochs] = useState(40);
+    // CRNN training always mixes in ~3000 lines built from EMNIST
+    // handwritten-character images by default, covering every 0-9/A-Z
+    // character even ones never labeled in this project -- useful for
+    // general robustness, but it means the model can learn to read
+    // characters that were never actually shown to it in a real labeled
+    // box. On by default keeps behavior unchanged for existing projects;
+    // switch it off per-run when a project's own labeled photos should be
+    // the only source of truth for which characters actually exist.
+    const [useEmnist, setUseEmnist] = useState(true);
     const [target, setTarget]     = useState(300);
     const [imgSize, setImgSize]   = useState(64);
     const [fineTune, setFineTune] = useState(false);
@@ -103,6 +112,7 @@ const OcrTrainingPanel = ({ project, onClose }) => {
             const res = engine === 'crnn'
                 ? await axios.post(`${API_URL}/ocr/train-crnn/${project.id}`, {
                     epochs: crnnEpochs,
+                    emnist_lines: useEmnist ? 3000 : 0,
                 })
                 : engine === 'tesseract'
                 ? await axios.post(`${API_URL}/ocr/train-tesseract/${project.id}`, {
@@ -281,6 +291,7 @@ const OcrTrainingPanel = ({ project, onClose }) => {
                     <div className="ocr-section">
                         <h3>Training</h3>
                         {engine === 'crnn' ? (
+                        <>
                         <div className="ocr-settings">
                             <label>Epochs
                                 <input type="number" min="5" max="200" value={crnnEpochs}
@@ -293,6 +304,25 @@ const OcrTrainingPanel = ({ project, onClose }) => {
                                 First run is the slowest; exports <b>ocr_crnn.tflite</b> + <b>charset.txt</b>.
                             </p>
                         </div>
+                        <div className="ocr-finetune">
+                            <label className="ocr-finetune-toggle">
+                                <input type="checkbox" checked={useEmnist} disabled={running}
+                                    onChange={e => setUseEmnist(e.target.checked)} />
+                                <span>
+                                    <b>Include EMNIST handwritten samples</b> — adds ~3000 real
+                                    handwritten-character images covering every 0–9/A–Z, even
+                                    characters you never boxed in this project. Good for general
+                                    robustness, but it also means the model can start reading a
+                                    character it was never actually shown in a real labeled box
+                                    (e.g. a letter skipped because a shadow hid it). Turn this off
+                                    if a mystery extra character keeps showing up in reads — the
+                                    model will then only ever see characters that actually appear
+                                    in your labeled boxes, synthetic-rendered text, and composites
+                                    built from your own crops.
+                                </span>
+                            </label>
+                        </div>
+                        </>
                         ) : engine === 'tesseract' ? (
                         <div className="ocr-settings">
                             <label>Max iterations

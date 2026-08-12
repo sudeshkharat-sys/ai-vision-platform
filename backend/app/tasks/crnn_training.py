@@ -341,7 +341,10 @@ def train_crnn_model(
     # so the model's general knowledge is grounded in real characters, not
     # only computer-drawn fonts. Skipped automatically if EMNIST isn't
     # available on this server.
-    emnist_pools = _emnist_char_pools(rng)
+    # emnist_lines == 0 means "skip EMNIST" -- don't even trigger the
+    # (possibly ~0.5GB, first-run) dataset load/download for a result that
+    # gets thrown away anyway by the made_em < emnist_lines check below.
+    emnist_pools = _emnist_char_pools(rng) if emnist_lines > 0 else {}
     made_em = 0
     if emnist_pools:
         guard = 0
