@@ -74,6 +74,39 @@ def _normalize_line(gray: np.ndarray) -> np.ndarray:
     return canvas
 
 
+def _deskewed_char_crop(gray_full: np.ndarray, points_px):
+    """
+    Tight, de-skewed crop of a single character from its traced polygon
+    outline (absolute pixel coords), instead of the character's own
+    axis-aligned bounding box. On a rotated/tilted character (common on an
+    angled engine-plate photo), the axis-aligned box is inflated by up to
+    ~sqrt(2)x in the direction of the text line and commonly overlaps the
+    neighboring character's box too -- so a plain box crop can contain a
+    fragment of the character next to it, feeding that contamination
+    straight into training as if it were a clean example of this one.
+    Returns None (falls back to the axis-aligned crop) if the polygon is
+    degenerate or too small to form a sane rectangle.
+    """
+    pts = np.array(points_px, dtype=np.float32)
+    if pts.shape[0] < 3:
+        return None
+    (cx, cy), (rw, rh), angle = cv2.minAreaRect(pts)
+    rw_i, rh_i = int(round(rw)), int(round(rh))
+    if rw_i < 2 or rh_i < 2:
+        return None
+    M = cv2.getRotationMatrix2D((cx, cy), angle, 1.0)
+    h, w = gray_full.shape[:2]
+    rotated = cv2.warpAffine(gray_full, M, (w, h), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE)
+    crop = cv2.getRectSubPix(rotated, (rw_i, rh_i), (cx, cy))
+    # minAreaRect's (w, h) ordering isn't guaranteed to put the longer side
+    # last for a near-square glyph -- rotate 90 degrees to portrait when the
+    # crop reads noticeably wider than tall, since a single character strip
+    # should never be much wider than it is tall.
+    if crop.shape[1] > crop.shape[0] * 1.4:
+        crop = cv2.rotate(crop, cv2.ROTATE_90_CLOCKWISE)
+    return crop
+
+
 def _char_strip(gray_crop: np.ndarray) -> np.ndarray:
     """Height-normalize a single character crop to ~IMG_H tall, natural width,
     for compositing into synthetic lines."""
@@ -296,13 +329,24 @@ def train_crnn_model(
                 continue
             real_lines.append((_normalize_line(gray_full[y1:y2, x1:x2]), text))
             # individual char crops for compositing
-            for (label, cx1, cy1, cx2, cy2) in line:
+            for (label, cx1, cy1, cx2, cy2, points_px) in line:
                 if label not in _CHAR_TO_IDX:
                     continue
-                a1, b1 = max(0, int(cx1)), max(0, int(cy1))
-                a2, b2 = min(iw, int(cx2)), min(ih, int(cy2))
-                if a2 - a1 >= 2 and b2 - b1 >= 2:
-                    char_crops[label].append(_char_strip(gray_full[b1:b2, a1:a2]))
+                # A polygon-traced character gets a de-skewed crop of just
+                # its own outline -- on a tilted plate, the axis-aligned
+                # box below can extend well past the glyph and into a
+                # neighboring character, silently feeding a crop that's
+                # part-Z-part-whatever's-next-to-it into training as if it
+                # were a clean "Z". Falls back to the plain box crop when
+                # there's no polygon (old bbox-only annotations).
+                crop = _deskewed_char_crop(gray_full, points_px) if points_px else None
+                if crop is None:
+                    a1, b1 = max(0, int(cx1)), max(0, int(cy1))
+                    a2, b2 = min(iw, int(cx2)), min(ih, int(cy2))
+                    if a2 - a1 >= 2 and b2 - b1 >= 2:
+                        crop = gray_full[b1:b2, a1:a2]
+                if crop is not None and crop.size > 0:
+                    char_crops[label].append(_char_strip(crop))
 
         if (idx + 1) % 5 == 0 or idx + 1 == total:
             try:

@@ -127,7 +127,7 @@ def _fetch_training_data(db, conn, project_id: str, status_filter: str = "annota
     params = {f"id_{i}": v for i, v in enumerate(image_ids)}
     ann_rows = db.execute_query(
         conn,
-        f"SELECT image_id, class_name, bbox, source FROM annotations "
+        f"SELECT image_id, class_name, bbox, source, points, annotation_type FROM annotations "
         f"WHERE image_id IN ({placeholders})",
         params,
     )
@@ -135,15 +135,19 @@ def _fetch_training_data(db, conn, project_id: str, status_filter: str = "annota
 
 
 def _group_annotations(ann_rows):
-    """Group raw annotation rows by image_id, normalising bbox type."""
+    """Group raw annotation rows by image_id, normalising bbox/points type."""
     anns_by_image = defaultdict(list)
     for row in ann_rows:
         raw_bbox = row.get("bbox")
         bbox = json.loads(raw_bbox) if isinstance(raw_bbox, str) else raw_bbox
+        raw_points = row.get("points")
+        points = json.loads(raw_points) if isinstance(raw_points, str) else raw_points
         anns_by_image[row["image_id"]].append({
             "class_name": row["class_name"],
             "bbox": bbox,
             "source": row.get("source", "manual"),
+            "points": points,
+            "annotation_type": row.get("annotation_type") or "bbox",
         })
     return anns_by_image
 

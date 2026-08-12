@@ -800,6 +800,28 @@ def _load_crnn(project_id: str):
     return model, charset
 
 
+def _estimate_text_angle(boxes):
+    """
+    Best-fit tilt (degrees) of the line through character-box centers —
+    0 for a horizontal line. Used to de-skew a photo of an angled plate
+    before row-grouping/cropping, since both of those assume roughly
+    horizontal text.
+
+    Falls back to 0 (no correction) for too few boxes, a near-vertical fit
+    (unreliable — more likely noise than a genuinely vertical plate), or a
+    near-zero horizontal spread (division/slope blow-up).
+    """
+    if len(boxes) < 2:
+        return 0.0
+    centers = np.array([[b[0] + b[2] / 2, b[1] + b[3] / 2] for b in boxes], dtype=np.float32)
+    xs, ys = centers[:, 0], centers[:, 1]
+    if float(np.ptp(xs)) < 1.0:
+        return 0.0
+    slope, _ = np.polyfit(xs, ys, 1)
+    angle = float(np.degrees(np.arctan(slope)))
+    return angle if abs(angle) <= 60 else 0.0
+
+
 def _predict_with_crnn(project_id: str, img: np.ndarray, gray: np.ndarray):
     """
     Read text with the CRNN line recognizer. Uses the project's trained YOLO
@@ -822,6 +844,39 @@ def _predict_with_crnn(project_id: str, img: np.ndarray, gray: np.ndarray):
     region_source = "full_frame"
     if boxes:
         region_source = "yolo_chars"
+
+        # Row-grouping below only tolerates ~0.6x a character's height of
+        # vertical spread between boxes it considers the same line -- fine
+        # for a level plate, but a plate photographed at an angle (common
+        # on an assembly line, camera never perfectly square-on) spreads a
+        # single real line's box centers across far more vertical distance
+        # than that tolerance allows. That either fragments one line into
+        # several spurious single/two-character "rows" (each read with no
+        # sequence context, which is exactly the kind of isolated-character
+        # misread this was chasing), or produces line crops that clip into
+        # neighboring rows. De-skewing the whole frame around the character
+        # cluster's own centroid first — using only detected box centers,
+        # no ground-truth needed — makes the text roughly horizontal before
+        # any of that grouping/cropping happens.
+        angle = _estimate_text_angle(boxes)
+        if abs(angle) > 2.0:
+            centers = np.array([[b[0] + b[2] / 2, b[1] + b[3] / 2] for b in boxes], dtype=np.float32)
+            cx, cy = float(centers[:, 0].mean()), float(centers[:, 1].mean())
+            rot_h, rot_w = gray.shape[:2]
+            M = cv2.getRotationMatrix2D((cx, cy), angle, 1.0)
+            gray = cv2.warpAffine(gray, M, (rot_w, rot_h), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE)
+            img = cv2.warpAffine(img, M, (rot_w, rot_h), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE)
+            ones = np.ones((centers.shape[0], 1), dtype=np.float32)
+            rotated_centers = (M @ np.hstack([centers, ones]).T).T
+            # Move each box's center onto the de-skewed frame, keeping its
+            # own width/height -- rotation only needs the centers back onto
+            # one horizontal line for row-grouping to work; reshaping every
+            # box's extent isn't necessary for that.
+            boxes = [
+                (int(round(ncx - w0 / 2)), int(round(ncy - h0 / 2)), w0, h0)
+                for (_, _, w0, h0), (ncx, ncy) in zip(boxes, rotated_centers)
+            ]
+
         med_h = float(np.median([b[3] for b in boxes]))
         rows = []
         for b in sorted(boxes, key=lambda b: b[1] + b[3] / 2):

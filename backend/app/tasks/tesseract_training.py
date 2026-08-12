@@ -75,8 +75,15 @@ def _boxes_to_lines(anns, iw, ih):
     Group single-character annotations into text lines.
 
     Returns a list of lines; each line is a list of
-    (label, x1, y1, x2, y2) sorted left-to-right, and lines are sorted
-    top-to-bottom.
+    (label, x1, y1, x2, y2, points_px) sorted left-to-right, and lines are
+    sorted top-to-bottom. points_px is the annotation's polygon vertices in
+    absolute pixel coordinates (a list of (x, y) tuples) when the source
+    annotation is a polygon, else None -- x1..y2 stay the axis-aligned
+    envelope either way (used for line grouping/sorting, which tolerates
+    the extra slack fine), while points_px lets a consumer that needs a
+    single clean character crop -- not just an axis-aligned box that can
+    overlap a neighboring character on a tilted plate -- de-skew to the
+    actual traced outline instead.
     """
     chars = []
     for ann in anns:
@@ -92,7 +99,10 @@ def _boxes_to_lines(anns, iw, ih):
         y2 = (yc + h / 2) * ih
         if x2 - x1 < 2 or y2 - y1 < 2:
             continue
-        chars.append((label, x1, y1, x2, y2))
+        points_px = None
+        if ann.get("annotation_type") == "polygon" and ann.get("points") and len(ann["points"]) >= 3:
+            points_px = [(px * iw, py * ih) for px, py in ann["points"]]
+        chars.append((label, x1, y1, x2, y2, points_px))
     if not chars:
         return []
 
