@@ -102,8 +102,22 @@ async def duplicate_project(
     """
     source = await get_owned_project(project_id, current_user, db)
 
+    existing_result = await db.execute(
+        select(Project.name).where(
+            Project.user_id == current_user.id,
+            Project.name.like(f"{source.name} (Copy%"),
+        )
+    )
+    existing_names = set(existing_result.scalars().all())
+
+    new_name = f"{source.name} (Copy)"
+    suffix = 2
+    while new_name in existing_names:
+        new_name = f"{source.name} (Copy {suffix})"
+        suffix += 1
+
     new_project = Project(
-        name=f"{source.name} (Copy)",
+        name=new_name,
         description=source.description,
         classes=list(source.classes or []),
         project_type=source.project_type,
