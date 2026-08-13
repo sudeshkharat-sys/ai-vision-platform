@@ -30,7 +30,7 @@ class ProjectCreate(BaseModel):
     name: str
     description: Optional[str] = None
     classes: List[str]
-    project_type: str = "detection"  # detection | ocr
+    project_type: str = "detection"  # detection | ocr | combined
 
 class ProjectUpdateRequest(BaseModel):
     name: Optional[str] = None

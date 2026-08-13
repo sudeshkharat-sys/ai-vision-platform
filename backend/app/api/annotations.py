@@ -72,7 +72,7 @@ async def create_annotation(
     await _ensure_class_registered(db, image.project_id, data.class_name)
 
     bbox = data.bbox
-    if data.annotation_type == "polygon" and data.points and bbox is None:
+    if data.annotation_type in ("polygon", "segment") and data.points and bbox is None:
         bbox = _points_to_bbox(data.points)
 
     annotation = Annotation(
@@ -128,7 +128,8 @@ async def update_annotation_points(
     if len(data.points) < 3:
         raise HTTPException(status_code=400, detail="A polygon needs at least 3 points.")
     ann.points = data.points
-    ann.annotation_type = "polygon"
+    if ann.annotation_type != "segment":
+        ann.annotation_type = "polygon"
     ann.bbox = _points_to_bbox(data.points)
     await db.commit()
     await db.refresh(ann)
@@ -144,7 +145,7 @@ async def convert_annotation_to_polygon(
     """Replace a box annotation with its 4-corner polygon equivalent, ready to
     drag into shape — the starting point for "Replace box with polyline"."""
     ann = await get_owned_annotation(annotation_id, current_user, db)
-    if ann.annotation_type != "polygon":
+    if ann.annotation_type not in ("polygon", "segment"):
         if not ann.bbox:
             raise HTTPException(status_code=400, detail="Annotation has no bbox to convert.")
         ann.points = _bbox_to_points(ann.bbox)
@@ -166,7 +167,7 @@ async def convert_image_annotations_to_polygon(
     result = await db.execute(select(Annotation).where(Annotation.image_id == image_id))
     anns = result.scalars().all()
     for ann in anns:
-        if ann.annotation_type != "polygon" and ann.bbox:
+        if ann.annotation_type not in ("polygon", "segment") and ann.bbox:
             ann.points = _bbox_to_points(ann.bbox)
             ann.annotation_type = "polygon"
     await db.commit()

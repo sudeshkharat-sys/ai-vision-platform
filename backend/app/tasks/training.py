@@ -470,6 +470,115 @@ def _build_yolo_dataset(img_rows, anns_by_image, classes, project_id,
     return dataset_path, len(train_imgs) + n_synthetic, len(val_imgs), len(test_imgs)
 
 
+# ── Segmentation dataset helpers ─────────────────────────────────────
+
+def _write_seg_split(dataset_path, split_name, split_imgs, anns_by_image, classes,
+                      preprocess: bool = True, task=None, progress_offset: int = 0,
+                      progress_total: int = 0):
+    """Copy images and write YOLO-seg label files (class + polygon points) for one split.
+
+    Only annotations with annotation_type == 'segment' and real polygon
+    points contribute a mask line — everything else (plain boxes, the
+    bbox-precision 'polygon' type) is skipped, since a 4-number bbox isn't
+    a valid YOLO-seg label. Images with no segment annotation still get an
+    empty label file (valid negative sample).
+    """
+    (dataset_path / "images" / split_name).mkdir(parents=True, exist_ok=True)
+    (dataset_path / "labels" / split_name).mkdir(parents=True, exist_ok=True)
+
+    for idx, img in enumerate(split_imgs):
+        real_path = Path(".") / img["filepath"].lstrip("/")
+        if not real_path.exists():
+            real_path = settings.upload_dir.parent / Path(img["filepath"].lstrip("/"))
+
+        dest_name = f"{idx}_{os.path.basename(img['filepath'])}"
+        dest_path = dataset_path / "images" / split_name / dest_name
+
+        if preprocess:
+            _preprocess_for_inspection(real_path, dest_path)
+        else:
+            shutil.copy(real_path, dest_path)
+
+        if task and preprocess and progress_total > 0 and (idx + 1) % 5 == 0:
+            current = progress_offset + idx + 1
+            try:
+                task.update_state(
+                    state="STARTED",
+                    meta={
+                        "phase": "preprocessing",
+                        "current": current,
+                        "total": progress_total,
+                        "split": split_name,
+                        "pct": round(current / progress_total * 100),
+                    },
+                )
+            except Exception:
+                pass
+
+        label_file = (
+            dataset_path / "labels" / split_name
+            / (os.path.splitext(dest_name)[0] + ".txt")
+        )
+        with open(label_file, "w") as f:
+            for ann in anns_by_image.get(img["id"], []):
+                if (ann.get("annotation_type") == "segment" and ann.get("points")
+                        and len(ann["points"]) >= 3 and ann["class_name"] in classes):
+                    cls_idx = classes.index(ann["class_name"])
+                    coords = " ".join(f"{x} {y}" for x, y in ann["points"])
+                    f.write(f"{cls_idx} {coords}\n")
+
+
+def _build_yolo_seg_dataset(img_rows, anns_by_image, classes, project_id,
+                             train_ratio=0.8, val_ratio=0.15, preprocess=True, task=None):
+    """
+    Build a YOLO-seg dataset directory (same images/labels/data.yaml layout
+    as detection, but label files hold polygon masks instead of boxes).
+    """
+    dataset_path = Path(f"./temp_seg_dataset_{project_id}")
+    dataset_path.mkdir(exist_ok=True)
+
+    train_imgs, val_imgs, test_imgs = _split_images(
+        img_rows, train_ratio=train_ratio, val_ratio=val_ratio,
+        anns_by_image=anns_by_image,
+    )
+
+    total = len(train_imgs) + len(val_imgs) + len(test_imgs)
+    if task and preprocess and total > 0:
+        try:
+            task.update_state(
+                state="STARTED",
+                meta={"phase": "preprocessing", "current": 0, "total": total, "split": "train", "pct": 0},
+            )
+        except Exception:
+            pass
+
+    _write_seg_split(dataset_path, "train", train_imgs, anns_by_image, classes,
+                      preprocess=preprocess, task=task,
+                      progress_offset=0, progress_total=total)
+    _write_seg_split(dataset_path, "val", val_imgs, anns_by_image, classes,
+                      preprocess=preprocess, task=task,
+                      progress_offset=len(train_imgs), progress_total=total)
+    if test_imgs:
+        _write_seg_split(dataset_path, "test", test_imgs, anns_by_image, classes,
+                          preprocess=preprocess, task=task,
+                          progress_offset=len(train_imgs) + len(val_imgs), progress_total=total)
+
+    data_yaml: dict = {
+        "path":  str(dataset_path.absolute()),
+        "train": "images/train",
+        "val":   "images/val",
+        "nc":    len(classes),
+        "names": classes,
+    }
+    if test_imgs:
+        data_yaml["test"] = "images/test"
+
+    with open(dataset_path / "data.yaml", "w") as f:
+        yaml.dump(data_yaml, f)
+
+    return dataset_path, len(train_imgs), len(val_imgs), len(test_imgs)
+
+
 def _make_epoch_callback(celery_task, total_epochs, epoch_history, epoch_start_times, stop_flag):
     """Return an on_fit_epoch_end callback that pushes live metrics to Celery."""
     def on_fit_epoch_end(trainer):
@@ -874,4 +983,128 @@ def train_main_model(
         "metrics":          final_metrics,
         "history":          epoch_history,
         "split":            {"train": n_train, "val": n_val, "test": n_test},
+    }
+
+
+# ══════════════════════════════════════════════════════════════════
+#  Segmentation Training Task
+# ══════════════════════════════════════════════════════════════════
+
+@celery_app.task(name="app.tasks.training.train_seg_model", bind=True)
+def train_seg_model(
+    self,
+    project_id: str,
+    model_name: str = "yolo11n-seg.pt",
+    epochs: int = 100,
+    imgsz: int = 640,
+    preprocess: bool = True,
+    batch: int = -1,
+    custom_weights: str = None,
+):
+    """
+    Instance-segmentation training on annotations drawn with the 'segment'
+    annotation_type (real polygon masks, not the bbox-precision 'polygon'
+    type). Requires a '-seg' checkpoint (e.g. yolo11n-seg.pt) — Ultralytics
+    infers task=segment from the checkpoint name.
+
+    Phases mirror train_seed_model: DB reads -> dataset build -> train ->
+    persist seg_best.pt.
+    """
+    db = StateDBConnector()
+
+    with db.get_session() as conn:
+        proj, classes, img_rows, ann_rows = _fetch_training_data(
+            db, conn, project_id, status_filter="annotated"
+        )
+
+    if proj is None:
+        return {"error": "Project not found"}
+    if not img_rows:
+        return {"error": "No annotated images found"}
+
+    anns_by_image = _group_annotations(ann_rows)
+
+    has_seg_anns = any(
+        a.get("annotation_type") == "segment" and a.get("points")
+        for anns in anns_by_image.values() for a in anns
+    )
+    if not has_seg_anns:
+        return {"error": "No segmentation (polygon mask) annotations found. Draw segment outlines before training."}
+
+    dataset_path, n_train, n_val, n_test = _build_yolo_seg_dataset(
+        img_rows, anns_by_image, classes, project_id,
+        preprocess=preprocess, task=self,
+    )
+
+    total_epochs = epochs
+    epoch_history = []
+    epoch_start_times = []
+    stop_flag = {'value': False}
+
+    if custom_weights:
+        custom_path = settings.model_dir / project_id / "custom_weights" / custom_weights
+        if not custom_path.exists():
+            shutil.rmtree(dataset_path, ignore_errors=True)
+            return {"error": f"Uploaded weights '{custom_weights}' not found."}
+        model = YOLO(str(custom_path))
+    else:
+        model = YOLO(model_name)
+    model.add_callback(
+        "on_fit_epoch_end",
+        _make_epoch_callback(self, total_epochs, epoch_history, epoch_start_times, stop_flag),
+    )
+
+    self.update_state(
+        state="STARTED",
+        meta={"epoch": 0, "total_epochs": total_epochs, "eta_seconds": None,
+              "history": [], "model_name": custom_weights or model_name,
+              "split": {"train": n_train, "val": n_val, "test": n_test}},
+    )
+
+    _batch = 0.90 if batch == -1 else batch
+
+    results = model.train(
+        data=str(dataset_path / "data.yaml"),
+        epochs=total_epochs,
+        imgsz=imgsz,
+        batch=_batch,
+        cache=True,
+        amp=True,
+        device=0,
+        lr0=settings.seed_learning_rate,
+        lrf=0.01,
+        cos_lr=True,
+        warmup_epochs=3,
+        weight_decay=0.001,
+        patience=20,
+        project=str(settings.model_dir / project_id),
+        name="seg_model",
+        verbose=False,
+        workers=0,
+    )
+
+    if stop_flag['value']:
+        try:
+            shutil.rmtree(results.save_dir, ignore_errors=True)
+        except Exception:
+            pass
+        shutil.rmtree(dataset_path, ignore_errors=True)
+        from celery.exceptions import Ignore
+        raise Ignore()
+
+    best_model_path = results.save_dir / "weights" / "best.pt"
+    target_path = settings.model_dir / project_id / "seg_best.pt"
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy(best_model_path, target_path)
+    shutil.rmtree(dataset_path)
+
+    final_metrics = epoch_history[-1] if epoch_history else {}
+
+    return {
+        "status":     "success",
+        "model_path": str(target_path),
+        "model_name": custom_weights or model_name,
+        "metrics":    final_metrics,
+        "history":    epoch_history,
+        "split":      {"train": n_train, "val": n_val, "test": n_test},
     }

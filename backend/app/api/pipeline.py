@@ -5,7 +5,7 @@ from typing import List, Optional
 from datetime import datetime
 import base64, io, re, zipfile, cv2, numpy as np
 import redis as redis_lib
-from ..tasks.training import train_seed_model, train_main_model
+from ..tasks.training import train_seed_model, train_main_model, train_seg_model
 from ..tasks.auto_annotate import auto_annotate_remaining
 from ..tasks.ai_prompt import detect_with_prompt, bulk_detect_with_prompt
 from ..tasks.active_learning import (
@@ -79,6 +79,33 @@ async def get_available_models():
             {"value": m["value"], "label": m["label"]}
         )
     return {"models": YOLO_MODELS, "families": families}
+
+
+# ── Available YOLO-seg models (instance segmentation) ──────────────
+
+SEG_MODELS = [
+    {"value": "yolo11n-seg.pt", "label": "YOLO11 Nano-Seg — fastest",       "family": "YOLO11-Seg"},
+    {"value": "yolo11s-seg.pt", "label": "YOLO11 Small-Seg",                "family": "YOLO11-Seg"},
+    {"value": "yolo11m-seg.pt", "label": "YOLO11 Medium-Seg",               "family": "YOLO11-Seg"},
+    {"value": "yolo11l-seg.pt", "label": "YOLO11 Large-Seg",                "family": "YOLO11-Seg"},
+    {"value": "yolo11x-seg.pt", "label": "YOLO11 XL-Seg — best accuracy",  "family": "YOLO11-Seg"},
+    {"value": "yolov8n-seg.pt", "label": "YOLOv8 Nano-Seg",                 "family": "YOLOv8-Seg"},
+    {"value": "yolov8s-seg.pt", "label": "YOLOv8 Small-Seg",                "family": "YOLOv8-Seg"},
+    {"value": "yolov8m-seg.pt", "label": "YOLOv8 Medium-Seg",               "family": "YOLOv8-Seg"},
+    {"value": "yolov8l-seg.pt", "label": "YOLOv8 Large-Seg",                "family": "YOLOv8-Seg"},
+    {"value": "yolov8x-seg.pt", "label": "YOLOv8 XL-Seg",                   "family": "YOLOv8-Seg"},
+]
+
+
+@router.get("/available-seg-models")
+async def get_available_seg_models():
+    """Return the list of supported YOLO-seg model weights for the UI dropdowns."""
+    families: dict = {}
+    for m in SEG_MODELS:
+        families.setdefault(m["family"], []).append(
+            {"value": m["value"], "label": m["label"]}
+        )
+    return {"models": SEG_MODELS, "families": families}
 
 
 # ── Training ──────────────────────────────────────────────────────
@@ -157,6 +184,31 @@ async def start_main_training(
         req.custom_weights, req.aug_fliplr, req.aug_flipud, req.aug_mosaic, req.aug_hsv_v,
         req.aug_hsv_h, req.aug_hsv_s, req.aug_degrees, req.aug_translate,
         req.aug_scale, req.aug_mixup, req.aug_copy_paste,
+    )
+    return {"task_id": task.id, "status": "queued"}
+
+
+class TrainSegRequest(BaseModel):
+    model_name: str = "yolo11n-seg.pt"
+    custom_weights: Optional[str] = None
+    epochs: int = 100
+    imgsz: int = 640
+    preprocess: bool = True
+    batch: int = -1
+
+
+@router.post("/train-seg/{project_id}")
+async def start_seg_training(
+    project_id: str,
+    body: TrainSegRequest = None,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    await get_owned_project(project_id, current_user, db)
+    req = body or TrainSegRequest()
+    task = train_seg_model.delay(
+        project_id, req.model_name, req.epochs, req.imgsz, req.preprocess, req.batch,
+        req.custom_weights,
     )
     return {"task_id": task.id, "status": "queued"}
 
@@ -409,6 +461,7 @@ async def get_model_details(
 
     seed_path = settings.model_dir / project_id / "seed_best.pt"
     main_path = settings.model_dir / project_id / "main_best.pt"
+    seg_path  = settings.model_dir / project_id / "seg_best.pt"
 
     def file_info(path):
         if not path.exists():
@@ -442,6 +495,7 @@ async def get_model_details(
     return {
         "seed": {**file_info(seed_path), "last_job": await latest_job("seed_training")},
         "main": {**file_info(main_path), "last_job": await latest_job("main_training")},
+        "seg":  {**file_info(seg_path),  "last_job": await latest_job("seg_training")},
     }
 
 
@@ -455,8 +509,8 @@ async def download_model(
     """Stream the trained model weights file as a download."""
     await get_owned_project(project_id, current_user, db)
 
-    if model_type not in ("seed", "main"):
-        raise HTTPException(status_code=400, detail="model_type must be 'seed' or 'main'")
+    if model_type not in ("seed", "main", "seg"):
+        raise HTTPException(status_code=400, detail="model_type must be 'seed', 'main', or 'seg'")
 
     filename = f"{model_type}_best.pt"
     path = settings.model_dir / project_id / filename

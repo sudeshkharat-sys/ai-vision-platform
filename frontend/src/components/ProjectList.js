@@ -186,6 +186,9 @@ function ProjectCard({ project, index, onClick, onDelete, onDuplicate, duplicati
                     {project.project_type === 'ocr' && (
                         <span className="pl-card-type-badge">OCR</span>
                     )}
+                    {project.project_type === 'combined' && (
+                        <span className="pl-card-type-badge">DETECT+OCR+SEG</span>
+                    )}
                 </h3>
                 {project.description && (
                     <p className="pl-card-desc">{project.description}</p>
@@ -489,6 +492,14 @@ const ProjectList = ({ onProjectSelect, user }) => {
                                         OCR Characters
                                         <span>Label engraved letters/digits, train a character reader</span>
                                     </button>
+                                    <button
+                                        type="button"
+                                        className={`pl-type-btn ${newType === 'combined' ? 'active' : ''}`}
+                                        onClick={() => setNewType('combined')}
+                                    >
+                                        Combined (Detect + OCR + Segment)
+                                        <span>YOLO detection, character OCR, and instance segmentation in one project</span>
+                                    </button>
                                 </div>
                             </div>
                             <div className="pl-create-field">
@@ -498,7 +509,7 @@ const ProjectList = ({ onProjectSelect, user }) => {
                                     value={newClasses}
                                     onChange={e => setNewClasses(e.target.value)}
                                     onKeyDown={handleKeyDown}
-                                    placeholder={newType === 'ocr'
+                                    placeholder={newType === 'ocr' || newType === 'combined'
                                         ? 'Leave empty to auto-fill 0-9 and A-Z'
                                         : 'e.g. car, truck, bus, person'}
                                 />

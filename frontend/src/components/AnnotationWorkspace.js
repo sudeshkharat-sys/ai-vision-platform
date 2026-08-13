@@ -12,8 +12,9 @@ import VideoPanel from './VideoPanel';
 import ActiveLearningPanel from './ActiveLearningPanel';
 import OcrActiveLearningPanel from './OcrActiveLearningPanel';
 import OcrTrainingPanel from './OcrTrainingPanel';
+import SegTrainingPanel from './SegTrainingPanel';
 import './AnnotationWorkspace.css';
-import { Sparkles, AlertTriangle, X, Upload, Image as ImageIcon, Check, ArrowLeft, ArrowRight, Brain, Rocket, Eye, Target, Tag, Package, Film, Undo2, Redo2, ZoomIn, ZoomOut, Maximize2, Trash2, ImageOff, Type, RotateCw, RotateCcw, Grid3x3, Wand2, Square, PenTool, RefreshCw } from 'lucide-react';
+import { Sparkles, AlertTriangle, X, Upload, Image as ImageIcon, Check, ArrowLeft, ArrowRight, Brain, Rocket, Eye, Target, Tag, Package, Film, Undo2, Redo2, ZoomIn, ZoomOut, Maximize2, Trash2, ImageOff, Type, RotateCw, RotateCcw, Grid3x3, Wand2, Square, PenTool, RefreshCw, Scissors } from 'lucide-react';
 
 import { API_URL } from '../config';
 
@@ -259,6 +260,7 @@ const AnnotationWorkspace = ({ project, onProjectUpdated }) => {
     const [newPolylinePoints, setNewPolylinePoints] = useState([]); // [{x,y}, ...] while drawing
     const [polylineCursor, setPolylineCursor] = useState(null); // rubber-band point to last click
     const [pendingPolyline, setPendingPolyline] = useState(null); // finished points waiting for class
+    const [pendingShapeType, setPendingShapeType] = useState('polygon'); // 'polygon' (bbox-precision) | 'segment' (real mask)
     const [error, setError] = useState(null);
     const [uploading, setUploading] = useState(false);
     const [uploadProgress, setUploadProgress] = useState(null); // 0-100 during upload
@@ -277,6 +279,7 @@ const AnnotationWorkspace = ({ project, onProjectUpdated }) => {
     const [showActiveLearningPanel, setShowActiveLearningPanel] = useState(false);
     const [showOcrActiveLearningPanel, setShowOcrActiveLearningPanel] = useState(false);
     const [showOcrPanel, setShowOcrPanel] = useState(false);
+    const [showSegPanel, setShowSegPanel] = useState(false);
     const [ocrAutoLabeling, setOcrAutoLabeling] = useState(false);
     const [seedModelInfo, setSeedModelInfo] = useState(null); // { exists, modified_at } — character detector status for OCR projects
     const [suggestedImageIds, setSuggestedImageIds] = useState(null);  // Set<id> or null (sidebar highlight)
@@ -440,7 +443,7 @@ const AnnotationWorkspace = ({ project, onProjectUpdated }) => {
         if (isPanning) return;
         setSelectedAnnId(null);
         setClassifyingAnnId(ann.id);
-        if (ann.annotation_type === 'polygon' && ann.points) {
+        if ((ann.annotation_type === 'polygon' || ann.annotation_type === 'segment') && ann.points) {
             setPendingPolyline(ann.points.map(([x, y]) => ({ x: x * imgW, y: y * imgH })));
         } else {
             setPendingAnnotation({
@@ -749,7 +752,7 @@ Do you want to proceed?`;
     }, [project.id]);
 
     useEffect(() => {
-        if (project.project_type === 'ocr') loadSeedModelInfo();
+        if (project.project_type === 'ocr' || project.project_type === 'combined') loadSeedModelInfo();
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [project.id, project.project_type]);
 
@@ -956,7 +959,7 @@ Do you want to proceed?`;
         setSelectedAnnId(null);
         const pos = e.target.getStage().getRelativePointerPosition();
 
-        if (drawMode === 'polyline') {
+        if (drawMode === 'polyline' || drawMode === 'segment') {
             setNewPolylinePoints(prev => [...prev, pos]);
             return;
         }
@@ -965,7 +968,7 @@ Do you want to proceed?`;
     };
 
     const handleMouseMove = (e) => {
-        if (drawMode === 'polyline') {
+        if (drawMode === 'polyline' || drawMode === 'segment') {
             if (newPolylinePoints.length === 0) return;
             setPolylineCursor(e.target.getStage().getRelativePointerPosition());
             return;
@@ -980,7 +983,7 @@ Do you want to proceed?`;
     };
 
     const handleMouseUp = () => {
-        if (drawMode === 'polyline') return; // finished via double-click / Enter
+        if (drawMode === 'polyline' || drawMode === 'segment') return; // finished via double-click / Enter
         setIsDrawing(false);
         if (!newAnnotation || Math.abs(newAnnotation.width) < 5 || Math.abs(newAnnotation.height) < 5) {
             setNewAnnotation(null);
@@ -1010,9 +1013,10 @@ Do you want to proceed?`;
             return;
         }
         setPendingPolyline(newPolylinePoints);
+        setPendingShapeType(drawMode === 'segment' ? 'segment' : 'polygon');
         setNewPolylinePoints([]);
         setPolylineCursor(null);
-    }, [newPolylinePoints]);
+    }, [newPolylinePoints, drawMode]);
 
     const cancelPolyline = useCallback(() => {
         setNewPolylinePoints([]);
@@ -1021,7 +1025,7 @@ Do you want to proceed?`;
 
     const handleConvertToPolyline = async () => {
         if (!currentImage) return;
-        const boxCount = annotations.filter(a => a.annotation_type !== 'polygon').length;
+        const boxCount = annotations.filter(a => !['polygon', 'segment'].includes(a.annotation_type)).length;
         if (boxCount === 0) { showStatus('No box annotations left to convert.'); return; }
         try {
             const res = await axios.patch(`${API_URL}/annotations/image/${currentImage.id}/convert-to-polygon`);
@@ -1036,19 +1040,21 @@ Do you want to proceed?`;
     const handleClassConfirm = (className) => {
         const ann = pendingAnnotation;
         const polyline = pendingPolyline;
+        const shapeType = pendingShapeType;
         const annId = classifyingAnnId;
         setPendingAnnotation(null);
         setPendingPolyline(null);
+        setPendingShapeType('polygon');
         setNewAnnotation(null);
         setClassifyingAnnId(null);
 
         if (polyline && !annId) {
-            // New drawn polyline — POST it with normalized points (backend derives the AABB bbox)
+            // New drawn polyline/segment — POST it with normalized points (backend derives the AABB bbox)
             const points = polyline.map(p => [p.x / imgW, p.y / imgH]);
             axios.post(`${API_URL}/annotations`, {
                 image_id: currentImage.id,
                 class_name: className,
-                annotation_type: 'polygon',
+                annotation_type: shapeType,
                 points,
             })
                 .then(res => {
@@ -1196,7 +1202,7 @@ Do you want to proceed?`;
                 setSelectedAnnId(null);
                 cancelPolyline();
             }
-            if (e.key === 'Enter' && drawMode === 'polyline' && newPolylinePoints.length >= 3) {
+            if (e.key === 'Enter' && (drawMode === 'polyline' || drawMode === 'segment') && newPolylinePoints.length >= 3) {
                 finishPolyline();
             }
             if ((e.key === 'Delete' || e.key === 'Backspace') && selectedAnnId) {
@@ -1218,13 +1224,74 @@ Do you want to proceed?`;
     // The box to draw while mouse is held or while picker is open
     const drawnBox = pendingAnnotation || newAnnotation;
     const drawnPolylinePoints = pendingPolyline || newPolylinePoints;
-    const boxAnnotationCount = annotations.filter(a => a.annotation_type !== 'polygon').length;
+    const boxAnnotationCount = annotations.filter(a => !['polygon', 'segment'].includes(a.annotation_type)).length;
 
     return (
         <div className="workspace">
             {/* ── Sidebar ── */}
             <aside className="workspace-sidebar">
-                {project.project_type === 'ocr' ? (
+                {project.project_type === 'combined' ? (
+                    <div className="sidebar-section sidebar-actions">
+                        <p className="sidebar-label">Pipeline (Detect + OCR + Segment)</p>
+                        <button className="btn-action" onClick={() => setShowTrainingPanel(true)}>
+                            <Rocket size={14} /> Train Seed / Character Detector
+                        </button>
+                        {seedModelInfo && (
+                            <p className="ocr-seed-status">
+                                {seedModelInfo.exists
+                                    ? '✓ Character detector trained'
+                                    : '— Character detector not trained yet'}
+                            </p>
+                        )}
+                        <button className="btn-action btn-action-secondary" onClick={startAutoAnnotation}>
+                            <Sparkles size={14} /> Auto-Annotate
+                        </button>
+                        <button className="btn-action btn-action-al" onClick={() => setShowActiveLearningPanel(true)}>
+                            <Brain size={14} /> Active Learning (Detection)
+                        </button>
+                        <button className="btn-action btn-action-main" onClick={() => setShowMainTrainingPanel(true)}>
+                            <Target size={14} /> Train Main Model
+                        </button>
+                        <button className="btn-action btn-action-ocr" onClick={() => setShowOcrPanel(true)}>
+                            <Type size={14} /> Train OCR Model
+                        </button>
+                        <button
+                            className="btn-action btn-action-secondary"
+                            onClick={handleOcrAutoLabel}
+                            disabled={ocrAutoLabeling || images.filter(img => img.status === 'pending').length === 0}
+                            title={`Use the trained OCR model to pre-label pending photos as ${drawMode === 'polyline' ? 'polylines' : 'boxes'} (current canvas tool) — review and correct after`}
+                        >
+                            <Sparkles size={14} /> {ocrAutoLabeling ? 'Labeling…' : `Auto-Label Characters (${drawMode === 'polyline' ? 'Polyline' : 'Box'})`}
+                        </button>
+                        <button
+                            className="btn-action btn-action-al"
+                            onClick={() => setShowOcrActiveLearningPanel(true)}
+                            title="Rank pending photos by how uncertain the trained OCR model is, so you label the hardest ones first"
+                        >
+                            <Brain size={14} /> Active Learning (OCR)
+                        </button>
+                        <button
+                            className="btn-action btn-action-seg"
+                            onClick={() => setShowSegPanel(true)}
+                            title="Train an instance-segmentation model on annotations drawn with the Segment tool (mask outlines, not boxes)"
+                        >
+                            <Scissors size={14} /> Train Segmentation Model
+                        </button>
+                        <button
+                            className="btn-action btn-action-review"
+                            onClick={() => setShowReviewPanel(true)}
+                            disabled={images.filter(img => img.status === 'annotated').length === 0}
+                        >
+                            <Eye size={14} /> Review Annotations
+                        </button>
+                        <button className="btn-action btn-action-labels" onClick={() => setShowLabelsPanel(true)}>
+                            <Tag size={14} /> Edit Labels
+                        </button>
+                        <button className="btn-action btn-action-models" onClick={() => setShowModelsPanel(true)}>
+                            <Package size={14} /> View Models
+                        </button>
+                    </div>
+                ) : project.project_type === 'ocr' ? (
                     <div className="sidebar-section sidebar-actions">
                         <p className="sidebar-label">OCR Pipeline</p>
                         <div className="ocr-flow-hint">
@@ -1416,11 +1483,11 @@ Do you want to proceed?`;
                                     ? 'Pan mode — drag to move'
                                     : selectedAnnId
                                         ? 'Drag to move · handles to resize · double-click to fix the label'
-                                        : drawMode === 'polyline'
+                                        : (drawMode === 'polyline' || drawMode === 'segment')
                                             ? 'Click to place points · double-click or Enter to finish · Esc to cancel · double-click a shape to fix its label'
                                             : 'Draw a box to annotate · double-click a shape to fix its label'}
                             </span>
-                            {/* ── Draw mode: Box vs Polyline ── */}
+                            {/* ── Draw mode: Box vs Polyline vs Segment ── */}
                             <div className="draw-mode-toggle">
                                 <button
                                     className={`btn-toolbar ${drawMode === 'box' ? 'btn-toolbar--active' : ''}`}
@@ -1432,6 +1499,13 @@ Do you want to proceed?`;
                                     onClick={() => changeDrawMode('polyline')}
                                     title="Polyline tool — trace the character's true outline. Best for angled LHS/RHS plate views where boxes would touch."
                                 ><PenTool size={14} /></button>
+                                {project.project_type === 'combined' && (
+                                    <button
+                                        className={`btn-toolbar ${drawMode === 'segment' ? 'btn-toolbar--active' : ''}`}
+                                        onClick={() => changeDrawMode('segment')}
+                                        title="Segment tool — trace the real mask outline for instance-segmentation training (separate from the polyline precision tool)"
+                                    ><Scissors size={14} /></button>
+                                )}
                             </div>
                             <button
                                 className="btn-toolbar btn-toolbar--labeled"
@@ -1449,8 +1523,8 @@ Do you want to proceed?`;
                             {/* ── Rotate (portrait ↔ landscape; boxes are remapped) ── */}
                             <button className="btn-toolbar" onClick={() => handleRotateImage('ccw')} title="Rotate 90° counter-clockwise"><RotateCcw size={14} /></button>
                             <button className="btn-toolbar" onClick={() => handleRotateImage('cw')} title="Rotate 90° clockwise"><RotateCw size={14} /></button>
-                            {/* ── OCR only: smart rotate + fine nudge + alignment grid ── */}
-                            {project.project_type === 'ocr' && (<>
+                            {/* ── OCR/combined: smart rotate + fine nudge + alignment grid ── */}
+                            {(project.project_type === 'ocr' || project.project_type === 'combined') && (<>
                             <button
                                 className={`btn-toolbar btn-toolbar--smart ${isStraightening ? 'busy' : ''}`}
                                 onClick={handleAutoStraighten}
@@ -1579,7 +1653,7 @@ Do you want to proceed?`;
                                 onMouseDown={handleMouseDown}
                                 onMouseMove={handleMouseMove}
                                 onMouseUp={handleMouseUp}
-                                onDblClick={drawMode === 'polyline' ? finishPolyline : undefined}
+                                onDblClick={(drawMode === 'polyline' || drawMode === 'segment') ? finishPolyline : undefined}
                             >
                                 <Layer>
                                     {/* Rotates live with the slider; grid stays fixed as the level reference */}
@@ -1599,7 +1673,9 @@ Do you want to proceed?`;
                                         const bw = ann.bbox[2] * imgW;
                                         const bh = ann.bbox[3] * imgH;
                                         const unclassified = ann.source === 'ai_prompt' && !ann.class_name;
-                                        const color = unclassified ? '#f59e0b' : ann.source === 'auto' ? '#a78bfa' : '#f43f5e';
+                                        const isSegment = ann.annotation_type === 'segment';
+                                        const color = unclassified ? '#f59e0b' : ann.source === 'auto' ? '#a78bfa' : isSegment ? '#10b981' : '#f43f5e';
+                                        const isPolyShape = (ann.annotation_type === 'polygon' || isSegment) && ann.points;
                                         const isSelected = selectedAnnId === ann.id;
                                         const totalScale = scale * userZoom;
                                         const fontSize = Math.max(10, 13 / totalScale);
@@ -1608,7 +1684,7 @@ Do you want to proceed?`;
                                         const labelH = fontSize + padY * 2;
                                         return (
                                             <React.Fragment key={ann.id}>
-                                                {ann.annotation_type === 'polygon' && ann.points ? (
+                                                {isPolyShape ? (
                                                     <PolygonAnnotation
                                                         ann={ann}
                                                         imgW={imgW} imgH={imgH}
@@ -1775,7 +1851,7 @@ Do you want to proceed?`;
                                     onConfirm={handleClassConfirm}
                                     onCancel={handleClassCancel}
                                     remaining={classifyingAnnId ? aiQueueRef.current.length + 1 : 0}
-                                    ocrMode={project.project_type === 'ocr'}
+                                    ocrMode={project.project_type === 'ocr' || project.project_type === 'combined'}
                                 />
                             )}
                         </div>
@@ -1833,7 +1909,7 @@ Do you want to proceed?`;
                     project={project}
                     onClose={() => {
                         setShowTrainingPanel(false);
-                        if (project.project_type === 'ocr') loadSeedModelInfo();
+                        if (project.project_type === 'ocr' || project.project_type === 'combined') loadSeedModelInfo();
                     }}
                 />
             )}
@@ -1913,6 +1989,12 @@ Do you want to proceed?`;
                 <OcrTrainingPanel
                     project={project}
                     onClose={() => setShowOcrPanel(false)}
+                />
+            )}
+            {showSegPanel && (
+                <SegTrainingPanel
+                    project={project}
+                    onClose={() => setShowSegPanel(false)}
                 />
             )}
             {showVideoPanel && (

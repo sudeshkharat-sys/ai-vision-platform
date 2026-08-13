@@ -81,3 +81,35 @@ export const DEFAULT_SEED_MODEL = "yolo11s.pt";
 
 /** Default model for main training (larger for best accuracy) */
 export const DEFAULT_MAIN_MODEL = "yolo11s.pt";
+
+/**
+ * YOLO instance-segmentation checkpoints ('-seg' suffix). Ultralytics infers
+ * task=segment from the checkpoint name — a plain detection .pt cannot be
+ * used for segmentation training.
+ */
+export const SEG_MODEL_GROUPS = [
+    {
+        family: "YOLO11-Seg",
+        note: "Stable — recommended",
+        models: [
+            { value: "yolo11n-seg.pt", label: "YOLO11 Nano-Seg — fastest",     params: "2.9M"  },
+            { value: "yolo11s-seg.pt", label: "YOLO11 Small-Seg",              params: "10.1M" },
+            { value: "yolo11m-seg.pt", label: "YOLO11 Medium-Seg",             params: "22.4M" },
+            { value: "yolo11l-seg.pt", label: "YOLO11 Large-Seg",              params: "27.6M" },
+            { value: "yolo11x-seg.pt", label: "YOLO11 XL-Seg — best accuracy", params: "62.1M" },
+        ],
+    },
+    {
+        family: "YOLOv8-Seg",
+        models: [
+            { value: "yolov8n-seg.pt", label: "YOLOv8 Nano-Seg",   params: "3.4M"  },
+            { value: "yolov8s-seg.pt", label: "YOLOv8 Small-Seg",  params: "11.8M" },
+            { value: "yolov8m-seg.pt", label: "YOLOv8 Medium-Seg", params: "27.3M" },
+            { value: "yolov8l-seg.pt", label: "YOLOv8 Large-Seg",  params: "46.0M" },
+            { value: "yolov8x-seg.pt", label: "YOLOv8 XL-Seg",     params: "71.8M" },
+        ],
+    },
+];
+
+/** Default model for segmentation training */
+export const DEFAULT_SEG_MODEL = "yolo11n-seg.pt";
