@@ -721,6 +721,7 @@ Do you want to proceed?`;
     const fileInputRef = useRef(null);
     const datasetImportRef = useRef(null);
     const [exportingDataset, setExportingDataset] = useState(false);
+    const [exportProgress, setExportProgress] = useState(null);
     const [importingDataset, setImportingDataset] = useState(false);
 
     useEffect(() => {
@@ -944,8 +945,19 @@ Do you want to proceed?`;
     // project (e.g. one built around SAM) without redrawing anything. ──
     const handleExportDataset = async () => {
         setExportingDataset(true);
+        setExportProgress('Requesting…');
         try {
-            const res = await axios.get(`${API_URL}/images/export/${project.id}`, { responseType: 'blob' });
+            const res = await axios.get(`${API_URL}/images/export/${project.id}`, {
+                responseType: 'blob',
+                onDownloadProgress: (evt) => {
+                    // Content-Length usually isn't set on a streamed zip, so evt.total
+                    // is 0 — show bytes received so far instead of a % that can't be computed.
+                    const mb = (evt.loaded / (1024 * 1024)).toFixed(1);
+                    setExportProgress(evt.total
+                        ? `${Math.round((evt.loaded / evt.total) * 100)}%`
+                        : `${mb} MB…`);
+                },
+            });
             const url = window.URL.createObjectURL(new Blob([res.data]));
             const a = document.createElement('a');
             a.href = url;
@@ -956,9 +968,22 @@ Do you want to proceed?`;
             window.URL.revokeObjectURL(url);
             showStatus('✓ Dataset downloaded');
         } catch (err) {
-            setError(err.response?.data?.detail || 'Failed to export dataset.');
+            // responseType:'blob' means an error body also arrives as a Blob,
+            // not parsed JSON — err.response.data.detail is always undefined
+            // unless we read the Blob's text ourselves.
+            let detail = 'Failed to export dataset.';
+            if (err.response?.data instanceof Blob) {
+                try {
+                    const text = await err.response.data.text();
+                    detail = JSON.parse(text)?.detail || detail;
+                } catch { /* not JSON — keep generic message */ }
+            } else if (err.response?.data?.detail) {
+                detail = err.response.data.detail;
+            }
+            setError(detail);
         } finally {
             setExportingDataset(false);
+            setExportProgress(null);
         }
     };
 
@@ -1451,7 +1476,7 @@ Do you want to proceed?`;
                         disabled={exportingDataset || images.length === 0}
                         title="Download all images + annotations (boxes, polylines, segment masks) as a zip"
                     >
-                        {exportingDataset ? 'Downloading…' : '⬇ Download Dataset'}
+                        {exportingDataset ? `Downloading… ${exportProgress || ''}` : '⬇ Download Dataset'}
                     </button>
                     <label className={`upload-btn ${importingDataset ? 'uploading' : ''}`} title="Import a dataset zip exported from another project — images + all annotation types are recreated here">
                         {importingDataset ? 'Importing…' : '⬆ Import Dataset (.zip)'}
