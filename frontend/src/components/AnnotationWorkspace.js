@@ -719,6 +719,9 @@ Do you want to proceed?`;
     };
 
     const fileInputRef = useRef(null);
+    const datasetImportRef = useRef(null);
+    const [exportingDataset, setExportingDataset] = useState(false);
+    const [importingDataset, setImportingDataset] = useState(false);
 
     useEffect(() => {
         if (project) {
@@ -934,6 +937,52 @@ Do you want to proceed?`;
         const selected = Array.from(e.target.files || []);
         // Don't clear input value here — do it in .finally() above
         uploadFiles(selected);
+    };
+
+    // ── Dataset export/import — portable images+annotations zip, so a
+    // labeled dataset (including segment masks) can move into a different
+    // project (e.g. one built around SAM) without redrawing anything. ──
+    const handleExportDataset = async () => {
+        setExportingDataset(true);
+        try {
+            const res = await axios.get(`${API_URL}/images/export/${project.id}`, { responseType: 'blob' });
+            const url = window.URL.createObjectURL(new Blob([res.data]));
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `${project.name.replace(/[^A-Za-z0-9]+/g, '_').toLowerCase() || 'project'}_dataset.zip`;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            window.URL.revokeObjectURL(url);
+            showStatus('✓ Dataset downloaded');
+        } catch (err) {
+            setError(err.response?.data?.detail || 'Failed to export dataset.');
+        } finally {
+            setExportingDataset(false);
+        }
+    };
+
+    const handleImportDataset = async (e) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        setImportingDataset(true);
+        const formData = new FormData();
+        formData.append('file', file);
+        try {
+            const res = await axios.post(`${API_URL}/images/import/${project.id}`, formData);
+            const { images_imported, annotations_imported, skipped } = res.data;
+            showStatus(`✓ Imported ${images_imported} image${images_imported !== 1 ? 's' : ''}, ${annotations_imported} annotation${annotations_imported !== 1 ? 's' : ''}${skipped?.length ? ` (${skipped.length} skipped)` : ''}`);
+            const [imgRes] = await Promise.all([
+                axios.get(`${API_URL}/images/project/${project.id}`),
+            ]);
+            setImages(imgRes.data);
+            if (res.data.classes) setLocalClasses(res.data.classes);
+        } catch (err) {
+            setError(err.response?.data?.detail || 'Failed to import dataset.');
+        } finally {
+            setImportingDataset(false);
+            if (datasetImportRef.current) datasetImportRef.current.value = '';
+        }
     };
 
     // Drag & drop handlers on the image list
@@ -1391,6 +1440,28 @@ Do you want to proceed?`;
                             style={{ display: 'none' }}
                             onChange={handleFileUpload}
                             disabled={uploading}
+                        />
+                    </label>
+
+                    {/* ── Dataset export/import — download this project's images+labels
+                        as a zip, or import one exported from another project ── */}
+                    <button
+                        className="btn-action btn-action-secondary"
+                        onClick={handleExportDataset}
+                        disabled={exportingDataset || images.length === 0}
+                        title="Download all images + annotations (boxes, polylines, segment masks) as a zip"
+                    >
+                        {exportingDataset ? 'Downloading…' : '⬇ Download Dataset'}
+                    </button>
+                    <label className={`upload-btn ${importingDataset ? 'uploading' : ''}`} title="Import a dataset zip exported from another project — images + all annotation types are recreated here">
+                        {importingDataset ? 'Importing…' : '⬆ Import Dataset (.zip)'}
+                        <input
+                            ref={datasetImportRef}
+                            type="file"
+                            accept=".zip"
+                            style={{ display: 'none' }}
+                            onChange={handleImportDataset}
+                            disabled={importingDataset}
                         />
                     </label>
 

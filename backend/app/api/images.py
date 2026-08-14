@@ -1,7 +1,9 @@
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete as sql_delete
 from ..database import get_db
+from ..models.project import Project
 from ..models.image import Image
 from ..models.annotation import Annotation
 from ..models.user import User
@@ -11,7 +13,11 @@ from ..api.auth import get_current_user
 from ..api.deps import get_owned_project, get_owned_image
 from typing import List
 import os
+import re
+import io
+import json
 import uuid
+import zipfile
 from PIL import Image as PILImage
 
 router = APIRouter(prefix="/images", tags=["images"])
@@ -425,3 +431,170 @@ async def delete_image(
     await db.delete(image)
     await db.commit()
     return {"status": "deleted", "id": image_id}
+
+
+# ── Dataset export / import ──────────────────────────────────────────
+#
+# Portable zip = images/ folder + manifest.json describing every image's
+# annotations (all annotation_type values: bbox, polygon, segment). This
+# lets a labeled dataset move between projects -- e.g. export a project's
+# annotated plates and import them into a separate SAM-based project --
+# without re-uploading images or redrawing any boxes/masks/polygons.
+
+def _project_slug(name: str) -> str:
+    slug = re.sub(r"[^A-Za-z0-9]+", "_", name or "").strip("_").lower()
+    return slug or "project"
+
+
+@router.get("/export/{project_id}")
+async def export_dataset(
+    project_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Download this project's images + all annotations as a single zip."""
+    project = await get_owned_project(project_id, current_user, db)
+
+    result = await db.execute(select(Image).where(Image.project_id == project_id))
+    images = result.scalars().all()
+    if not images:
+        raise HTTPException(status_code=404, detail="This project has no images to export.")
+
+    image_ids = [img.id for img in images]
+    ann_result = await db.execute(select(Annotation).where(Annotation.image_id.in_(image_ids)))
+    anns_by_image: dict = {}
+    for ann in ann_result.scalars().all():
+        anns_by_image.setdefault(ann.image_id, []).append({
+            "class_name": ann.class_name,
+            "bbox": ann.bbox,
+            "annotation_type": ann.annotation_type,
+            "points": ann.points,
+            "source": ann.source,
+        })
+
+    manifest = {
+        "project_name": project.name,
+        "project_type": project.project_type,
+        "classes": project.classes or [],
+        "images": [],
+    }
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        for img in images:
+            src_candidates = [
+                settings.upload_dir.parent / img.filepath.lstrip("/"),
+                settings.upload_dir / img.filepath.replace("/uploads/", "", 1),
+            ]
+            src_path = next((p for p in src_candidates if p.exists()), None)
+            if src_path is None:
+                continue  # file missing on disk — skip but keep the rest of the export usable
+
+            arc_filename = os.path.basename(img.filepath)
+            zf.write(src_path, f"images/{arc_filename}")
+
+            manifest["images"].append({
+                "filename": img.filename,
+                "stored_filename": arc_filename,
+                "width": img.width,
+                "height": img.height,
+                "status": img.status,
+                "annotations": anns_by_image.get(img.id, []),
+            })
+
+        zf.writestr("manifest.json", json.dumps(manifest, indent=2))
+
+    buffer.seek(0)
+    slug = _project_slug(project.name)
+    return StreamingResponse(
+        buffer,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{slug}_dataset.zip"'},
+    )
+
+
+@router.post("/import/{project_id}")
+async def import_dataset(
+    project_id: str,
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Import a zip produced by /images/export/{project_id} into this project.
+
+    Images are copied in under fresh filenames (no collision with anything
+    already in this project) and every annotation -- bbox, precision
+    polygon, or real segment mask -- is recreated as-is. New class names
+    found in the manifest are merged into the project's class list.
+    """
+    project = await get_owned_project(project_id, current_user, db)
+
+    if not file.filename or not file.filename.endswith(".zip"):
+        raise HTTPException(status_code=400, detail="Only .zip files are supported.")
+
+    contents = await file.read()
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(contents))
+        manifest = json.loads(zf.read("manifest.json"))
+    except (zipfile.BadZipFile, KeyError, json.JSONDecodeError) as e:
+        raise HTTPException(status_code=400, detail=f"Invalid dataset zip: {e}")
+
+    project_dir = settings.upload_dir / project_id
+    project_dir.mkdir(parents=True, exist_ok=True)
+
+    existing_classes = list(project.classes or [])
+    imported_images = []
+    imported_annotations = 0
+    skipped = []
+
+    for entry in manifest.get("images", []):
+        stored_name = entry.get("stored_filename")
+        arcname = f"images/{stored_name}"
+        if not stored_name or arcname not in zf.namelist():
+            skipped.append(entry.get("filename", stored_name or "?"))
+            continue
+
+        file_ext = os.path.splitext(stored_name)[1]
+        unique_filename = f"{uuid.uuid4()}{file_ext}"
+        dest_path = project_dir / unique_filename
+        with zf.open(arcname) as src, open(dest_path, "wb") as dst:
+            dst.write(src.read())
+
+        db_image = Image(
+            project_id=project_id,
+            filename=entry.get("filename", stored_name),
+            filepath=f"/uploads/{project_id}/{unique_filename}",
+            width=entry.get("width") or 0,
+            height=entry.get("height") or 0,
+            status=entry.get("status", "pending"),
+        )
+        db.add(db_image)
+        await db.flush()  # assigns db_image.id for its annotations below
+        imported_images.append(db_image)
+
+        for ann in entry.get("annotations", []):
+            class_name = ann.get("class_name", "")
+            if class_name and class_name not in existing_classes:
+                existing_classes.append(class_name)
+            db.add(Annotation(
+                image_id=db_image.id,
+                class_name=class_name,
+                bbox=ann.get("bbox"),
+                annotation_type=ann.get("annotation_type", "bbox"),
+                points=ann.get("points"),
+                source=ann.get("source", "manual"),
+            ))
+            imported_annotations += 1
+
+    project.classes = existing_classes
+    await db.commit()
+    for img in imported_images:
+        await db.refresh(img)
+
+    return {
+        "status": "imported",
+        "images_imported": len(imported_images),
+        "annotations_imported": imported_annotations,
+        "skipped": skipped,
+        "classes": existing_classes,
+    }
