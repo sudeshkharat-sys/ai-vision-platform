@@ -275,10 +275,16 @@
 }
 
 /* ── Sidebar Actions ────────────────────────────────── */
+/* Capped + independently scrollable so a project with many buttons
+   (e.g. the combined detect+OCR+segment type) can't squeeze the image
+   list below it down to almost nothing. */
 .sidebar-actions {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  max-height: 42vh;
+  overflow-y: auto;
+  flex-shrink: 0;
 }
 
 .btn-action {
