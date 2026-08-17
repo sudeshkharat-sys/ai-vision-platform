@@ -176,6 +176,41 @@ async def convert_image_annotations_to_polygon(
     return anns
 
 
+@router.patch("/project/{project_id}/boxes-to-polygon")
+async def convert_project_boxes_to_polygon(
+    project_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Bulk-convert every plain box annotation across an ENTIRE project to its
+    4-corner polygon equivalent, in one call — the project-wide version of
+    the per-image "Replace box with polyline" toolbar button. Existing
+    'polygon'/'segment' annotations are left untouched. The resulting
+    4-corner shapes are a starting point only: drag their corners in the
+    canvas afterward to hug the real (rotated/dotted) character outline
+    before using polygons-to-segment.
+    """
+    await get_owned_project(project_id, current_user, db)
+
+    result = await db.execute(
+        select(Annotation)
+        .join(Image, Annotation.image_id == Image.id)
+        .where(Image.project_id == project_id)
+    )
+    anns = result.scalars().all()
+
+    converted = 0
+    for ann in anns:
+        if ann.annotation_type not in ("polygon", "segment") and ann.bbox:
+            ann.points = _bbox_to_points(ann.bbox)
+            ann.annotation_type = "polygon"
+            converted += 1
+    await db.commit()
+
+    return {"total_annotations": len(anns), "converted": converted}
+
+
 @router.patch("/project/{project_id}/polygons-to-segment")
 async def convert_project_polygons_to_segment(
     project_id: str,

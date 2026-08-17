@@ -91,8 +91,25 @@ const SegTrainingPanel = ({ project, onClose }) => {
     const [job, setJob] = useState(null);
     const [converting, setConverting] = useState(false);
     const [convertResult, setConvertResult] = useState(null);
+    const [convertingBoxes, setConvertingBoxes] = useState(false);
+    const [convertBoxesResult, setConvertBoxesResult] = useState(null);
 
     const pollRef = useRef(null);
+
+    const convertBoxes = useCallback(async () => {
+        setConvertingBoxes(true);
+        setConvertBoxesResult(null);
+        try {
+            const res = await axios.patch(
+                `${API_URL}/annotations/project/${project.id}/boxes-to-polygon`
+            );
+            setConvertBoxesResult(res.data);
+        } catch (e) {
+            setConvertBoxesResult({ error: e.response?.data?.detail || 'Conversion failed.' });
+        } finally {
+            setConvertingBoxes(false);
+        }
+    }, [project.id]);
 
     const convertPolygons = useCallback(async () => {
         setConverting(true);
@@ -217,6 +234,28 @@ const SegTrainingPanel = ({ project, onClose }) => {
                         )}
                         <div className="mtp-warning" style={{ marginTop: 8 }}>
                             Draw at least one annotation with the Segment tool (mask outline, not a box or precision polyline) before training — bbox-only images are skipped.
+                        </div>
+                        <div className="mtp-warning" style={{ marginTop: 8 }}>
+                            Still have plain box annotations across this project? Turn every
+                            box into a 4-corner polygon in one click — then drag corners onto
+                            the real outline where needed before converting to segment masks.
+                            <div style={{ marginTop: 8 }}>
+                                <button
+                                    className="mtp-refresh"
+                                    style={{ width: 'auto', padding: '6px 12px' }}
+                                    disabled={convertingBoxes}
+                                    onClick={convertBoxes}
+                                >
+                                    {convertingBoxes ? 'Converting…' : 'Convert all boxes → polygons'}
+                                </button>
+                            </div>
+                            {convertBoxesResult && (
+                                <p style={{ marginTop: 6 }}>
+                                    {convertBoxesResult.error
+                                        ? `❌ ${convertBoxesResult.error}`
+                                        : `✅ Converted ${convertBoxesResult.converted} of ${convertBoxesResult.total_annotations} annotation(s) to polygons.`}
+                                </p>
+                            )}
                         </div>
                         <div className="mtp-warning" style={{ marginTop: 8 }}>
                             Already traced plate/character outlines with the Polyline tool
