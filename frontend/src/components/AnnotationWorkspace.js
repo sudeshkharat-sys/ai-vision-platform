@@ -1404,6 +1404,13 @@ Do you want to proceed?`;
                             <Brain size={14} /> Active Learning
                         </button>
                         <button
+                            className="btn-action btn-action-seg"
+                            onClick={() => setShowSegPanel(true)}
+                            title="Train an instance-segmentation model on annotations drawn with the Segment tool (mask outlines, not boxes) — for dotted/engraved characters"
+                        >
+                            <Scissors size={14} /> Train Segmentation Model
+                        </button>
+                        <button
                             className="btn-action btn-action-review"
                             onClick={() => setShowReviewPanel(true)}
                             disabled={images.filter(img => img.status === 'annotated').length === 0}
@@ -1595,7 +1602,7 @@ Do you want to proceed?`;
                                     onClick={() => changeDrawMode('polyline')}
                                     title="Polyline tool — trace the character's true outline. Best for angled LHS/RHS plate views where boxes would touch."
                                 ><PenTool size={14} /></button>
-                                {project.project_type === 'combined' && (
+                                {(project.project_type === 'combined' || project.project_type === 'ocr') && (
                                     <button
                                         className={`btn-toolbar ${drawMode === 'segment' ? 'btn-toolbar--active' : ''}`}
                                         onClick={() => changeDrawMode('segment')}
