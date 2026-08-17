@@ -1000,6 +1000,17 @@ def train_seg_model(
     preprocess: bool = True,
     batch: int = -1,
     custom_weights: str = None,
+    aug_fliplr: float = 0.5,
+    aug_flipud: float = 0.1,
+    aug_mosaic: float = 0.5,
+    aug_hsv_v: float = 0.4,
+    aug_hsv_h: float = 0.015,
+    aug_hsv_s: float = 0.3,
+    aug_degrees: float = 10.0,
+    aug_translate: float = 0.1,
+    aug_scale: float = 0.4,
+    aug_mixup: float = 0.0,
+    aug_copy_paste: float = 0.05,
 ):
     """
     Instance-segmentation training on annotations drawn with the 'segment'
@@ -1008,7 +1019,10 @@ def train_seg_model(
     infers task=segment from the checkpoint name.
 
     Phases mirror train_seed_model: DB reads -> dataset build -> train ->
-    persist seg_best.pt.
+    persist seg_best.pt. Augmentation is tuned the same way too — most seg
+    projects here are dotted/engraved CHARACTER masks, and flips/large
+    rotations mirror glyph identity (S<->2, 6<->9) just as badly for a
+    mask as for a box, so the same char-project auto-clamp applies.
     """
     db = StateDBConnector()
 
@@ -1030,6 +1044,13 @@ def train_seg_model(
     )
     if not has_seg_anns:
         return {"error": "No segmentation (polygon mask) annotations found. Draw segment outlines before training."}
+
+    single_char = [c for c in classes if isinstance(c, str) and len(c.strip()) == 1]
+    is_char_project = bool(classes) and len(single_char) >= 0.6 * len(classes)
+    if is_char_project:
+        aug_fliplr = 0.0
+        aug_flipud = 0.0
+        aug_degrees = min(aug_degrees, 3.0)
 
     dataset_path, n_train, n_val, n_test = _build_yolo_seg_dataset(
         img_rows, anns_by_image, classes, project_id,
@@ -1058,7 +1079,8 @@ def train_seg_model(
         state="STARTED",
         meta={"epoch": 0, "total_epochs": total_epochs, "eta_seconds": None,
               "history": [], "model_name": custom_weights or model_name,
-              "split": {"train": n_train, "val": n_val, "test": n_test}},
+              "split": {"train": n_train, "val": n_val, "test": n_test},
+              "char_project": is_char_project},
     )
 
     _batch = 0.90 if batch == -1 else batch
@@ -1077,6 +1099,19 @@ def train_seg_model(
         warmup_epochs=3,
         weight_decay=0.001,
         patience=20,
+        label_smoothing=0.1,
+        hsv_h=aug_hsv_h,
+        hsv_s=aug_hsv_s,
+        hsv_v=aug_hsv_v,
+        degrees=aug_degrees,
+        translate=aug_translate,
+        scale=aug_scale,
+        fliplr=aug_fliplr,
+        flipud=aug_flipud,
+        mosaic=aug_mosaic,
+        close_mosaic=15,
+        mixup=aug_mixup,
+        copy_paste=aug_copy_paste,
         project=str(settings.model_dir / project_id),
         name="seg_model",
         verbose=False,
@@ -1107,4 +1142,5 @@ def train_seg_model(
         "metrics":    final_metrics,
         "history":    epoch_history,
         "split":      {"train": n_train, "val": n_val, "test": n_test},
+        "char_project": is_char_project,
     }

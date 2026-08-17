@@ -195,6 +195,17 @@ class TrainSegRequest(BaseModel):
     imgsz: int = 640
     preprocess: bool = True
     batch: int = -1
+    aug_fliplr: float = 0.5
+    aug_flipud: float = 0.1
+    aug_mosaic: float = 0.5
+    aug_hsv_v: float = 0.4
+    aug_hsv_h: float = 0.015
+    aug_hsv_s: float = 0.3
+    aug_degrees: float = 10.0
+    aug_translate: float = 0.1
+    aug_scale: float = 0.4
+    aug_mixup: float = 0.0
+    aug_copy_paste: float = 0.05
 
 
 @router.post("/train-seg/{project_id}")
@@ -208,7 +219,9 @@ async def start_seg_training(
     req = body or TrainSegRequest()
     task = train_seg_model.delay(
         project_id, req.model_name, req.epochs, req.imgsz, req.preprocess, req.batch,
-        req.custom_weights,
+        req.custom_weights, req.aug_fliplr, req.aug_flipud, req.aug_mosaic, req.aug_hsv_v,
+        req.aug_hsv_h, req.aug_hsv_s, req.aug_degrees, req.aug_translate,
+        req.aug_scale, req.aug_mixup, req.aug_copy_paste,
     )
     return {"task_id": task.id, "status": "queued"}
 
