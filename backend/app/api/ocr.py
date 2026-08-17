@@ -313,6 +313,9 @@ _MODEL_CACHE: dict = {}
 # YOLO character-detector cache: project_id -> (mtime, yolo_model)
 _YOLO_CACHE: dict = {}
 
+# YOLO-seg (instance segmentation) cache: project_id -> (mtime, yolo_seg_model)
+_YOLO_SEG_CACHE: dict = {}
+
 
 def _sort_boxes_reading_order(boxes):
     """Sort (x, y, w, h) boxes into rows (top-to-bottom), left-to-right."""
@@ -425,6 +428,198 @@ def _yolo_plate_region(project_id: str, img: np.ndarray, conf: float = 0.25):
             if best is None or score > best[0]:
                 best = (score, int(x1), int(y1), int(round(w)), int(round(h)))
     return best[1:] if best else None
+
+
+def _yolo_seg_predict_raw(project_id: str, img: np.ndarray, conf: float):
+    """Load (and cache) the project's trained YOLO-seg model and run inference.
+    Returns raw ultralytics results, or None if no seg_best.pt exists."""
+    model_path = settings.model_dir.resolve() / project_id / "seg_best.pt"
+    if not model_path.exists():
+        return None
+
+    mtime = model_path.stat().st_mtime
+    cached = _YOLO_SEG_CACHE.get(project_id)
+    if cached and cached[0] == mtime:
+        model = cached[1]
+    else:
+        from ultralytics import YOLO  # lazy — heavy import
+        model = YOLO(str(model_path))
+        _YOLO_SEG_CACHE[project_id] = (mtime, model)
+
+    return model.predict(img, conf=conf, verbose=False)
+
+
+def _seg_char_instances(project_id: str, img: np.ndarray, conf: float = 0.25):
+    """
+    Run the trained segment model and return one entry per detected
+    character instance: its box, its own dotted-mask (full-image size,
+    rasterized from the predicted polygon), label and confidence — in
+    reading order. Each instance mask is the raw cluster of engraving
+    dots for ONE character; nothing here connects them yet, that's
+    `_reconnect_dots`.
+
+    Returns None when the project has no trained seg model or nothing
+    single-character was found, so callers can fall back / error clearly.
+    """
+    results = _yolo_seg_predict_raw(project_id, img, conf)
+    if results is None:
+        return None
+
+    H, W = img.shape[:2]
+    instances = []
+    for r in results:
+        if r.masks is None or r.boxes is None:
+            continue
+        names = r.names
+        for poly, b in zip(r.masks.xy, r.boxes):
+            label = str(names.get(int(b.cls[0]), "")).strip().upper()
+            if len(label) != 1 or poly is None or len(poly) < 3:
+                continue
+            x1, y1, x2, y2 = (float(v) for v in b.xyxy[0])
+            w, h = x2 - x1, y2 - y1
+            if w < 2 or h < 2:
+                continue
+            mask = np.zeros((H, W), dtype=np.uint8)
+            cv2.fillPoly(mask, [poly.astype(np.int32)], 255)
+            instances.append({
+                "box": (int(x1), int(y1), int(round(w)), int(round(h))),
+                "mask": mask,
+                "label": label,
+                "conf": float(b.conf[0]),
+            })
+    if not instances:
+        return None
+
+    order = _sort_boxes_reading_order([inst["box"] for inst in instances])
+    by_box = {inst["box"]: inst for inst in instances}
+    return [by_box[b] for b in order]
+
+
+def _reconnect_dots(mask: np.ndarray, box):
+    """
+    Bridge the gaps in an engraved dot-peen character so it reads as one
+    connected glyph instead of loose dots.
+
+    A dotted "0" traced by a tilted line of dots is exactly what makes it
+    ambiguous (looks like a 9/8/whatever depending on which dots the
+    thresholding pass happens to keep) — the fix is to close the gaps
+    BETWEEN the dots with a kernel sized to the dot spacing itself, so it
+    works regardless of the stroke's angle (an isotropic elliptical
+    kernel, not a horizontal one — a horizontal-only kernel only bridges
+    dots that happen to sit on a horizontal run).
+
+    Returns (closed_mask, (x0, y0)) — the reconstructed binary glyph
+    cropped to the instance's box (plus a small margin) and the crop's
+    top-left offset in full-image coordinates.
+    """
+    x, y, w, h = box
+    pad = int(max(w, h) * 0.18) + 2
+    x0, y0 = max(0, x - pad), max(0, y - pad)
+    x1e, y1e = min(mask.shape[1], x + w + pad), min(mask.shape[0], y + h + pad)
+    roi = mask[y0:y1e, x0:x1e]
+    if roi.size == 0 or cv2.countNonZero(roi) == 0:
+        return roi, (x0, y0)
+
+    # Estimate the dot pitch from the (still disconnected) blobs: kernel
+    # radius scales with typical dot size so dense/small dots get a small
+    # bridge and coarse/large dots get a bigger one.
+    n, _, stats, _ = cv2.connectedComponentsWithStats(roi, connectivity=8)
+    comp_areas = [stats[i][4] for i in range(1, n) if stats[i][4] >= 2]
+    dot_radius = math.sqrt(float(np.median(comp_areas)) / math.pi) if comp_areas else 2.0
+    k = max(3, (int(round(dot_radius * 2.8)) | 1))  # odd, isotropic
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
+
+    closed = cv2.morphologyEx(roi, cv2.MORPH_CLOSE, kernel, iterations=2)
+    # Trim the fuzz the closing adds to the outer silhouette without
+    # reopening the gaps it just bridged.
+    closed = cv2.morphologyEx(closed, cv2.MORPH_OPEN,
+                               cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)))
+    return closed, (x0, y0)
+
+
+def _glyph_crop_from_mask(gray: np.ndarray, closed_mask: np.ndarray, offset, size: int):
+    """
+    Turn a reconnected binary glyph into a (size, size) grayscale crop
+    matching the style `_extract_char_crop` produces from real photos, so
+    it can be fed straight into the trained CNN classifier.
+
+    Ink/background brightness are sampled from the ORIGINAL photo (not
+    invented), so the synthesized stroke keeps this image's real contrast
+    instead of turning into a flat cartoon glyph the classifier has never
+    seen the likes of.
+    """
+    if closed_mask.size == 0 or closed_mask.shape[0] < 2 or closed_mask.shape[1] < 2:
+        return None
+    x0, y0 = offset
+    h, w = closed_mask.shape
+    region = gray[y0:y0 + h, x0:x0 + w]
+    if region.shape != closed_mask.shape:
+        return None
+
+    ink_px = region[closed_mask > 0]
+    bg_px = region[closed_mask == 0]
+    ink_val = float(np.percentile(ink_px, 15)) if ink_px.size else 40.0
+    bg_val = float(np.median(bg_px)) if bg_px.size else 200.0
+
+    glyph = np.where(closed_mask > 0, ink_val, bg_val).astype(np.uint8)
+
+    scale = size / max(h, w)
+    nw, nh = max(1, int(round(w * scale))), max(1, int(round(h * scale)))
+    resized = cv2.resize(glyph, (nw, nh), interpolation=cv2.INTER_AREA)
+
+    canvas = np.full((size, size), int(round(bg_val)), dtype=np.uint8)
+    y1, x1 = (size - nh) // 2, (size - nw) // 2
+    canvas[y1:y1 + nh, x1:x1 + nw] = resized
+    return canvas
+
+
+def _predict_with_seg(project_id: str, img: np.ndarray, gray: np.ndarray):
+    """
+    Plate -> per-character dotted-mask region -> reconnect the dots into a
+    solid glyph -> read with the trained CNN classifier. This is the
+    dedicated path for engraved dot-peen plates: bbox/classical
+    segmentation alone can't tell which dots belong to which character or
+    bridge a tilted stroke, the segment model's polygon masks give an
+    exact per-character dot cluster to reconnect.
+    """
+    model, classes, img_size = _load_project_model(project_id)
+
+    instances = _seg_char_instances(project_id, img)
+    if instances is None:
+        raise HTTPException(
+            status_code=422,
+            detail="No segment-model detections found. Train the segment model "
+                   "and draw polygon masks around the dotted characters first.",
+        )
+
+    crops, kept = [], []
+    for inst in instances:
+        closed, offset = _reconnect_dots(inst["mask"], inst["box"])
+        crop = _glyph_crop_from_mask(gray, closed, offset, img_size)
+        if crop is not None:
+            crops.append(crop)
+            kept.append(inst["box"])
+    if not crops:
+        raise HTTPException(status_code=422, detail="Could not reconstruct any characters")
+
+    batch = np.stack(crops).astype(np.float32)[..., None] / 255.0
+    probs = model.predict(batch, verbose=0)
+
+    results, text = [], ""
+    for (x, y, w, h), p in zip(kept, probs):
+        idx = int(p.argmax())
+        ch, conf = classes[idx], float(p[idx])
+        text += ch
+        results.append({"char": ch, "confidence": round(conf, 3), "box": [x, y, w, h]})
+        color = (74, 222, 128) if conf >= 0.8 else (21, 170, 250) if conf >= 0.5 else (113, 113, 248)
+        cv2.rectangle(img, (x, y), (x + w, y + h), color, 2)
+        cv2.putText(img, ch, (x, max(18, y - 6)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2, cv2.LINE_AA)
+
+    ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 85])
+    preview = "data:image/jpeg;base64," + base64.b64encode(buf.tobytes()).decode() if ok else None
+    return {"text": text, "characters": results, "preview": preview,
+            "num_found": len(results), "engine": "seg", "detector": "yolo-seg"}
 
 
 def _load_project_model(project_id: str):
@@ -944,7 +1139,11 @@ async def predict_ocr(
     each with the trained model. Returns the text, per-character
     confidence, and a preview image with boxes drawn.
     engine=cnn (default) uses the TFLite/Keras classifier;
-    engine=tesseract uses the fine-tuned traineddata.
+    engine=tesseract uses the fine-tuned traineddata;
+    engine=crnn reads a whole cropped line at once;
+    engine=seg uses the trained segment model's per-character dot masks,
+    reconnects the dots into a solid glyph, then reads with the CNN
+    classifier — the path for dotted/dot-peen engraved characters.
     """
     await get_owned_project(project_id, current_user, db)
     if engine == "cnn":
@@ -966,6 +1165,8 @@ async def predict_ocr(
         return _predict_with_tesseract(project_id, img, gray)
     if engine == "crnn":
         return _predict_with_crnn(project_id, img, gray)
+    if engine == "seg":
+        return _predict_with_seg(project_id, img, gray)
 
     # Prefer the project's trained YOLO detector for finding characters —
     # robust on reflective metal where thresholding fires on glare/noise.

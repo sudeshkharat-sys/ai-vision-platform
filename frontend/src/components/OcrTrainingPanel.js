@@ -31,7 +31,8 @@ const OcrTrainingPanel = ({ project, onClose }) => {
     const [error, setError]       = useState(null);
 
     // engine: 'cnn' (per-char classifier), 'tesseract' (fine-tuned traineddata),
-    // or 'crnn' (CTC line recognizer — reads a whole line at once)
+    // 'crnn' (CTC line recognizer — reads a whole line at once), or 'seg'
+    // (segment model's dot masks reconnected into glyphs, read by the cnn model)
     const [engine, setEngine]     = useState('cnn');
 
     // training settings
@@ -284,6 +285,20 @@ const OcrTrainingPanel = ({ project, onClose }) => {
                                        (the tesstrain flow). Drop-in file for flutter_tesseract_ocr.</p>
                                 </div>
                             </label>
+                            <label className={`ocr-engine-card ${engine === 'seg' ? 'selected' : ''}`}>
+                                <input type="radio" name="ocr-engine" value="seg"
+                                    checked={engine === 'seg'} disabled={running}
+                                    onChange={() => { setEngine('seg'); setResult(null); setTestResult(null); }} />
+                                <div>
+                                    <b>Segment dot-reconnect — for dotted/engraved characters</b>
+                                    <p>For dot-peen engraved plates where a character is a cluster of dots
+                                       (a tilted "0" can read as 9/8/anything). Uses the trained segment
+                                       model to get each character's own dot mask, morphologically closes
+                                       the gaps between dots into one solid glyph at whatever angle the
+                                       stroke runs, then reads it with this same character model. Train
+                                       the segment model (with polygon masks) from the pipeline panel first.</p>
+                                </div>
+                            </label>
                         </div>
                     </div>
 
@@ -471,7 +486,7 @@ const OcrTrainingPanel = ({ project, onClose }) => {
                     </div>
 
                     {/* ── Results / trained model ───────────────── */}
-                    {engine === 'cnn' && (result || modelInfo?.has_model) && (
+                    {(engine === 'cnn' || engine === 'seg') && (result || modelInfo?.has_model) && (
                         <div className="ocr-section">
                             <h3>
                                 {result ? <><Check size={15} className="ocr-ok" /> Training complete</> : 'Trained model'}
@@ -539,7 +554,9 @@ const OcrTrainingPanel = ({ project, onClose }) => {
                                         <div className="ocr-test-text">
                                             <small>
                                                 Model read ({testResult.num_found} characters)
-                                                {testResult.detector === 'yolo'
+                                                {testResult.detector === 'yolo-seg'
+                                                    ? ' — dots reconnected from your trained segment model:'
+                                                    : testResult.detector === 'yolo'
                                                     ? ' — boxes found by your trained YOLO detector:'
                                                     : ' — boxes found by basic image processing (train YOLO on this project for far better detection):'}
                                             </small>
