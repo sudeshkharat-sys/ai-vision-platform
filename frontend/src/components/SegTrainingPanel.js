@@ -89,8 +89,25 @@ const SegTrainingPanel = ({ project, onClose }) => {
     const [preprocess, setPreprocess] = useState(true);
     const [launching, setLaunching] = useState(false);
     const [job, setJob] = useState(null);
+    const [converting, setConverting] = useState(false);
+    const [convertResult, setConvertResult] = useState(null);
 
     const pollRef = useRef(null);
+
+    const convertPolygons = useCallback(async () => {
+        setConverting(true);
+        setConvertResult(null);
+        try {
+            const res = await axios.patch(
+                `${API_URL}/annotations/project/${project.id}/polygons-to-segment`
+            );
+            setConvertResult(res.data);
+        } catch (e) {
+            setConvertResult({ error: e.response?.data?.detail || 'Conversion failed.' });
+        } finally {
+            setConverting(false);
+        }
+    }, [project.id]);
 
     const loadStatus = useCallback(() => {
         setStatusLoading(true);
@@ -200,6 +217,29 @@ const SegTrainingPanel = ({ project, onClose }) => {
                         )}
                         <div className="mtp-warning" style={{ marginTop: 8 }}>
                             Draw at least one annotation with the Segment tool (mask outline, not a box or precision polyline) before training — bbox-only images are skipped.
+                        </div>
+                        <div className="mtp-warning" style={{ marginTop: 8 }}>
+                            Already traced plate/character outlines with the Polyline tool
+                            (annotation type "polygon") in this project? Those are real
+                            outlines, not boxes — re-tag them as Segment masks below instead
+                            of redrawing everything.
+                            <div style={{ marginTop: 8 }}>
+                                <button
+                                    className="mtp-refresh"
+                                    style={{ width: 'auto', padding: '6px 12px' }}
+                                    disabled={converting}
+                                    onClick={convertPolygons}
+                                >
+                                    {converting ? 'Converting…' : 'Convert existing polygons → segment masks'}
+                                </button>
+                            </div>
+                            {convertResult && (
+                                <p style={{ marginTop: 6 }}>
+                                    {convertResult.error
+                                        ? `❌ ${convertResult.error}`
+                                        : `✅ Converted ${convertResult.converted} of ${convertResult.total_polygons} polygon annotation(s) to segment masks.`}
+                                </p>
+                            )}
                         </div>
                     </section>
 

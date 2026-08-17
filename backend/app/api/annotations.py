@@ -8,7 +8,7 @@ from ..models.project import Project
 from ..models.user import User
 from ..schemas.base import AnnotationCreate, AnnotationResponse
 from ..api.auth import get_current_user
-from ..api.deps import get_owned_image, get_owned_annotation
+from ..api.deps import get_owned_image, get_owned_annotation, get_owned_project
 from typing import List
 from pydantic import BaseModel
 
@@ -174,6 +174,41 @@ async def convert_image_annotations_to_polygon(
     for ann in anns:
         await db.refresh(ann)
     return anns
+
+
+@router.patch("/project/{project_id}/polygons-to-segment")
+async def convert_project_polygons_to_segment(
+    project_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Re-tag every already-drawn 'polygon' annotation in a project as
+    'segment', in place — same outline points, just relabeled so the
+    segment-model trainer (which only reads annotation_type == 'segment')
+    picks them up. Lets a project that traced character/plate outlines
+    with the polyline tool (annotation_type 'polygon') train a YOLO-seg
+    model without re-drawing anything, as long as those outlines are real
+    traced shapes (>= 3 points) and not just an untouched 4-corner
+    rectangle equivalent of a box.
+    """
+    await get_owned_project(project_id, current_user, db)
+
+    result = await db.execute(
+        select(Annotation)
+        .join(Image, Annotation.image_id == Image.id)
+        .where(Image.project_id == project_id, Annotation.annotation_type == "polygon")
+    )
+    anns = result.scalars().all()
+
+    converted = 0
+    for ann in anns:
+        if ann.points and len(ann.points) >= 3:
+            ann.annotation_type = "segment"
+            converted += 1
+    await db.commit()
+
+    return {"total_polygons": len(anns), "converted": converted}
 
 
 @router.patch("/{annotation_id}/classify", response_model=AnnotationResponse)
