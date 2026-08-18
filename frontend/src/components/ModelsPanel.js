@@ -129,6 +129,15 @@ function ModelCard({ type, data, onTrain, onDownload, downloading }) {
             sparkColor: '#b8102e',
             trainLabel: <><Target size={14} /> Train Main Model</>,
         },
+        seg: {
+            label: 'Segment Model',
+            desc: 'Dot-peen character masks for the seg OCR engine',
+            icon: <Eye size={20} />,
+            accent: ['#7c5cfc', '#a78bfa'],
+            light: 'rgba(124,92,252,0.08)',
+            sparkColor: '#7c5cfc',
+            trainLabel: <><Eye size={14} /> Train Segment Model</>,
+        },
     }[type];
 
     const exists  = data?.exists;
@@ -242,7 +251,7 @@ function ModelCard({ type, data, onTrain, onDownload, downloading }) {
                 /* Not trained state */
                 <div className="mp-card-empty">
                     <div className="mp-card-empty-icon" style={{ color: config.accent[0] }}>
-                        {isSeed ? <Leaf size={36} /> : <Target size={36} />}
+                        {isSeed ? <Leaf size={36} /> : type === 'seg' ? <Eye size={36} /> : <Target size={36} />}
                     </div>
                     <p className="mp-card-empty-text">
                         No trained model yet.<br />
@@ -515,6 +524,13 @@ const ModelsPanel = ({ project, onClose, onGoToTrain }) => {
                             <ModelCard
                                 type="main"
                                 data={details.main}
+                                onTrain={handleTrain}
+                                onDownload={handleDownload}
+                                downloading={downloading}
+                            />
+                            <ModelCard
+                                type="seg"
+                                data={details.seg}
                                 onTrain={handleTrain}
                                 onDownload={handleDownload}
                                 downloading={downloading}

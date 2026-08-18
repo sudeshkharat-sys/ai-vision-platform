@@ -2084,6 +2084,7 @@ Do you want to proceed?`;
                     onClose={() => setShowModelsPanel(false)}
                     onGoToTrain={(type) => {
                         if (type === 'seed') setShowTrainingPanel(true);
+                        else if (type === 'seg') setShowSegPanel(true);
                         else setShowMainTrainingPanel(true);
                     }}
                 />
