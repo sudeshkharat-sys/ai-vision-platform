@@ -540,14 +540,18 @@ def _reconnect_dots(mask: np.ndarray, box):
 
 def _glyph_crop_from_mask(gray: np.ndarray, closed_mask: np.ndarray, offset, size: int):
     """
-    Turn a reconnected binary glyph into a (size, size) grayscale crop
-    matching the style `_extract_char_crop` produces from real photos, so
-    it can be fed straight into the trained CNN classifier.
+    Crop the REAL photo pixels under the reconnected glyph region and
+    normalize them exactly like `_extract_char_crop` (CLAHE + aspect-
+    preserving resize onto a square, edge-median padded canvas).
 
-    Ink/background brightness are sampled from the ORIGINAL photo (not
-    invented), so the synthesized stroke keeps this image's real contrast
-    instead of turning into a flat cartoon glyph the classifier has never
-    seen the likes of.
+    The reconnected mask is only used to know where the glyph is (via
+    `offset`/its shape, already padded by `_reconnect_dots`) — the pixels
+    fed to the classifier are the actual photo, not a synthesized flat
+    two-tone silhouette. The CNN classifier was trained on real,
+    CLAHE-enhanced photo crops (`_extract_char_crop`); a flat painted
+    glyph is a different image style than anything it ever saw in
+    training, which is what was causing near-random / collapsed
+    predictions on this path.
     """
     if closed_mask.size == 0 or closed_mask.shape[0] < 2 or closed_mask.shape[1] < 2:
         return None
@@ -557,18 +561,16 @@ def _glyph_crop_from_mask(gray: np.ndarray, closed_mask: np.ndarray, offset, siz
     if region.shape != closed_mask.shape:
         return None
 
-    ink_px = region[closed_mask > 0]
-    bg_px = region[closed_mask == 0]
-    ink_val = float(np.percentile(ink_px, 15)) if ink_px.size else 40.0
-    bg_val = float(np.median(bg_px)) if bg_px.size else 200.0
-
-    glyph = np.where(closed_mask > 0, ink_val, bg_val).astype(np.uint8)
+    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(4, 4))
+    enhanced = clahe.apply(region)
 
     scale = size / max(h, w)
     nw, nh = max(1, int(round(w * scale))), max(1, int(round(h * scale)))
-    resized = cv2.resize(glyph, (nw, nh), interpolation=cv2.INTER_AREA)
+    resized = cv2.resize(enhanced, (nw, nh), interpolation=cv2.INTER_AREA)
 
-    canvas = np.full((size, size), int(round(bg_val)), dtype=np.uint8)
+    border = np.concatenate([resized[0, :], resized[-1, :], resized[:, 0], resized[:, -1]])
+    pad_val = int(np.median(border))
+    canvas = np.full((size, size), pad_val, dtype=np.uint8)
     y1, x1 = (size - nh) // 2, (size - nw) // 2
     canvas[y1:y1 + nh, x1:x1 + nw] = resized
     return canvas
