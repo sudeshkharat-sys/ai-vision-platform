@@ -53,7 +53,12 @@ _CHAR_TO_IDX = {c: i for i, c in enumerate(CHARSET)}
 
 def _normalize_line(gray: np.ndarray) -> np.ndarray:
     """Contrast-enhance and letterbox a line crop into a fixed IMG_H x IMG_W
-    grayscale canvas (dark text on light background, aspect preserved)."""
+    grayscale canvas (dark text on light background, aspect preserved).
+
+    Dot-peen text lives or dies here: a single peen dot is often 1-2 px
+    after the resize to IMG_H, so the dots must be fused into solid
+    strokes at the crop's NATIVE resolution — a morphological closing
+    sized to the dot pitch — before any downscale ever happens."""
     clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
     g = clahe.apply(gray)
 
@@ -64,6 +69,16 @@ def _normalize_line(gray: np.ndarray) -> np.ndarray:
         pass
     else:
         g = 255 - g
+
+    # Fuse dot-matrix dots into continuous strokes while the crop is still
+    # large. Kernel ~1/12 of line height sits between typical dot pitch and
+    # inter-character gap, so dots of one stroke merge without bridging into
+    # the neighboring character. Solid engraved/printed strokes pass through
+    # unchanged. Skipped for crops already at model scale (nothing to save).
+    if g.shape[0] > IMG_H * 2:
+        k = max(3, (g.shape[0] // 12) | 1)
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
+        g = 255 - cv2.morphologyEx(255 - g, cv2.MORPH_CLOSE, kernel)
 
     h, w = g.shape
     scale = IMG_H / h
@@ -146,6 +161,127 @@ def _render_synthetic_line(text: str, rng: random.Random) -> np.ndarray:
     cv2.putText(canvas, text, org, font, fscale, color, thickness, cv2.LINE_AA)
 
     g = cv2.resize(canvas, (IMG_W, IMG_H), interpolation=cv2.INTER_AREA)
+    return _normalize_line(g)
+
+
+# 5x7 dot-matrix bitmaps for 0-9/A-Z — the layout a dot-peen marking head
+# actually stamps, so synthetic lines match the real engraving style
+# (isolated round dots on metal) instead of continuous Hershey strokes.
+_DOT_FONT = {
+    "0": ("01110", "10001", "10011", "10101", "11001", "10001", "01110"),
+    "1": ("00100", "01100", "00100", "00100", "00100", "00100", "01110"),
+    "2": ("01110", "10001", "00001", "00010", "00100", "01000", "11111"),
+    "3": ("11111", "00010", "00100", "00010", "00001", "10001", "01110"),
+    "4": ("00010", "00110", "01010", "10010", "11111", "00010", "00010"),
+    "5": ("11111", "10000", "11110", "00001", "00001", "10001", "01110"),
+    "6": ("00110", "01000", "10000", "11110", "10001", "10001", "01110"),
+    "7": ("11111", "00001", "00010", "00100", "01000", "01000", "01000"),
+    "8": ("01110", "10001", "10001", "01110", "10001", "10001", "01110"),
+    "9": ("01110", "10001", "10001", "01111", "00001", "00010", "01100"),
+    "A": ("01110", "10001", "10001", "11111", "10001", "10001", "10001"),
+    "B": ("11110", "10001", "10001", "11110", "10001", "10001", "11110"),
+    "C": ("01110", "10001", "10000", "10000", "10000", "10001", "01110"),
+    "D": ("11100", "10010", "10001", "10001", "10001", "10010", "11100"),
+    "E": ("11111", "10000", "10000", "11110", "10000", "10000", "11111"),
+    "F": ("11111", "10000", "10000", "11110", "10000", "10000", "10000"),
+    "G": ("01110", "10001", "10000", "10111", "10001", "10001", "01111"),
+    "H": ("10001", "10001", "10001", "11111", "10001", "10001", "10001"),
+    "I": ("01110", "00100", "00100", "00100", "00100", "00100", "01110"),
+    "J": ("00111", "00010", "00010", "00010", "00010", "10010", "01100"),
+    "K": ("10001", "10010", "10100", "11000", "10100", "10010", "10001"),
+    "L": ("10000", "10000", "10000", "10000", "10000", "10000", "11111"),
+    "M": ("10001", "11011", "10101", "10101", "10001", "10001", "10001"),
+    "N": ("10001", "11001", "10101", "10011", "10001", "10001", "10001"),
+    "O": ("01110", "10001", "10001", "10001", "10001", "10001", "01110"),
+    "P": ("11110", "10001", "10001", "11110", "10000", "10000", "10000"),
+    "Q": ("01110", "10001", "10001", "10001", "10101", "10010", "01101"),
+    "R": ("11110", "10001", "10001", "11110", "10100", "10010", "10001"),
+    "S": ("01111", "10000", "10000", "01110", "00001", "00001", "11110"),
+    "T": ("11111", "00100", "00100", "00100", "00100", "00100", "00100"),
+    "U": ("10001", "10001", "10001", "10001", "10001", "10001", "01110"),
+    "V": ("10001", "10001", "10001", "10001", "10001", "01010", "00100"),
+    "W": ("10001", "10001", "10001", "10101", "10101", "10101", "01010"),
+    "X": ("10001", "01010", "00100", "00100", "01010", "10001", "10001"),
+    "Y": ("10001", "10001", "01010", "00100", "00100", "00100", "00100"),
+    "Z": ("11111", "00001", "00010", "00100", "01000", "10000", "11111"),
+}
+
+# Pairs that differ by one or two dots on a degraded stamp — the exact
+# misreads seen in production (V read as U/T, 0 as 8, tilted 6 as 9, ...).
+# Oversampled in the dot-peen synthetic set so the model learns to use the
+# whole glyph shape, not just the dot that glare erased.
+_CONFUSION_PAIRS = [
+    ("V", "U"), ("V", "T"), ("0", "8"), ("6", "9"), ("1", "7"),
+    ("1", "I"), ("1", "L"), ("5", "S"), ("B", "8"), ("2", "Z"),
+    ("0", "O"), ("0", "D"), ("F", "R"), ("4", "A"), ("6", "G"),
+]
+
+
+def _confusable_string(rng: random.Random, min_len=6, max_len=12) -> str:
+    """Random string biased toward the confusable characters."""
+    n = rng.randint(min_len, max_len)
+    out = []
+    for _ in range(n):
+        if rng.random() < 0.6:
+            out.append(rng.choice(rng.choice(_CONFUSION_PAIRS)))
+        else:
+            out.append(rng.choice(CHARSET))
+    return "".join(out)
+
+
+def _render_dotpeen_line(text: str, rng: random.Random) -> np.ndarray:
+    """Render a string as dot-peen engraving on synthetic metal: a 5x7 grid
+    of round dots per character, with glare gradient, brushed-surface noise,
+    randomly faint/missing dots, dot-position jitter, slight tilt and blur —
+    the degradations that make real plates hard."""
+    dot_r = rng.randint(2, 4)
+    pitch = int(round(dot_r * rng.uniform(2.2, 3.0)))
+    char_w, char_h = 5 * pitch, 7 * pitch
+    gap = int(round(pitch * rng.uniform(0.9, 1.8)))
+    margin = 3 * pitch
+    W = len(text) * (char_w + gap) - gap + 2 * margin
+    H = char_h + 2 * margin
+
+    base = rng.uniform(90, 185)
+    canvas = np.full((H, W), base, dtype=np.float32)
+    # brushed-metal texture: noise smeared along the grind direction
+    tex = np.random.default_rng(rng.randrange(1 << 30)).normal(0, rng.uniform(4, 14), (H, W))
+    tex = cv2.blur(tex.astype(np.float32), (rng.randint(9, 25), 1))
+    canvas += tex
+    # glare: a broad bright (or dark shadow) blob drifting across the plate
+    glare = np.zeros((H, W), dtype=np.float32)
+    gx, gy = rng.randint(0, W - 1), rng.randint(0, H - 1)
+    cv2.circle(glare, (gx, gy), max(H, W) // rng.randint(2, 4), rng.uniform(-60, 80), -1)
+    glare = cv2.blur(glare, (W // 2 | 1, H | 1))
+    canvas += glare
+
+    bright_dots = rng.random() < 0.5
+    for i, ch in enumerate(text):
+        bitmap = _DOT_FONT.get(ch)
+        if bitmap is None:
+            continue
+        x0 = margin + i * (char_w + gap)
+        for r, row in enumerate(bitmap):
+            for c, bit in enumerate(row):
+                if bit != "1":
+                    continue
+                if rng.random() < 0.06:      # dot the peen head skipped / glare ate
+                    continue
+                cx = int(round(x0 + c * pitch + rng.uniform(-0.18, 0.18) * pitch))
+                cy = int(round(margin + r * pitch + rng.uniform(-0.18, 0.18) * pitch))
+                strength = rng.uniform(0.35, 1.0)   # faint dots are common
+                delta = rng.uniform(55, 115) * strength * (1 if bright_dots else -1)
+                color = float(np.clip(canvas[min(cy, H - 1), min(cx, W - 1)] + delta, 0, 255))
+                cv2.circle(canvas, (cx, cy), dot_r + (1 if rng.random() < 0.2 else 0),
+                           color, -1, lineType=cv2.LINE_AA)
+
+    g = np.clip(canvas, 0, 255).astype(np.uint8)
+    angle = rng.uniform(-8, 8)
+    M = cv2.getRotationMatrix2D((W / 2, H / 2), angle, 1.0)
+    g = cv2.warpAffine(g, M, (W, H), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
+    if rng.random() < 0.5:
+        k = rng.choice([3, 5])
+        g = cv2.GaussianBlur(g, (k, k), 0)
     return _normalize_line(g)
 
 
@@ -277,6 +413,7 @@ def train_crnn_model(
     synthetic_lines: int = 3000,
     composite_lines: int = 4000,
     emnist_lines: int = 3000,
+    dotpeen_lines: int = 4000,
     batch_size: int = 32,
     learning_rate: float = 1e-3,
     val_ratio: float = 0.15,
@@ -404,6 +541,14 @@ def train_crnn_model(
     for _ in range(synthetic_lines):
         text = _random_string(rng)
         X.append(_render_synthetic_line(text, rng)); Y.append(text)
+
+    # dot-peen rendered lines — the actual engraving style of the engine
+    # plates, half of them biased toward the one-dot-apart confusion pairs
+    # (V/U, 0/8, 6/9, ...) so the model learns to disambiguate them from
+    # overall glyph shape even when a dot is faint or missing
+    for i in range(dotpeen_lines):
+        text = _confusable_string(rng) if i % 2 == 0 else _random_string(rng, 6, 12)
+        X.append(_render_dotpeen_line(text, rng)); Y.append(text)
 
     # ── Phase 4: split + tensors ─────────────────────────────────
     combined = list(zip(X, Y))
@@ -545,7 +690,8 @@ def train_crnn_model(
         "line_accuracy": line_acc, "char_accuracy": char_acc,
         "labeled_chars": have_chars,
         "counts": {"real_lines": len(real_lines), "composite_lines": made,
-                   "emnist_lines": made_em, "synthetic_lines": synthetic_lines},
+                   "emnist_lines": made_em, "synthetic_lines": synthetic_lines,
+                   "dotpeen_lines": dotpeen_lines},
         "emnist_used": bool(made_em),
         "top_confusions": [{"pair": p, "count": c} for p, c in top_conf],
         "samples": samples,

@@ -114,6 +114,7 @@ class TrainCrnnRequest(BaseModel):
     synthetic_lines: int = 3000
     composite_lines: int = 4000
     emnist_lines: int = 3000
+    dotpeen_lines: int = 4000
     batch_size: int = 32
     learning_rate: float = 1e-3
     val_ratio: float = 0.15
@@ -134,8 +135,10 @@ async def start_crnn_training(
     await get_owned_project(project_id, current_user, db)
     req = body or TrainCrnnRequest()
     task = train_crnn_model.delay(
-        project_id, req.epochs, req.synthetic_lines, req.composite_lines,
-        req.emnist_lines, req.batch_size, req.learning_rate, req.val_ratio,
+        project_id, epochs=req.epochs, synthetic_lines=req.synthetic_lines,
+        composite_lines=req.composite_lines, emnist_lines=req.emnist_lines,
+        dotpeen_lines=req.dotpeen_lines, batch_size=req.batch_size,
+        learning_rate=req.learning_rate, val_ratio=req.val_ratio,
     )
     return {"task_id": task.id, "status": "queued"}
 
@@ -1017,7 +1020,75 @@ def _estimate_text_angle(boxes):
     return angle if abs(angle) <= 60 else 0.0
 
 
-def _predict_with_crnn(project_id: str, img: np.ndarray, gray: np.ndarray):
+def _greedy_decode_steps(probs, blank_index, charset):
+    """CTC greedy decode keeping, for every emitted character, the class
+    index and the timestep that emitted it — so a format constraint can go
+    back to that timestep's full softmax and re-pick among allowed classes."""
+    best = probs.argmax(axis=1)
+    out, prev = [], -1
+    for t, idx in enumerate(best):
+        idx = int(idx)
+        if idx != prev and idx != blank_index:
+            out.append((charset[idx], idx, t))
+        prev = idx
+    return out
+
+
+def _pattern_allowed(spec_ch, charset):
+    """Character-class for one pattern position: L=letter, D=digit, ?=any,
+    anything else is a literal."""
+    if spec_ch == "L":
+        return [i for i, c in enumerate(charset) if c.isalpha()]
+    if spec_ch == "D":
+        return [i for i, c in enumerate(charset) if c.isdigit()]
+    if spec_ch == "?":
+        return list(range(len(charset)))
+    return [i for i, c in enumerate(charset) if c == spec_ch.upper()]
+
+
+def _apply_pattern(emits, probs, pattern, charset):
+    """Re-pick each emitted character among the classes its serial-format
+    position allows (argmax of that timestep's softmax restricted to the
+    allowed set). Kills one-dot ambiguities like V/U or 0/8 whenever the
+    schema says the position is a letter or a digit. Returns None when the
+    read's length doesn't match the pattern — caller reports the mismatch
+    instead of guessing."""
+    if len(emits) != len(pattern):
+        return None
+    fixed = []
+    for (ch, idx, t), spec in zip(emits, pattern):
+        allowed = _pattern_allowed(spec, charset)
+        if not allowed:
+            return None
+        if idx in allowed:
+            fixed.append(ch)
+        else:
+            fixed.append(charset[max(allowed, key=lambda a: probs[t, a])])
+    return "".join(fixed)
+
+
+def _decode_line_both_ways(model, crop, normalize, blank_index, charset):
+    """Read a line crop at 0° and 180° and keep the more confident read —
+    a serial detected as 'vertical' is upright after one 90° rotation and
+    upside-down after the other, and box geometry can't tell those apart."""
+    best = None
+    for flipped in (False, True):
+        c = cv2.rotate(crop, cv2.ROTATE_180) if flipped else crop
+        norm = normalize(c).astype(np.float32) / 255.0
+        probs = model.predict(norm[None, ..., None], verbose=0)[0]
+        emits = _greedy_decode_steps(probs, blank_index, charset)
+        confs = [float(probs[t, i]) for (_, i, t) in emits]
+        conf = sum(confs) / len(confs) if confs else 0.0
+        # prefer the unflipped read unless the flip is clearly better
+        score = conf if not flipped else conf - 0.05
+        if best is None or (emits and score > best[0]):
+            best = (score, emits, probs, conf)
+    _, emits, probs, conf = best
+    return emits, probs, (round(conf, 3) if emits else None)
+
+
+def _predict_with_crnn(project_id: str, img: np.ndarray, gray: np.ndarray,
+                       pattern: str = None):
     """
     Read text with the CRNN line recognizer. Uses the project's trained YOLO
     model to locate the text region(s) — exactly the pipeline the user
@@ -1030,7 +1101,7 @@ def _predict_with_crnn(project_id: str, img: np.ndarray, gray: np.ndarray):
        whole-plate crop when character boxes come back weak or empty.
     3. The whole frame, as an absolute last resort.
     """
-    from ..tasks.crnn_training import _normalize_line, _greedy_decode, BLANK_INDEX
+    from ..tasks.crnn_training import _normalize_line, BLANK_INDEX
 
     model, charset = _load_crnn(project_id)
 
@@ -1039,6 +1110,22 @@ def _predict_with_crnn(project_id: str, img: np.ndarray, gray: np.ndarray):
     region_source = "full_frame"
     if boxes:
         region_source = "yolo_chars"
+
+        # A plate mounted sideways (serial running vertically, common when
+        # the stamped bar sits along the engine edge) puts the character
+        # centers on a vertical line — the small-angle de-skew below can't
+        # fix that (it caps at 60°), and a vertical line fed to the CRNN is
+        # noise. Detect it from the box-center spread and rotate the whole
+        # frame 90° first; whether the result is upright or upside-down is
+        # settled later by reading each crop at 0° and 180°.
+        if len(boxes) >= 3:
+            centers0 = np.array([[b[0] + b[2] / 2, b[1] + b[3] / 2] for b in boxes], dtype=np.float32)
+            if float(np.ptp(centers0[:, 1])) > float(np.ptp(centers0[:, 0])) * 1.5:
+                H0 = gray.shape[0]
+                gray = cv2.rotate(gray, cv2.ROTATE_90_CLOCKWISE)
+                img = cv2.rotate(img, cv2.ROTATE_90_CLOCKWISE)
+                boxes = [(H0 - (y + h), x, h, w) for (x, y, w, h) in boxes]
+                region_source = "yolo_chars_vertical"
 
         # Row-grouping below only tolerates ~0.6x a character's height of
         # vertical spread between boxes it considers the same line -- fine
@@ -1100,17 +1187,23 @@ def _predict_with_crnn(project_id: str, img: np.ndarray, gray: np.ndarray):
             line_regions = [(0, 0, gray.shape[1], gray.shape[0])]
 
     results, text_lines = [], []
+    pattern_applied, pattern_mismatch = False, False
     for (x, y, w, h) in line_regions:
         crop = gray[y:y + h, x:x + w]
         if crop.size == 0:
             continue
-        norm = _normalize_line(crop).astype(np.float32) / 255.0
-        probs = model.predict(norm[None, ..., None], verbose=0)[0]
-        line_text = _greedy_decode(probs)
-        # mean confidence of the emitted (non-blank) steps
-        best = probs.argmax(axis=1)
-        confs = [float(probs[t, best[t]]) for t in range(len(best)) if best[t] != BLANK_INDEX]
-        conf = round(sum(confs) / len(confs), 3) if confs else None
+        emits, probs, conf = _decode_line_both_ways(
+            model, crop, _normalize_line, BLANK_INDEX, charset)
+        line_text = "".join(e[0] for e in emits)
+        if pattern:
+            fixed = _apply_pattern(emits, probs, pattern.strip().upper(), charset)
+            if fixed is None:
+                pattern_mismatch = True
+            elif fixed != line_text:
+                line_text = fixed
+                pattern_applied = True
+            else:
+                pattern_applied = True
         text_lines.append(line_text)
         results.append({"char": line_text, "confidence": conf, "box": [x, y, w, h]})
         color = (74, 222, 128)
@@ -1123,7 +1216,10 @@ def _predict_with_crnn(project_id: str, img: np.ndarray, gray: np.ndarray):
     return {"text": "".join(text_lines), "characters": results, "preview": preview,
             "num_found": len(text_lines), "engine": "crnn",
             "detector": "yolo" if region_source != "full_frame" else "full_frame",
-            "region_source": region_source}
+            "region_source": region_source,
+            "pattern": pattern or None,
+            "pattern_applied": pattern_applied,
+            "pattern_mismatch": pattern_mismatch}
 
 
 @router.post("/predict/{project_id}")
@@ -1131,6 +1227,7 @@ async def predict_ocr(
     project_id: str,
     file: UploadFile = File(...),
     engine: str = "cnn",
+    pattern: str = None,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -1140,7 +1237,9 @@ async def predict_ocr(
     confidence, and a preview image with boxes drawn.
     engine=cnn (default) uses the TFLite/Keras classifier;
     engine=tesseract uses the fine-tuned traineddata;
-    engine=crnn reads a whole cropped line at once;
+    engine=crnn reads a whole cropped line at once (handles vertical /
+    upside-down serials; optional `pattern` constrains the read to the
+    serial's format — L=letter, D=digit, ?=any, e.g. LLLDLDDDDD);
     engine=seg uses the trained segment model's per-character dot masks,
     reconnects the dots into a solid glyph, then reads with the CNN
     classifier — the path for dotted/dot-peen engraved characters.
@@ -1164,7 +1263,7 @@ async def predict_ocr(
     if engine == "tesseract":
         return _predict_with_tesseract(project_id, img, gray)
     if engine == "crnn":
-        return _predict_with_crnn(project_id, img, gray)
+        return _predict_with_crnn(project_id, img, gray, pattern)
     if engine == "seg":
         return _predict_with_seg(project_id, img, gray)
 
