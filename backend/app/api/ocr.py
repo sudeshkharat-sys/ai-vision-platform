@@ -1068,6 +1068,30 @@ def _apply_pattern(emits, probs, pattern, charset):
     return "".join(fixed)
 
 
+def _trim_weak_edges(emits, probs, min_keep=3):
+    """Drop leading/trailing emitted characters whose confidence is far
+    below the line's own median -- real characters in a clean read score
+    similarly to each other, while a character conjured from background
+    texture, a scratch, or a pen mark caught in a widened crop typically
+    scores much lower. Confirmed against real data: the dominant failure
+    mode was the correct serial with 1-4 such characters glued onto one or
+    both ends (e.g. "YYT4G55160" -> "5YYT4G55160"). Never trims below
+    min_keep characters, so a short genuine read can't be trimmed away."""
+    if len(emits) <= min_keep:
+        return emits
+    confs = [float(probs[t, i]) for (_, i, t) in emits]
+    median = float(np.median(confs))
+    if median <= 0:
+        return emits
+    threshold = median * 0.45
+    start, end = 0, len(emits)
+    while end - start > min_keep and confs[start] < threshold:
+        start += 1
+    while end - start > min_keep and confs[end - 1] < threshold:
+        end -= 1
+    return emits[start:end]
+
+
 def _decode_line_both_ways(model, crop, normalize, blank_index, charset):
     """Read a line crop at 0° and 180° and keep the more confident read —
     a serial detected as 'vertical' is upright after one 90° rotation and
@@ -1084,7 +1108,10 @@ def _decode_line_both_ways(model, crop, normalize, blank_index, charset):
         score = conf if not flipped else conf - 0.05
         if best is None or (emits and score > best[0]):
             best = (score, emits, probs, conf)
-    _, emits, probs, conf = best
+    _, emits, probs, _ = best
+    emits = _trim_weak_edges(emits, probs)
+    confs = [float(probs[t, i]) for (_, i, t) in emits]
+    conf = sum(confs) / len(confs) if confs else 0.0
     return emits, probs, (round(conf, 3) if emits else None)
 
 
@@ -1178,22 +1205,32 @@ def _predict_with_crnn(project_id: str, img: np.ndarray, gray: np.ndarray,
         # the detector's confidence threshold and never gets a box at all --
         # cropping tightly to only the boxes that DID fire then silently
         # truncates the line before the CRNN ever sees those pixels (e.g.
-        # "ZFT4H72838" -> a box around just "T4H7", read as "T4H7"). Padding
-        # each row by a multiple of the median character width, instead of a
-        # token few pixels, gives the CRNN a real chance to still read
-        # characters the detector missed, without needing every character to
-        # be individually boxed.
+        # "ZFT4H72838" -> a box around just "T4H7", read as "T4H7"). A
+        # modest pad rescues that. Earlier this was 1.5x, but that pulled in
+        # enough background/pen-mark/scratch pixels for the CRNN to start
+        # hallucinating extra characters at the edges instead ("YYT4G55160"
+        # -> "5YYT4G55160") -- confirmed across ~150 real test-on-training
+        # results, a worse failure mode than the truncation it fixed.
+        # Trimmed back down; _trim_weak_edges() below is the real fix for
+        # missed-edge-character truncation now (reads the wider plate
+        # region only when the row is suspiciously narrow, then drops
+        # low-confidence edge reads instead of blindly keeping them).
         med_w = float(np.median([b[2] for b in boxes]))
         plate = _yolo_plate_region(project_id, img)
         for row in rows:
-            x1 = min(b[0] for b in row) - med_w * 1.5
+            x1 = min(b[0] for b in row) - med_w * 0.5
             y1 = min(b[1] for b in row) - 4
-            x2 = max(b[0] + b[2] for b in row) + med_w * 1.5
+            x2 = max(b[0] + b[2] for b in row) + med_w * 0.5
             y2 = max(b[1] + b[3] for b in row) + 4
             if plate:
                 px, py, pw, ph = plate
                 row_cy = (y1 + y2) / 2
-                if py - med_h <= row_cy <= py + ph + med_h:
+                row_w = x2 - x1
+                # Only reach for the full plate width when this row looks
+                # suspiciously narrow next to the detected plate box --
+                # i.e. the detector likely missed several characters --
+                # instead of doing it for every row unconditionally.
+                if (py - med_h <= row_cy <= py + ph + med_h) and row_w < pw * 0.7:
                     x1 = min(x1, px)
                     x2 = max(x2, px + pw)
             x1 = max(0, int(round(x1)))
