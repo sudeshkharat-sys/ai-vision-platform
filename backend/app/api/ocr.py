@@ -367,18 +367,23 @@ def _yolo_predict_raw(project_id: str, img: np.ndarray, conf: float):
         model = YOLO(str(model_path))
         _YOLO_CACHE[project_id] = (mtime, model)
 
-    # Training builds its YOLO dataset with preprocess=True by default --
-    # CLAHE + gamma + unsharp mask baked into every training image (see
-    # clahe_gamma_sharpen in tasks/training.py) -- but this was feeding the
-    # RAW photo to the trained model at test time. A detector that only
-    # ever saw enhanced images during training sees a different-looking
-    # world at inference and silently misses characters/plates it would
-    # have caught on the matching preprocessing -- a likely cause of the
-    # "no characters detected at all, falls back to reading the whole
-    # frame" garbage reads seen in real testing. Apply the same transform
-    # here so train and inference match.
+    # Training can be run with preprocess on OR off (CLAHE+gamma+unsharp
+    # baked into every training image, or not) -- feeding this model
+    # whichever one it DIDN'T train on is a train/inference mismatch either
+    # way. seed_meta.json records what the model this project currently
+    # has actually used, written next to seed_best.pt at the end of
+    # train_seed_model. Missing file (older model saved before this was
+    # tracked) defaults to True, matching the training default of the time.
     from ..tasks.training import clahe_gamma_sharpen
-    img = clahe_gamma_sharpen(img)
+    seed_meta_path = model_path.parent / "seed_meta.json"
+    use_clahe = True
+    if seed_meta_path.exists():
+        try:
+            use_clahe = bool(json.loads(seed_meta_path.read_text()).get("preprocess", True))
+        except Exception:
+            use_clahe = True
+    if use_clahe:
+        img = clahe_gamma_sharpen(img)
 
     return model.predict(img, conf=conf, verbose=False)
 

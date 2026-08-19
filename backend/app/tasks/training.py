@@ -793,6 +793,12 @@ def train_seed_model(
     target_path = settings.model_dir / project_id / "seed_best.pt"
     target_path.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy(best_model_path, target_path)
+    # Remember whether THIS model was trained on CLAHE+gamma+sharpen images
+    # so inference (ocr.py::_yolo_predict_raw) can apply the exact same
+    # preprocessing this model actually learned from -- training toggling
+    # preprocess on/off between runs must not leave inference guessing.
+    (target_path.parent / "seed_meta.json").write_text(
+        json.dumps({"preprocess": bool(preprocess)}))
     shutil.rmtree(dataset_path)
 
     final_metrics = epoch_history[-1] if epoch_history else {}
