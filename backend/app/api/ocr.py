@@ -367,6 +367,19 @@ def _yolo_predict_raw(project_id: str, img: np.ndarray, conf: float):
         model = YOLO(str(model_path))
         _YOLO_CACHE[project_id] = (mtime, model)
 
+    # Training builds its YOLO dataset with preprocess=True by default --
+    # CLAHE + gamma + unsharp mask baked into every training image (see
+    # clahe_gamma_sharpen in tasks/training.py) -- but this was feeding the
+    # RAW photo to the trained model at test time. A detector that only
+    # ever saw enhanced images during training sees a different-looking
+    # world at inference and silently misses characters/plates it would
+    # have caught on the matching preprocessing -- a likely cause of the
+    # "no characters detected at all, falls back to reading the whole
+    # frame" garbage reads seen in real testing. Apply the same transform
+    # here so train and inference match.
+    from ..tasks.training import clahe_gamma_sharpen
+    img = clahe_gamma_sharpen(img)
+
     return model.predict(img, conf=conf, verbose=False)
 
 

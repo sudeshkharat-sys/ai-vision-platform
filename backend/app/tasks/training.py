@@ -27,58 +27,50 @@ def _safe_float(v):
         return None
 
 
-def _preprocess_for_inspection(src_path: Path, dst_path: Path) -> None:
+def clahe_gamma_sharpen(img: np.ndarray) -> np.ndarray:
     """
-    Three-stage preprocessing pipeline tuned for water-pipe clip inspection.
+    Three-stage preprocessing pipeline (CLAHE + gamma + unsharp mask),
+    in-memory BGR -> BGR. This is what `preprocess=True` (the default)
+    bakes into every YOLO training image via `_preprocess_for_inspection`
+    below -- factored out so inference can apply the EXACT same transform
+    before running the trained model. Training/inference images being on
+    different distributions (enhanced vs raw) silently starves detection
+    at test time even though the model looks fine on its own eval split.
 
-    Stage 1 — Aggressive CLAHE
-      clipLimit=4.0, tileGridSize=(4,4): smaller tiles mean tighter local
-      adaptation, so the white clip region is enhanced independently of the
-      surrounding dark rubber.  Higher clip limit allows more contrast gain
-      before clamping, making bright clip edges genuinely white rather than
-      just 'less dark'.
+    Stage 1 — Moderate CLAHE on the L channel
+      clipLimit=3.0, tileGridSize=(8,8): enhances local contrast without
+      flattening the whole image into grey.
 
     Stage 2 — Gamma correction (γ = 1.3)
-      γ > 1 darkens the shadow/midtone range, keeping the dark rubber
-      background dark.  This widens the perceived gap between the black
-      hose and the white plastic clip — the opposite of γ < 1 which
-      lifted dark areas and turned the rubber a flat grey.
+      γ > 1 darkens the shadow/midtone range, widening the perceived gap
+      between dark background and the lighter subject.
 
     Stage 3 — Unsharp mask sharpening
-      Subtracts a Gaussian-blurred copy from the original (weighted sum).
-      This crisp-ens the clip-to-rubber boundary — the hard edge between
-      white plastic and black hose is exactly the signal the model needs
-      to detect.
-
-    Falls back to a plain file copy if OpenCV cannot read the image.
+      Subtracts a Gaussian-blurred copy from the original (weighted sum)
+      to crispen edges — the signal detectors key off of.
     """
-    img = cv2.imread(str(src_path))
-    if img is None:
-        shutil.copy(src_path, dst_path)
-        return
-
-    # ── Stage 1: moderate CLAHE on L channel ─────────────────────
-    # clipLimit=3.0 + larger tiles (8×8): enhances local contrast without
-    # flattening the whole image into grey.
     lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
     l_ch, a_ch, b_ch = cv2.split(lab)
     clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
     l_enhanced = clahe.apply(l_ch)
     out = cv2.cvtColor(cv2.merge([l_enhanced, a_ch, b_ch]), cv2.COLOR_LAB2BGR)
 
-    # ── Stage 2: gamma correction (γ=1.3) ───────────────────────
-    # γ > 1 darkens shadows: keeps the dark rubber background dark so
-    # the white plastic clip stands out MORE (opposite of γ < 1 which
-    # lifted dark areas and turned rubber grey).
     lut = np.array([(i / 255.0) ** 1.3 * 255 for i in range(256)], dtype=np.uint8)
     out = cv2.LUT(out, lut)
 
-    # ── Stage 3: unsharp mask sharpening ─────────────────────────
-    # Crispens the hard clip-to-rubber boundary.
     blurred = cv2.GaussianBlur(out, (0, 0), sigmaX=2.0)
     out = cv2.addWeighted(out, 1.4, blurred, -0.4, 0)
+    return out
 
-    cv2.imwrite(str(dst_path), out)
+
+def _preprocess_for_inspection(src_path: Path, dst_path: Path) -> None:
+    """Read src_path, apply clahe_gamma_sharpen, write to dst_path. Falls
+    back to a plain file copy if OpenCV cannot read the image."""
+    img = cv2.imread(str(src_path))
+    if img is None:
+        shutil.copy(src_path, dst_path)
+        return
+    cv2.imwrite(str(dst_path), clahe_gamma_sharpen(img))
 
 
 # ── Shared helpers ────────────────────────────────────────────────
