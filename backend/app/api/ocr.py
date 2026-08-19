@@ -1082,6 +1082,41 @@ def _apply_pattern(emits, probs, pattern, charset):
     return "".join(fixed)
 
 
+def _collapse_near_duplicates(emits, probs):
+    """Merge a pair of adjacent emitted characters that fire abnormally
+    close together in time into just the more confident one.
+
+    CTC greedy decoding treats any two DIFFERENT non-blank classes as two
+    separate characters, even if they came from timesteps a hair apart --
+    but a real character normally occupies several consecutive timesteps
+    on its own. When the softmax briefly flickers to a different class
+    mid-glyph (common on a character the network is genuinely unsure
+    about, like an "8" that could almost be read as "3" then "B"), that
+    flicker gets emitted as a phantom extra character right next to the
+    real one. Confirmed against real data: "TZTZG25852" -> "TZTZG253B5Z"
+    (the "8" split into "3B") and similar mid-string splits. Only merges
+    pairs that are close relative to this line's OWN typical spacing, so
+    a genuinely tight but real two-character run isn't touched."""
+    if len(emits) < 3:
+        return emits
+    gaps = [emits[i + 1][2] - emits[i][2] for i in range(len(emits) - 1)]
+    typical = float(np.median(gaps))
+    if typical <= 0:
+        return emits
+    out = list(emits)
+    i = 0
+    while i < len(out) - 1:
+        gap = out[i + 1][2] - out[i][2]
+        if gap < max(1.0, typical * 0.4):
+            a_conf = float(probs[out[i][2], out[i][1]])
+            b_conf = float(probs[out[i + 1][2], out[i + 1][1]])
+            keep = out[i] if a_conf >= b_conf else out[i + 1]
+            out[i:i + 2] = [keep]
+        else:
+            i += 1
+    return out
+
+
 def _trim_weak_edges(emits, probs, min_keep=3):
     """Drop leading/trailing emitted characters whose confidence is far
     below the line's own median -- real characters in a clean read score
@@ -1097,7 +1132,7 @@ def _trim_weak_edges(emits, probs, min_keep=3):
     median = float(np.median(confs))
     if median <= 0:
         return emits
-    threshold = median * 0.45
+    threshold = median * 0.55
     start, end = 0, len(emits)
     while end - start > min_keep and confs[start] < threshold:
         start += 1
@@ -1123,6 +1158,7 @@ def _decode_line_both_ways(model, crop, normalize, blank_index, charset):
         if best is None or (emits and score > best[0]):
             best = (score, emits, probs, conf)
     _, emits, probs, _ = best
+    emits = _collapse_near_duplicates(emits, probs)
     emits = _trim_weak_edges(emits, probs)
     confs = [float(probs[t, i]) for (_, i, t) in emits]
     conf = sum(confs) / len(confs) if confs else 0.0
