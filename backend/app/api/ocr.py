@@ -1,6 +1,7 @@
 import base64
 import json
 from datetime import datetime
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -1243,6 +1244,86 @@ def _predict_with_crnn(project_id: str, img: np.ndarray, gray: np.ndarray,
             "pattern": pattern or None,
             "pattern_applied": pattern_applied,
             "pattern_mismatch": pattern_mismatch}
+
+
+@router.get("/evaluate-on-training/{project_id}")
+async def evaluate_on_training_data(
+    project_id: str,
+    engine: str = "crnn",
+    pattern: str = None,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Run the trained CRNN against every already-annotated image in the
+    project instead of testing one photo at a time. Each training image's
+    correct text is already known -- it's just the same per-character
+    boxes used to train, joined in reading order -- so this reports
+    pass/fail per image directly against real ground truth, and points
+    straight at the images the model still gets wrong.
+    """
+    await get_owned_project(project_id, current_user, db)
+    if engine != "crnn":
+        raise HTTPException(status_code=400,
+                            detail="evaluate-on-training currently supports engine=crnn only")
+
+    from ..tasks.training import _fetch_training_data, _group_annotations
+    from ..tasks.tesseract_training import _boxes_to_lines
+    from ..connectors.statedb_connector import StateDBConnector
+
+    state_db = StateDBConnector()
+    with state_db.get_session() as conn:
+        proj, _, img_rows, ann_rows = _fetch_training_data(
+            state_db, conn, project_id, status_filter="annotated")
+    if proj is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    anns_by_image = _group_annotations(ann_rows)
+
+    results = []
+    for img_row in img_rows:
+        real_path = Path(".") / img_row["filepath"].lstrip("/")
+        if not real_path.exists():
+            real_path = settings.upload_dir.parent / Path(img_row["filepath"].lstrip("/"))
+        img = cv2.imread(str(real_path))
+        if img is None:
+            continue
+
+        scale = 1200 / max(img.shape[:2]) if max(img.shape[:2]) > 1200 else 1.0
+        if scale < 1.0:
+            img = cv2.resize(img, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+        ih, iw = img.shape[:2]
+
+        lines = _boxes_to_lines(anns_by_image.get(img_row["id"], []), iw, ih)
+        truth = "".join("".join(c[0] for c in line) for line in lines)
+        if not truth:
+            continue
+
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        try:
+            pred = _predict_with_crnn(project_id, img, gray, pattern)
+        except HTTPException:
+            raise
+        except Exception as e:
+            results.append({"image_id": img_row["id"], "filename": img_row["filename"],
+                            "truth": truth, "predicted": None, "correct": False,
+                            "error": str(e)})
+            continue
+
+        predicted = pred.get("text", "")
+        results.append({
+            "image_id": img_row["id"], "filename": img_row["filename"],
+            "truth": truth, "predicted": predicted, "correct": predicted == truth,
+        })
+
+    results.sort(key=lambda r: r["correct"])  # failures first
+    total = len(results)
+    correct = sum(1 for r in results if r["correct"])
+    return {
+        "engine": engine, "pattern": pattern or None,
+        "total": total, "correct": correct,
+        "accuracy": round(correct / total, 4) if total else None,
+        "results": results,
+    }
 
 
 @router.post("/predict/{project_id}")

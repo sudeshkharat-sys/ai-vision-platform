@@ -58,6 +58,8 @@ const OcrTrainingPanel = ({ project, onClose }) => {
     const [taskId, setTaskId]     = useState(null);
     const [testing, setTesting]   = useState(false);
     const [testResult, setTestResult] = useState(null);
+    const [evaluating, setEvaluating] = useState(false);
+    const [evalResult, setEvalResult] = useState(null);
     const [running, setRunning]   = useState(false);
     const [meta, setMeta]         = useState(null);   // live progress meta
     const [result, setResult]     = useState(null);   // final task result
@@ -106,6 +108,29 @@ const OcrTrainingPanel = ({ project, onClose }) => {
             } catch { /* transient — keep polling */ }
         }, 2000);
     }, [loadStats]);
+
+    // A training run keeps going on the server after this panel is closed —
+    // it's a Celery task, not tied to the browser tab. Only the LIVE
+    // PROGRESS VIEW was tied to this component before, so closing the
+    // panel and reopening it looked like the training had vanished even
+    // though it was still running. Jobs are already persisted in the DB
+    // (see /pipeline/jobs below) with status "pending" until they finish,
+    // so on mount just check for one still pending and reattach to it.
+    useEffect(() => {
+        const jobType = engine === 'crnn' ? 'ocr_crnn_training'
+            : engine === 'tesseract' ? 'ocr_tesseract_training' : 'ocr_training';
+        axios.get(`${API_URL}/pipeline/jobs/${project.id}`, { params: { job_type: jobType } })
+            .then(res => {
+                const jobs = res.data || [];
+                const active = jobs.find(j => j.status === 'pending' || j.status === 'started');
+                if (active) {
+                    setTaskId(active.id);
+                    setRunning(true);
+                    pollTask(active.id);
+                }
+            })
+            .catch(() => {});
+    }, [project.id, engine, pollTask]);
 
     const startTraining = async () => {
         setError(null); setResult(null); setMeta(null);
@@ -163,6 +188,19 @@ const OcrTrainingPanel = ({ project, onClose }) => {
             setError(err.response?.data?.detail || 'Prediction failed.');
         } finally {
             setTesting(false);
+        }
+    };
+
+    const evaluateOnTrainingData = async () => {
+        setEvaluating(true); setEvalResult(null); setError(null);
+        try {
+            const res = await axios.get(
+                `${API_URL}/ocr/evaluate-on-training/${project.id}`, { params: { engine } });
+            setEvalResult(res.data);
+        } catch (err) {
+            setError(err.response?.data?.detail || 'Evaluation failed.');
+        } finally {
+            setEvaluating(false);
         }
     };
 
@@ -497,30 +535,33 @@ const OcrTrainingPanel = ({ project, onClose }) => {
                                         <span>{pct(finalMeta.val_accuracy)}</span>
                                         <small>validation accuracy</small>
                                     </div>
-                                    {finalMeta.per_class_accuracy && (
-                                        <div className="ocr-perclass">
-                                            {Object.entries(finalMeta.per_class_accuracy).map(([c, a]) => (
-                                                <span key={c}
-                                                    className={`ocr-chip ${a >= 0.95 ? 'ok' : a >= 0.8 ? 'warn' : 'bad'}`}>
-                                                    {c} {pct(a)}
-                                                </span>
-                                            ))}
-                                        </div>
-                                    )}
-                                    {result?.started_from === 'pretrained_base' && (
-                                        <p className="ocr-hint">
-                                            {result?.base_info?.emnist_used
-                                                ? `Base knowledge: EMNIST (${result.base_info.emnist_samples} real characters) + ${result.base_info.synthetic_samples} synthetic.`
-                                                : 'Base knowledge: synthetic characters only — EMNIST was NOT downloaded (check server internet).'}
-                                        </p>
-                                    )}
-                                    {result?.top_confusions?.length > 0 && (
-                                        <p className="ocr-hint">
-                                            Most confused: {result.top_confusions.slice(0, 5)
-                                                .map(t => `${t.pair.replace('->', ' → ')} (${t.count})`).join(', ')}.
-                                            Label more examples of these characters and retrain.
-                                        </p>
-                                    )}
+                                    <details className="ocr-details-dropdown">
+                                        <summary>Training details</summary>
+                                        {finalMeta.per_class_accuracy && (
+                                            <div className="ocr-perclass">
+                                                {Object.entries(finalMeta.per_class_accuracy).map(([c, a]) => (
+                                                    <span key={c}
+                                                        className={`ocr-chip ${a >= 0.95 ? 'ok' : a >= 0.8 ? 'warn' : 'bad'}`}>
+                                                        {c} {pct(a)}
+                                                    </span>
+                                                ))}
+                                            </div>
+                                        )}
+                                        {result?.started_from === 'pretrained_base' && (
+                                            <p className="ocr-hint">
+                                                {result?.base_info?.emnist_used
+                                                    ? `Base knowledge: EMNIST (${result.base_info.emnist_samples} real characters) + ${result.base_info.synthetic_samples} synthetic.`
+                                                    : 'Base knowledge: synthetic characters only — EMNIST was NOT downloaded (check server internet).'}
+                                            </p>
+                                        )}
+                                        {result?.top_confusions?.length > 0 && (
+                                            <p className="ocr-hint">
+                                                Most confused: {result.top_confusions.slice(0, 5)
+                                                    .map(t => `${t.pair.replace('->', ' → ')} (${t.count})`).join(', ')}.
+                                                Label more examples of these characters and retrain.
+                                            </p>
+                                        )}
+                                    </details>
                                 </div>
                             )}
                             <div className="ocr-downloads">
@@ -608,19 +649,22 @@ const OcrTrainingPanel = ({ project, onClose }) => {
                                             <small>character accuracy on held-out lines
                                                 ({tm.val_lines} lines; trained on {tm.train_lines})</small>
                                         </div>
-                                        {tm.top_confusions?.length > 0 && (
-                                            <p className="ocr-hint">
-                                                Most confused: {tm.top_confusions.slice(0, 5)
-                                                    .map(t => `${t.pair.replace('->', ' → ')} (${t.count})`).join(', ')}.
-                                                Label more examples of these characters and retrain.
-                                            </p>
-                                        )}
-                                        {(tm.eval_lines || []).slice(0, 8).map((l, i) => (
-                                            <p key={i} className="ocr-hint" style={{ margin: '2px 0' }}>
-                                                <b>{l.truth}</b> → read as <b>{l.predicted || '(nothing)'}</b>
-                                                {l.truth === l.predicted ? ' ✓' : ''}
-                                            </p>
-                                        ))}
+                                        <details className="ocr-details-dropdown">
+                                            <summary>Training details</summary>
+                                            {tm.top_confusions?.length > 0 && (
+                                                <p className="ocr-hint">
+                                                    Most confused: {tm.top_confusions.slice(0, 5)
+                                                        .map(t => `${t.pair.replace('->', ' → ')} (${t.count})`).join(', ')}.
+                                                    Label more examples of these characters and retrain.
+                                                </p>
+                                            )}
+                                            {(tm.eval_lines || []).slice(0, 8).map((l, i) => (
+                                                <p key={i} className="ocr-hint" style={{ margin: '2px 0' }}>
+                                                    <b>{l.truth}</b> → read as <b>{l.predicted || '(nothing)'}</b>
+                                                    {l.truth === l.predicted ? ' ✓' : ''}
+                                                </p>
+                                            ))}
+                                        </details>
                                     </div>
                                 );
                             })()}
@@ -685,25 +729,28 @@ const OcrTrainingPanel = ({ project, onClose }) => {
                                             <small>whole-line accuracy — {pct(cm.char_accuracy)} per character
                                                 (held-out lines)</small>
                                         </div>
-                                        {cm.labeled_chars && (
-                                            <p className="ocr-hint">
-                                                Trained-on characters: {cm.labeled_chars.join(' ')}.
-                                                Others are known from synthetic text only — label real
-                                                examples of them to improve.
-                                            </p>
-                                        )}
-                                        {cm.top_confusions?.length > 0 && (
-                                            <p className="ocr-hint">
-                                                Most confused: {cm.top_confusions.slice(0, 5)
-                                                    .map(t => `${t.pair.replace('->', ' → ')} (${t.count})`).join(', ')}.
-                                            </p>
-                                        )}
-                                        {(cm.samples || []).slice(0, 8).map((l, i) => (
-                                            <p key={i} className="ocr-hint" style={{ margin: '2px 0' }}>
-                                                <b>{l.truth}</b> → read as <b>{l.predicted || '(nothing)'}</b>
-                                                {l.truth === l.predicted ? ' ✓' : ''}
-                                            </p>
-                                        ))}
+                                        <details className="ocr-details-dropdown">
+                                            <summary>Training details</summary>
+                                            {cm.labeled_chars && (
+                                                <p className="ocr-hint">
+                                                    Trained-on characters: {cm.labeled_chars.join(' ')}.
+                                                    Others are known from synthetic text only — label real
+                                                    examples of them to improve.
+                                                </p>
+                                            )}
+                                            {cm.top_confusions?.length > 0 && (
+                                                <p className="ocr-hint">
+                                                    Most confused: {cm.top_confusions.slice(0, 5)
+                                                        .map(t => `${t.pair.replace('->', ' → ')} (${t.count})`).join(', ')}.
+                                                </p>
+                                            )}
+                                            {(cm.samples || []).slice(0, 8).map((l, i) => (
+                                                <p key={i} className="ocr-hint" style={{ margin: '2px 0' }}>
+                                                    <b>{l.truth}</b> → read as <b>{l.predicted || '(nothing)'}</b>
+                                                    {l.truth === l.predicted ? ' ✓' : ''}
+                                                </p>
+                                            ))}
+                                        </details>
                                     </div>
                                 );
                             })()}
@@ -749,6 +796,42 @@ const OcrTrainingPanel = ({ project, onClose }) => {
                                             <img className="ocr-test-preview" src={testResult.preview}
                                                 alt="detected text lines" />
                                         )}
+                                    </div>
+                                )}
+                            </div>
+                            <div className="ocr-test">
+                                <h3>Test on training data</h3>
+                                <p className="ocr-hint">
+                                    Runs the model against every already-annotated image in this
+                                    project and compares to the ground truth built from your own
+                                    character boxes — no need to test one photo at a time or retype
+                                    the correct answer, it's already labeled.
+                                </p>
+                                <button className={`ocr-btn-test ${evaluating ? 'busy' : ''}`}
+                                    onClick={evaluateOnTrainingData} disabled={evaluating}>
+                                    {evaluating
+                                        ? <><span className="ocr-spinner" /> Evaluating…</>
+                                        : <>▶ Test on training data</>}
+                                </button>
+                                {evalResult && (
+                                    <div className="ocr-test-result">
+                                        <div className="ocr-test-text">
+                                            <small>{evalResult.correct}/{evalResult.total} images exact match</small>
+                                            <span>{pct(evalResult.accuracy)}</span>
+                                        </div>
+                                        <div className="ocr-eval-list">
+                                            {evalResult.results.map(r => (
+                                                <div key={r.image_id}
+                                                    className={`ocr-eval-row ${r.correct ? 'ok' : 'bad'}`}>
+                                                    <span className="ocr-eval-status">{r.correct ? '✓' : '✗'}</span>
+                                                    <span className="ocr-eval-file">{r.filename}</span>
+                                                    <span className="ocr-eval-truth">{r.truth}</span>
+                                                    {!r.correct && (
+                                                        <span className="ocr-eval-pred">→ {r.predicted || '(nothing)'}</span>
+                                                    )}
+                                                </div>
+                                            ))}
+                                        </div>
                                     </div>
                                 )}
                             </div>
