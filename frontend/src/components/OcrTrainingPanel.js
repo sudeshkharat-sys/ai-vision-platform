@@ -110,27 +110,33 @@ const OcrTrainingPanel = ({ project, onClose }) => {
     }, [loadStats]);
 
     // A training run keeps going on the server after this panel is closed —
-    // it's a Celery task, not tied to the browser tab. Only the LIVE
-    // PROGRESS VIEW was tied to this component before, so closing the
-    // panel and reopening it looked like the training had vanished even
-    // though it was still running. Jobs are already persisted in the DB
-    // (see /pipeline/jobs below) with status "pending" until they finish,
-    // so on mount just check for one still pending and reattach to it.
+    // it's a Celery task, not tied to the browser tab. The panel always
+    // OPENS on the "cnn" tab regardless of which engine you were actually
+    // training, so checking only the current tab's job type here missed a
+    // still-running crnn/tesseract job on open (looked blank/finished),
+    // then "found" it the moment you switched tabs — reading as a brand
+    // new training suddenly starting instead of the same run resuming
+    // mid-way. Check every engine's jobs once and jump straight to
+    // whichever one is actually running.
     useEffect(() => {
-        const jobType = engine === 'crnn' ? 'ocr_crnn_training'
-            : engine === 'tesseract' ? 'ocr_tesseract_training' : 'ocr_training';
-        axios.get(`${API_URL}/pipeline/jobs/${project.id}`, { params: { job_type: jobType } })
+        const JOB_TYPE_TO_ENGINE = {
+            ocr_crnn_training: 'crnn', ocr_tesseract_training: 'tesseract', ocr_training: 'cnn',
+        };
+        axios.get(`${API_URL}/pipeline/jobs/${project.id}`)
             .then(res => {
                 const jobs = res.data || [];
-                const active = jobs.find(j => j.status === 'pending' || j.status === 'started');
+                const active = jobs.find(j => (j.status === 'pending' || j.status === 'started')
+                    && JOB_TYPE_TO_ENGINE[j.job_type]);
                 if (active) {
+                    setEngine(JOB_TYPE_TO_ENGINE[active.job_type]);
                     setTaskId(active.id);
                     setRunning(true);
                     pollTask(active.id);
                 }
             })
             .catch(() => {});
-    }, [project.id, engine, pollTask]);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [project.id, pollTask]);
 
     const startTraining = async () => {
         setError(null); setResult(null); setMeta(null);
