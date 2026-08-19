@@ -1171,11 +1171,34 @@ def _predict_with_crnn(project_id: str, img: np.ndarray, gray: np.ndarray,
             else:
                 rows.append([b])
         rows.sort(key=lambda r: np.mean([b[1] for b in r]))
+
+        # A character near either end of the line that's more blurred,
+        # shadowed, or angled than the rest of the plate often falls below
+        # the detector's confidence threshold and never gets a box at all --
+        # cropping tightly to only the boxes that DID fire then silently
+        # truncates the line before the CRNN ever sees those pixels (e.g.
+        # "ZFT4H72838" -> a box around just "T4H7", read as "T4H7"). Padding
+        # each row by a multiple of the median character width, instead of a
+        # token few pixels, gives the CRNN a real chance to still read
+        # characters the detector missed, without needing every character to
+        # be individually boxed.
+        med_w = float(np.median([b[2] for b in boxes]))
+        plate = _yolo_plate_region(project_id, img)
         for row in rows:
-            x1 = max(0, min(b[0] for b in row) - 4)
-            y1 = max(0, min(b[1] for b in row) - 4)
-            x2 = min(gray.shape[1], max(b[0] + b[2] for b in row) + 4)
-            y2 = min(gray.shape[0], max(b[1] + b[3] for b in row) + 4)
+            x1 = min(b[0] for b in row) - med_w * 1.5
+            y1 = min(b[1] for b in row) - 4
+            x2 = max(b[0] + b[2] for b in row) + med_w * 1.5
+            y2 = max(b[1] + b[3] for b in row) + 4
+            if plate:
+                px, py, pw, ph = plate
+                row_cy = (y1 + y2) / 2
+                if py - med_h <= row_cy <= py + ph + med_h:
+                    x1 = min(x1, px)
+                    x2 = max(x2, px + pw)
+            x1 = max(0, int(round(x1)))
+            y1 = max(0, int(round(y1)))
+            x2 = min(gray.shape[1], int(round(x2)))
+            y2 = min(gray.shape[0], int(round(y2)))
             line_regions.append((x1, y1, x2 - x1, y2 - y1))
     else:
         plate = _yolo_plate_region(project_id, img)
