@@ -1368,13 +1368,16 @@ Do you want to proceed?`;
                 ) : project.project_type === 'ocr' ? (
                     <div className="sidebar-section sidebar-actions">
                         <p className="sidebar-label">OCR Pipeline</p>
-                        <div className="ocr-flow-hint">
-                            1. Upload plate photos<br />
-                            2. Box + label each character<br />
-                            3. Train Character Detector (YOLO) — finds each char box<br />
-                            4. Train OCR Model — reads each box<br />
-                            5. Test / download
-                        </div>
+                        <details className="ocr-flow-hint-dropdown">
+                            <summary>Pipeline steps</summary>
+                            <div className="ocr-flow-hint">
+                                1. Upload plate photos<br />
+                                2. Box + label each character<br />
+                                3. Train Character Detector (YOLO) — finds each char box<br />
+                                4. Train OCR Model — reads each box<br />
+                                5. Test / download
+                            </div>
+                        </details>
                         <button className="btn-action" onClick={() => setShowTrainingPanel(true)}>
                             <Rocket size={14} /> Train Character Detector
                         </button>
