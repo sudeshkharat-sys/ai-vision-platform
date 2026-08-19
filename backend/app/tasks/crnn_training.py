@@ -321,6 +321,21 @@ def _augment_line(img_u8: np.ndarray, rng: random.Random) -> np.ndarray:
     if rng.random() < 0.25:
         noise = np.random.default_rng(rng.randrange(1 << 30)).normal(0, rng.uniform(3, 10), out.shape)
         out = np.clip(out.astype(np.float32) + noise, 0, 255).astype(np.uint8)
+    if rng.random() < 0.3:
+        # A local glare/shadow patch drifting over part of the line -- the
+        # real cause seen in production of a specific character reading
+        # wrong consistently on one photo (e.g. "8" -> "B"): a bright/dark
+        # patch of reflection sitting over just that character. Real lines
+        # only ever got ONE random augmentation draw per training run
+        # before (train_crnn_model now oversamples them with several
+        # independent draws), so this patch is what most of that repeated
+        # variety should actually be teaching the model to see through.
+        h, w = out.shape
+        gx, gy = rng.randint(0, w - 1), rng.randint(0, h - 1)
+        glare = np.zeros((h, w), dtype=np.float32)
+        cv2.circle(glare, (gx, gy), rng.randint(w // 6, w // 2), rng.uniform(-70, 70), -1)
+        glare = cv2.blur(glare, (w // 4 | 1, h | 1))
+        out = np.clip(out.astype(np.float32) + glare, 0, 255).astype(np.uint8)
     return out
 
 
@@ -415,6 +430,7 @@ def train_crnn_model(
     composite_lines: int = 4000,
     emnist_lines: int = 3000,
     dotpeen_lines: int = 4000,
+    real_augment_copies: int = 6,
     batch_size: int = 32,
     learning_rate: float = 1e-3,
     val_ratio: float = 0.15,
@@ -505,10 +521,28 @@ def train_crnn_model(
     except Exception:
         pass
 
-    X, Y = [], []
-    for im, txt in real_lines:
-        X.append(im); Y.append(txt)
+    # Real photos are the only data with this project's actual font,
+    # lighting, and glare -- but until now each one was only ever trained
+    # on ONCE per run, with a single random augmentation draw. Split them
+    # into train/val FIRST, before any duplication, so an augmented copy
+    # of a real photo can never end up in val while another copy of that
+    # SAME photo sits in train (that would leak and make val accuracy look
+    # better than it really is). Then oversample only the train side --
+    # each copy gets its own independent random crop/glare/blur draw from
+    # _augment_line, giving the model many more effective looks at the
+    # hardest real cases without needing more labeled photos.
+    real_shuffled = list(real_lines)
+    rng.shuffle(real_shuffled)
+    n_real_val = max(1, int(round(len(real_shuffled) * val_ratio))) if real_shuffled else 0
+    real_val, real_train = real_shuffled[:n_real_val], real_shuffled[n_real_val:]
 
+    train_set = []
+    for im, txt in real_train:
+        for _ in range(max(1, real_augment_copies)):
+            train_set.append((im, txt))
+    val_set = list(real_val)
+
+    X, Y = [], []
     # composited-from-real lines (in-domain, only over characters we have)
     made = 0
     guard = 0
@@ -552,10 +586,22 @@ def train_crnn_model(
         X.append(_render_dotpeen_line(text, rng)); Y.append(text)
 
     # ── Phase 4: split + tensors ─────────────────────────────────
+    # X/Y here is only the synthetic/composite/emnist/dot-peen pool --
+    # real lines were already split and oversampled above. Split this pool
+    # normally and merge into the real-photo train/val sets.
     combined = list(zip(X, Y))
     rng.shuffle(combined)
-    n_val = max(1, int(round(len(combined) * val_ratio)))
-    val_set, train_set = combined[:n_val], combined[n_val:]
+    n_val = max(1, int(round(len(combined) * val_ratio))) if combined else 0
+    val_set += combined[:n_val]
+    train_set += combined[n_val:]
+    rng.shuffle(train_set)
+    rng.shuffle(val_set)
+    if not val_set:
+        # No real lines and an unlucky split left val empty -- CTC training
+        # needs a non-empty validation set for ReduceLROnPlateau/
+        # EarlyStopping to have anything to monitor.
+        n_val = max(1, int(round(len(train_set) * val_ratio)))
+        val_set, train_set = train_set[:n_val], train_set[n_val:]
 
     def to_arrays(pairs, augment):
         imgs, labels, label_lens = [], [], []
@@ -690,9 +736,10 @@ def train_crnn_model(
         "time_steps": TIME_STEPS, "charset": CHARSET, "blank_index": BLANK_INDEX,
         "line_accuracy": line_acc, "char_accuracy": char_acc,
         "labeled_chars": have_chars,
-        "counts": {"real_lines": len(real_lines), "composite_lines": made,
-                   "emnist_lines": made_em, "synthetic_lines": synthetic_lines,
-                   "dotpeen_lines": dotpeen_lines},
+        "counts": {"real_lines": len(real_lines), "real_train_lines": len(real_train),
+                   "real_val_lines": len(real_val), "real_augment_copies": real_augment_copies,
+                   "composite_lines": made, "emnist_lines": made_em,
+                   "synthetic_lines": synthetic_lines, "dotpeen_lines": dotpeen_lines},
         "emnist_used": bool(made_em),
         "top_confusions": [{"pair": p, "count": c} for p, c in top_conf],
         "samples": samples,

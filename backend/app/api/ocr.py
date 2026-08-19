@@ -116,6 +116,7 @@ class TrainCrnnRequest(BaseModel):
     composite_lines: int = 4000
     emnist_lines: int = 3000
     dotpeen_lines: int = 4000
+    real_augment_copies: int = 6
     batch_size: int = 32
     learning_rate: float = 1e-3
     val_ratio: float = 0.15
@@ -138,8 +139,8 @@ async def start_crnn_training(
     task = train_crnn_model.delay(
         project_id, epochs=req.epochs, synthetic_lines=req.synthetic_lines,
         composite_lines=req.composite_lines, emnist_lines=req.emnist_lines,
-        dotpeen_lines=req.dotpeen_lines, batch_size=req.batch_size,
-        learning_rate=req.learning_rate, val_ratio=req.val_ratio,
+        dotpeen_lines=req.dotpeen_lines, real_augment_copies=req.real_augment_copies,
+        batch_size=req.batch_size, learning_rate=req.learning_rate, val_ratio=req.val_ratio,
     )
     return {"task_id": task.id, "status": "queued"}
 
