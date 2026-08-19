@@ -138,13 +138,14 @@ const OcrTrainingPanel = ({ project, onClose }) => {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [project.id, pollTask]);
 
-    const startTraining = async () => {
+    const startTraining = async (hardImageIds) => {
         setError(null); setResult(null); setMeta(null);
         try {
             const res = engine === 'crnn'
                 ? await axios.post(`${API_URL}/ocr/train-crnn/${project.id}`, {
                     epochs: crnnEpochs,
                     emnist_lines: useEmnist ? 3000 : 0,
+                    ...(hardImageIds?.length ? { hard_image_ids: hardImageIds } : {}),
                 })
                 : engine === 'tesseract'
                 ? await axios.post(`${API_URL}/ocr/train-tesseract/${project.id}`, {
@@ -475,7 +476,7 @@ const OcrTrainingPanel = ({ project, onClose }) => {
                         </>)}
 
                         {!running ? (
-                            <button className="ocr-btn-train" onClick={startTraining}
+                            <button className="ocr-btn-train" onClick={() => startTraining()}
                                 disabled={chars.length < 2}>
                                 <Play size={15} /> {engine === 'tesseract'
                                     ? 'Fine-tune Tesseract (eng → engraved)'
@@ -825,6 +826,19 @@ const OcrTrainingPanel = ({ project, onClose }) => {
                                             <small>{evalResult.correct}/{evalResult.total} images exact match</small>
                                             <span>{pct(evalResult.accuracy)}</span>
                                         </div>
+                                        {evalResult.results.some(r => !r.correct) && (
+                                            <button
+                                                className="ocr-btn-test"
+                                                disabled={running}
+                                                title="Retrains with extra copies of exactly the photos above that
+                                                    still failed, so the model gets more practice on them
+                                                    specifically instead of the same amount as every other photo"
+                                                onClick={() => startTraining(
+                                                    evalResult.results.filter(r => !r.correct).map(r => r.image_id))}
+                                            >
+                                                ↻ Retrain focused on {evalResult.results.filter(r => !r.correct).length} failures
+                                            </button>
+                                        )}
                                         <div className="ocr-eval-list">
                                             {evalResult.results.map(r => (
                                                 <div key={r.image_id}

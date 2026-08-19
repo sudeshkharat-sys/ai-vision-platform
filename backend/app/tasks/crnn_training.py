@@ -431,6 +431,7 @@ def train_crnn_model(
     emnist_lines: int = 3000,
     dotpeen_lines: int = 4000,
     real_augment_copies: int = 6,
+    hard_image_ids: list = None,
     batch_size: int = 32,
     learning_rate: float = 1e-3,
     val_ratio: float = 0.15,
@@ -481,7 +482,7 @@ def train_crnn_model(
             y2 = min(ih, int(max(c[4] for c in line)))
             if x2 - x1 < 4 or y2 - y1 < 4:
                 continue
-            real_lines.append((_normalize_line(gray_full[y1:y2, x1:x2]), text))
+            real_lines.append((_normalize_line(gray_full[y1:y2, x1:x2]), text, img_row["id"]))
             # individual char crops for compositing
             for (label, cx1, cy1, cx2, cy2, points_px) in line:
                 if label not in _CHAR_TO_IDX:
@@ -536,11 +537,23 @@ def train_crnn_model(
     n_real_val = max(1, int(round(len(real_shuffled) * val_ratio))) if real_shuffled else 0
     real_val, real_train = real_shuffled[:n_real_val], real_shuffled[n_real_val:]
 
+    # hard_image_ids: photos "Test on training data" showed the model still
+    # gets wrong -- oversample those with MORE copies than an ordinary real
+    # line, instead of every real photo getting the same fixed amount of
+    # attention regardless of whether the model already reads it fine.
+    hard_ids = set(hard_image_ids or [])
+    hard_multiplier = 3
+
     train_set = []
-    for im, txt in real_train:
-        for _ in range(max(1, real_augment_copies)):
+    hard_train_count = 0
+    for im, txt, img_id in real_train:
+        copies = max(1, real_augment_copies)
+        if img_id in hard_ids:
+            copies *= hard_multiplier
+            hard_train_count += 1
+        for _ in range(copies):
             train_set.append((im, txt))
-    val_set = list(real_val)
+    val_set = [(im, txt) for im, txt, _ in real_val]
 
     X, Y = [], []
     # composited-from-real lines (in-domain, only over characters we have)
@@ -738,6 +751,7 @@ def train_crnn_model(
         "labeled_chars": have_chars,
         "counts": {"real_lines": len(real_lines), "real_train_lines": len(real_train),
                    "real_val_lines": len(real_val), "real_augment_copies": real_augment_copies,
+                   "hard_images_requested": len(hard_ids), "hard_images_in_train": hard_train_count,
                    "composite_lines": made, "emnist_lines": made_em,
                    "synthetic_lines": synthetic_lines, "dotpeen_lines": dotpeen_lines},
         "emnist_used": bool(made_em),
