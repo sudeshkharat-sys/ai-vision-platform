@@ -9,6 +9,7 @@ import LabelsPanel from './LabelsPanel';
 import ModelsPanel from './ModelsPanel';
 import ReviewPanel from './ReviewPanel';
 import VideoPanel from './VideoPanel';
+import SequencePanel from './SequencePanel';
 import ActiveLearningPanel from './ActiveLearningPanel';
 import OcrActiveLearningPanel from './OcrActiveLearningPanel';
 import OcrTrainingPanel from './OcrTrainingPanel';
@@ -276,6 +277,7 @@ const AnnotationWorkspace = ({ project, onProjectUpdated }) => {
     const [showModelsPanel, setShowModelsPanel] = useState(false);
     const [showReviewPanel, setShowReviewPanel] = useState(false);
     const [showVideoPanel, setShowVideoPanel] = useState(false);
+    const [showSequencePanel, setShowSequencePanel] = useState(false);
     const [showActiveLearningPanel, setShowActiveLearningPanel] = useState(false);
     const [showOcrActiveLearningPanel, setShowOcrActiveLearningPanel] = useState(false);
     const [showOcrPanel, setShowOcrPanel] = useState(false);
@@ -1463,6 +1465,13 @@ Do you want to proceed?`;
                     <button className="btn-action btn-action-video" onClick={() => setShowVideoPanel(true)}>
                         <Film size={14} /> Import Video
                     </button>
+                    <button
+                        className="btn-action btn-action-sequence"
+                        onClick={() => setShowSequencePanel(true)}
+                        title="Define ordered region checkpoints an object must pass through, in order (e.g. bulb visiting socket 1 → 2 → 3)"
+                    >
+                        <Target size={14} /> Sequence Detection
+                    </button>
                     <label className={`upload-btn ${uploading ? 'uploading' : ''}`}>
                         {uploading
                             ? `Uploading ${uploadFileCount} file${uploadFileCount !== 1 ? 's' : ''}…`
@@ -2113,6 +2122,12 @@ Do you want to proceed?`;
                             .then(res => setImages(res.data))
                             .catch(() => {});
                     }}
+                />
+            )}
+            {showSequencePanel && (
+                <SequencePanel
+                    project={project}
+                    onClose={() => setShowSequencePanel(false)}
                 />
             )}
             {showActiveLearningPanel && (

@@ -380,6 +380,18 @@
   border-color: #d97706;
 }
 
+.btn-action-sequence {
+  background: rgba(124, 58, 237, 0.08);
+  color: #7c3aed;
+  border: 1px solid rgba(124, 58, 237, 0.22);
+  margin-bottom: 8px;
+}
+
+.btn-action-sequence:hover:not(:disabled) {
+  background: rgba(124, 58, 237, 0.15);
+  border-color: #7c3aed;
+}
+
 .btn-action-review {
   background: rgba(22, 163, 74, 0.06);
   color: #16a34a;

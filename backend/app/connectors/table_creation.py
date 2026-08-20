@@ -300,3 +300,36 @@ videos_table = create_dynamic_table(
         server_default=func.now(),
     ),
 )
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Table: region_sequences
+# Ordered sets of regions (box/line) that a tracked object must pass through,
+# in order, to complete a "sequence" (e.g. a bulb visiting socket 1 -> 2 -> 3).
+# ─────────────────────────────────────────────────────────────────────────────
+region_sequences_table = create_dynamic_table(
+    "region_sequences",
+    Column("id", String(36), primary_key=True, default=lambda: str(uuid.uuid4())),
+    Column(
+        "project_id",
+        String(36),
+        ForeignKey("projects.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    ),
+    Column("name", String(255), nullable=False),
+    Column(
+        "mode",
+        String(20),
+        nullable=False,
+        server_default=text("'strict'"),
+        comment="strict | lenient",
+    ),
+    # JSONB: [{ order_index, label, region_type, region_coords, required_class }, ...]
+    Column("steps", JSONB, nullable=False, server_default=text("'[]'::jsonb")),
+    Column(
+        "created_at",
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    ),
+)

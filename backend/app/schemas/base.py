@@ -113,3 +113,36 @@ class VideoFrameExtractionRequest(BaseModel):
     sample_every_n: int = Field(default=30, ge=1, le=3000)
     # Hard cap on total frames extracted (0 = no limit)
     max_frames: int = Field(default=300, ge=0, le=10000)
+
+
+# ── Region sequence schemas ───────────────────────────────────────
+class SequenceStep(BaseModel):
+    order_index: int
+    label: str
+    region_type: str  # "box" | "line"
+    region_coords: List[float]  # normalized [x1, y1, x2, y2]
+    required_class: str
+
+
+class RegionSequenceCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    mode: str = Field(default="strict")  # "strict" | "lenient"
+    steps: List[SequenceStep] = Field(default_factory=list)
+
+
+class RegionSequenceUpdate(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=255)
+    mode: Optional[str] = None
+    steps: Optional[List[SequenceStep]] = None
+
+
+class RegionSequenceResponse(BaseModel):
+    id: str
+    project_id: str
+    name: str
+    mode: str
+    steps: List[SequenceStep]
+    created_at: datetime
+
+    class Config:
+        from_attributes = True

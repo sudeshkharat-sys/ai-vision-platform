@@ -20,3 +20,4 @@ class Project(Base):
 
     images = relationship("Image", back_populates="project", cascade="all, delete-orphan")
     videos = relationship("Video", back_populates="project", cascade="all, delete-orphan")
+    region_sequences = relationship("RegionSequence", back_populates="project", cascade="all, delete-orphan")

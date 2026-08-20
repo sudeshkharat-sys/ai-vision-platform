@@ -18,6 +18,7 @@ from ..models.project import Project
 from ..models.image import Image
 from ..models.video import Video
 from ..models.annotation import Annotation
+from ..models.sequence import RegionSequence
 from ..models.user import User
 
 
@@ -70,3 +71,16 @@ async def get_owned_annotation(annotation_id: str, current_user: User, db: Async
     if not ann:
         raise HTTPException(status_code=404, detail="Annotation not found")
     return ann
+
+
+async def get_owned_sequence(sequence_id: str, current_user: User, db: AsyncSession) -> RegionSequence:
+    """Return the region sequence if its project belongs to current_user, else raise 404/403."""
+    result = await db.execute(
+        select(RegionSequence)
+        .join(Project, RegionSequence.project_id == Project.id)
+        .where(RegionSequence.id == sequence_id, Project.user_id == current_user.id)
+    )
+    seq = result.scalar_one_or_none()
+    if not seq:
+        raise HTTPException(status_code=404, detail="Sequence not found")
+    return seq
