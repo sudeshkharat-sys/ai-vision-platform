@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import axios from 'axios';
 import { Stage, Layer, Rect, Line, Text, Group } from 'react-konva';
 import useImage from 'use-image';
-import { Route, X, Trash2, Check, AlertTriangle, Plus, Square, Minus, ChevronLeft } from 'lucide-react';
+import { Route, X, Trash2, Check, AlertTriangle, Plus, Square, Minus, ChevronLeft, MousePointerClick } from 'lucide-react';
 import './SequencePanel.css';
 
 import { API_URL } from '../config';
@@ -12,13 +12,15 @@ const STAGE_W = 640;
 const STAGE_H = 420;
 
 const STEP_COLORS = ['#dc143c', '#d97706', '#059669', '#2563eb', '#7c3aed', '#db2777', '#0891b2', '#65a30d'];
+let _regionSeq = 0;
+const nextRegionId = () => `r${Date.now()}_${_regionSeq++}`;
 
 function BackgroundImage({ src }) {
     const [image] = useImage(src, 'anonymous');
     if (!image) return null;
     const scale = Math.min(STAGE_W / image.width, STAGE_H / image.height);
     return (
-        <Group>
+        <Group listening={false}>
             <Rect x={0} y={0} width={STAGE_W} height={STAGE_H} fill="#111318" />
             <Group x={(STAGE_W - image.width * scale) / 2} y={(STAGE_H - image.height * scale) / 2} scaleX={scale} scaleY={scale}>
                 <Rect width={image.width} height={image.height} fillPatternImage={image} />
@@ -39,10 +41,17 @@ export default function SequencePanel({ project, onClose }) {
     const [editing, setEditing]         = useState(false); // builder open?
     const [seqName, setSeqName]         = useState('');
     const [seqMode, setSeqMode]         = useState('strict');
-    const [steps, setSteps]             = useState([]); // {order_index, label, region_type, region_coords, required_class}
+
+    // Regions are the unique shapes drawn on the frame (a keyboard has one region per key).
+    // stepOrder is the ordered sequence of region ids to visit — a region id CAN repeat
+    // (e.g. the "S" key region is visited twice when spelling "SUDESH").
+    const [regions, setRegions]         = useState([]); // {id, region_type, region_coords, required_class, label}
+    const [stepOrder, setStepOrder]     = useState([]); // [regionId, regionId, ...]
+
     const [drawTool, setDrawTool]       = useState('box'); // 'box' | 'line'
     const [drawing, setDrawing]         = useState(null); // in-progress shape
     const [pendingClass, setPendingClass] = useState('');
+    const [pendingLabel, setPendingLabel] = useState('');
 
     const stageRef = useRef(null);
 
@@ -76,13 +85,17 @@ export default function SequencePanel({ project, onClose }) {
     const startNewSequence = () => {
         setSeqName('');
         setSeqMode('strict');
-        setSteps([]);
+        setRegions([]);
+        setStepOrder([]);
         setPendingClass('');
+        setPendingLabel('');
         setEditing(true);
     };
 
-    // ── Drawing on canvas ───────────────────────────────────────────
+    // ── Drawing a NEW region on canvas ───────────────────────────────
     const handleMouseDown = (e) => {
+        // Only start a fresh draw when clicking empty canvas, not an existing region
+        if (e.target !== e.target.getStage()) return;
         const pos = e.target.getStage().getPointerPosition();
         setDrawing({ x1: pos.x, y1: pos.y, x2: pos.x, y2: pos.y });
     };
@@ -100,7 +113,7 @@ export default function SequencePanel({ project, onClose }) {
         if (dist < 8) { setDrawing(null); return; } // ignore accidental clicks
 
         if (!pendingClass.trim()) {
-            setError('Set a "required object class" before drawing a region.');
+            setError('Set a "required object class" before drawing a new region.');
             setDrawing(null);
             return;
         }
@@ -109,39 +122,63 @@ export default function SequencePanel({ project, onClose }) {
         const ny1 = Math.min(y1, y2) / STAGE_H, ny2 = Math.max(y1, y2) / STAGE_H;
         const coords = drawTool === 'line' ? [x1 / STAGE_W, y1 / STAGE_H, x2 / STAGE_W, y2 / STAGE_H] : [nx1, ny1, nx2, ny2];
 
-        setSteps(prev => [...prev, {
-            order_index: prev.length,
-            label: `Step ${prev.length + 1}`,
+        const id = nextRegionId();
+        const label = pendingLabel.trim() || `Region ${regions.length + 1}`;
+        setRegions(prev => [...prev, {
+            id,
             region_type: drawTool,
             region_coords: coords,
             required_class: pendingClass.trim(),
+            label,
         }]);
+        setStepOrder(prev => [...prev, id]);
         setDrawing(null);
         setError(null);
+        setPendingLabel('');
     };
 
-    const updateStepLabel = (idx, label) =>
-        setSteps(prev => prev.map((s, i) => i === idx ? { ...s, label } : s));
+    // ── Click an EXISTING region to add it again as the next step ────
+    const appendExistingRegion = (regionId) => {
+        setStepOrder(prev => [...prev, regionId]);
+    };
 
-    const removeStep = (idx) =>
-        setSteps(prev => prev.filter((_, i) => i !== idx).map((s, i) => ({ ...s, order_index: i })));
+    const removeStepAt = (idx) =>
+        setStepOrder(prev => prev.filter((_, i) => i !== idx));
 
     const moveStep = (idx, dir) => {
-        setSteps(prev => {
+        setStepOrder(prev => {
             const next = [...prev];
             const target = idx + dir;
             if (target < 0 || target >= next.length) return prev;
             [next[idx], next[target]] = [next[target], next[idx]];
-            return next.map((s, i) => ({ ...s, order_index: i }));
+            return next;
         });
+    };
+
+    const updateRegionLabel = (regionId, label) =>
+        setRegions(prev => prev.map(r => r.id === regionId ? { ...r, label } : r));
+
+    const deleteRegion = (regionId) => {
+        setRegions(prev => prev.filter(r => r.id !== regionId));
+        setStepOrder(prev => prev.filter(id => id !== regionId));
     };
 
     // ── Save / delete sequence ──────────────────────────────────────
     const handleSave = async () => {
         if (!seqName.trim()) { setError('Give the sequence a name.'); return; }
-        if (steps.length === 0) { setError('Draw at least one region first.'); return; }
+        if (stepOrder.length === 0) { setError('Draw at least one region and add it to the sequence.'); return; }
         setError(null);
         try {
+            const steps = stepOrder.map((regionId, i) => {
+                const r = regions.find(reg => reg.id === regionId);
+                return {
+                    order_index: i,
+                    label: r.label,
+                    region_type: r.region_type,
+                    region_coords: r.region_coords,
+                    required_class: r.required_class,
+                };
+            });
             const res = await axios.post(`${API_URL}/sequences/project/${project.id}`, {
                 name: seqName.trim(),
                 mode: seqMode,
@@ -166,6 +203,11 @@ export default function SequencePanel({ project, onClose }) {
         }
     };
 
+    const regionColor = (regionId) => {
+        const idx = regions.findIndex(r => r.id === regionId);
+        return STEP_COLORS[idx % STEP_COLORS.length];
+    };
+
     // ── Render ────────────────────────────────────────────────────
     return (
         <div className="sq-overlay" onClick={onClose}>
@@ -182,8 +224,8 @@ export default function SequencePanel({ project, onClose }) {
                             <h2 className="sq-title">Sequence Detection</h2>
                             <p className="sq-subtitle">
                                 {editing
-                                    ? 'Draw ordered regions a tracked object must pass through, in order'
-                                    : 'Define ordered region checkpoints — e.g. a bulb visiting socket 1 → 2 → 3'}
+                                    ? 'Draw regions, then click one to add it to the sequence — a region can be reused (e.g. a key pressed twice)'
+                                    : 'Define ordered region checkpoints — e.g. hand-gate 1 → 2 → 3, then key S → U → D → E → S → H'}
                             </p>
                         </div>
                     </div>
@@ -223,7 +265,7 @@ export default function SequencePanel({ project, onClose }) {
                                                     <span>{seq.steps.length} step{seq.steps.length !== 1 ? 's' : ''}</span>
                                                 </div>
                                                 <div className="sq-card-steps">
-                                                    {seq.steps.sort((a, b) => a.order_index - b.order_index).map((s, i) => (
+                                                    {[...seq.steps].sort((a, b) => a.order_index - b.order_index).map((s, i) => (
                                                         <React.Fragment key={i}>
                                                             {i > 0 && <span className="sq-step-arrow">→</span>}
                                                             <span className="sq-step-chip" style={{ borderColor: STEP_COLORS[i % STEP_COLORS.length] }}>
@@ -246,7 +288,7 @@ export default function SequencePanel({ project, onClose }) {
                             <div className="sq-builder-top">
                                 <input
                                     className="sq-input"
-                                    placeholder="Sequence name (e.g. Bulb Assembly Line)"
+                                    placeholder="Sequence name (e.g. Type SUDESH on virtual keyboard)"
                                     value={seqName}
                                     onChange={e => setSeqName(e.target.value)}
                                 />
@@ -278,11 +320,20 @@ export default function SequencePanel({ project, onClose }) {
                                         ><Minus size={13} /> Line</button>
                                         <input
                                             className="sq-class-input"
-                                            placeholder="required object class (e.g. bulb)"
+                                            placeholder="region name (e.g. S key, Gate 1)"
+                                            value={pendingLabel}
+                                            onChange={e => setPendingLabel(e.target.value)}
+                                        />
+                                        <input
+                                            className="sq-class-input"
+                                            placeholder="required object class (e.g. finger)"
                                             value={pendingClass}
                                             onChange={e => setPendingClass(e.target.value)}
                                         />
                                     </div>
+                                    <p className="sq-hint sq-hint--tight">
+                                        <MousePointerClick size={12} /> Draw a new region on empty canvas. Click an already-drawn region to reuse it as the next step (e.g. the "S" key a second time).
+                                    </p>
                                     <Stage
                                         ref={stageRef}
                                         width={STAGE_W}
@@ -296,26 +347,35 @@ export default function SequencePanel({ project, onClose }) {
                                             {refImage && (
                                                 <BackgroundImage src={`${ORIGIN}${refImage.filepath}`} />
                                             )}
-                                            {steps.map((s, i) => {
+                                            {regions.map((r, i) => {
                                                 const color = STEP_COLORS[i % STEP_COLORS.length];
-                                                if (s.region_type === 'box') {
-                                                    const [x1, y1, x2, y2] = s.region_coords;
+                                                const timesUsed = stepOrder.filter(id => id === r.id).length;
+                                                if (r.region_type === 'box') {
+                                                    const [x1, y1, x2, y2] = r.region_coords;
                                                     return (
-                                                        <Group key={i}>
+                                                        <Group
+                                                            key={r.id}
+                                                            onClick={() => appendExistingRegion(r.id)}
+                                                            onTap={() => appendExistingRegion(r.id)}
+                                                        >
                                                             <Rect
                                                                 x={x1 * STAGE_W} y={y1 * STAGE_H}
                                                                 width={(x2 - x1) * STAGE_W} height={(y2 - y1) * STAGE_H}
                                                                 stroke={color} strokeWidth={2} fill={`${color}22`}
                                                             />
-                                                            <Text x={x1 * STAGE_W + 4} y={y1 * STAGE_H + 4} text={`${i + 1}. ${s.label}`} fill={color} fontStyle="bold" fontSize={12} />
+                                                            <Text x={x1 * STAGE_W + 4} y={y1 * STAGE_H + 4} text={`${r.label}${timesUsed > 1 ? ` ×${timesUsed}` : ''}`} fill={color} fontStyle="bold" fontSize={12} />
                                                         </Group>
                                                     );
                                                 }
-                                                const [x1, y1, x2, y2] = s.region_coords;
+                                                const [x1, y1, x2, y2] = r.region_coords;
                                                 return (
-                                                    <Group key={i}>
-                                                        <Line points={[x1 * STAGE_W, y1 * STAGE_H, x2 * STAGE_W, y2 * STAGE_H]} stroke={color} strokeWidth={3} />
-                                                        <Text x={x1 * STAGE_W + 4} y={y1 * STAGE_H - 16} text={`${i + 1}. ${s.label}`} fill={color} fontStyle="bold" fontSize={12} />
+                                                    <Group
+                                                        key={r.id}
+                                                        onClick={() => appendExistingRegion(r.id)}
+                                                        onTap={() => appendExistingRegion(r.id)}
+                                                    >
+                                                        <Line points={[x1 * STAGE_W, y1 * STAGE_H, x2 * STAGE_W, y2 * STAGE_H]} stroke={color} strokeWidth={3} hitStrokeWidth={16} />
+                                                        <Text x={x1 * STAGE_W + 4} y={y1 * STAGE_H - 16} text={`${r.label}${timesUsed > 1 ? ` ×${timesUsed}` : ''}`} fill={color} fontStyle="bold" fontSize={12} />
                                                     </Group>
                                                 );
                                             })}
@@ -335,28 +395,48 @@ export default function SequencePanel({ project, onClose }) {
                                 </div>
 
                                 <div className="sq-steps-panel">
-                                    <h4 className="sq-steps-title">Steps (in order)</h4>
-                                    {steps.length === 0 ? (
-                                        <p className="sq-hint">Set a required class above, then draw a box or line on the frame to add step 1, then step 2, etc.</p>
+                                    <h4 className="sq-steps-title">Sequence steps (in order)</h4>
+                                    {stepOrder.length === 0 ? (
+                                        <p className="sq-hint">Set a name + required class above, then draw a region to add step 1. Draw more regions, or click an existing one to repeat it.</p>
                                     ) : (
                                         <ol className="sq-steps-list">
-                                            {steps.map((s, i) => (
-                                                <li key={i} className="sq-step-row">
-                                                    <span className="sq-step-dot" style={{ background: STEP_COLORS[i % STEP_COLORS.length] }} />
-                                                    <input
-                                                        className="sq-step-label-input"
-                                                        value={s.label}
-                                                        onChange={e => updateStepLabel(i, e.target.value)}
-                                                    />
-                                                    <span className="sq-step-class">{s.required_class}</span>
-                                                    <div className="sq-step-actions">
-                                                        <button onClick={() => moveStep(i, -1)} disabled={i === 0} title="Move up">↑</button>
-                                                        <button onClick={() => moveStep(i, 1)} disabled={i === steps.length - 1} title="Move down">↓</button>
-                                                        <button onClick={() => removeStep(i)} title="Remove"><Trash2 size={12} /></button>
-                                                    </div>
-                                                </li>
-                                            ))}
+                                            {stepOrder.map((regionId, i) => {
+                                                const r = regions.find(reg => reg.id === regionId);
+                                                if (!r) return null;
+                                                return (
+                                                    <li key={`${regionId}-${i}`} className="sq-step-row">
+                                                        <span className="sq-step-dot" style={{ background: regionColor(regionId) }} />
+                                                        <span className="sq-step-num">{i + 1}.</span>
+                                                        <span className="sq-step-region-label">{r.label}</span>
+                                                        <span className="sq-step-class">{r.required_class}</span>
+                                                        <div className="sq-step-actions">
+                                                            <button onClick={() => moveStep(i, -1)} disabled={i === 0} title="Move up">↑</button>
+                                                            <button onClick={() => moveStep(i, 1)} disabled={i === stepOrder.length - 1} title="Move down">↓</button>
+                                                            <button onClick={() => removeStepAt(i)} title="Remove from sequence"><Trash2 size={12} /></button>
+                                                        </div>
+                                                    </li>
+                                                );
+                                            })}
                                         </ol>
+                                    )}
+
+                                    {regions.length > 0 && (
+                                        <>
+                                            <h4 className="sq-steps-title sq-steps-title--spaced">Drawn regions</h4>
+                                            <div className="sq-region-chip-list">
+                                                {regions.map((r, i) => (
+                                                    <div key={r.id} className="sq-region-chip" style={{ borderColor: STEP_COLORS[i % STEP_COLORS.length] }}>
+                                                        <input
+                                                            className="sq-region-chip-input"
+                                                            value={r.label}
+                                                            onChange={e => updateRegionLabel(r.id, e.target.value)}
+                                                        />
+                                                        <button className="sq-region-chip-add" onClick={() => appendExistingRegion(r.id)} title="Add to sequence">+</button>
+                                                        <button className="sq-region-chip-del" onClick={() => deleteRegion(r.id)} title="Delete region"><Trash2 size={11} /></button>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </>
                                     )}
                                 </div>
                             </div>
