@@ -6,9 +6,10 @@ tracked object must pass through, in order, to complete a "sequence"
 (e.g. a bulb visiting socket 1 -> 2 -> 3, or a finger visiting key-zones
 S -> U -> D -> E -> S -> H).
 
-This is the builder/storage layer only. Running a sequence against a live
-or uploaded video (object tracking + geometry + step matching) is a
-separate, not-yet-implemented pipeline — see the design doc.
+Also includes running a saved sequence against an uploaded video: kicks off
+a Celery task (app.tasks.sequence_run) that detects objects frame-by-frame
+and feeds them into the SequenceRunState state machine (app.services). The
+live/webcam path is still not implemented — see the design doc.
 """
 
 from typing import List
@@ -18,11 +19,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from ..database import get_db
-from ..models.sequence import RegionSequence
+from ..models.sequence import RegionSequence, SequenceRun
 from ..models.user import User
-from ..schemas.base import RegionSequenceCreate, RegionSequenceUpdate, RegionSequenceResponse
+from ..schemas.base import (
+    RegionSequenceCreate,
+    RegionSequenceUpdate,
+    RegionSequenceResponse,
+    SequenceRunResponse,
+)
 from ..api.auth import get_current_user
-from ..api.deps import get_owned_project, get_owned_sequence
+from ..api.deps import get_owned_project, get_owned_sequence, get_owned_video, get_owned_sequence_run
 
 router = APIRouter(prefix="/sequences", tags=["sequences"])
 
@@ -41,6 +47,7 @@ async def create_sequence(
         project_id=project_id,
         name=body.name,
         mode=body.mode,
+        overlap_threshold=body.overlap_threshold,
         steps=[step.model_dump() for step in body.steps],
     )
     db.add(seq)
@@ -87,6 +94,8 @@ async def update_sequence(
         seq.name = body.name
     if body.mode is not None:
         seq.mode = body.mode
+    if body.overlap_threshold is not None:
+        seq.overlap_threshold = body.overlap_threshold
     if body.steps is not None:
         seq.steps = [step.model_dump() for step in body.steps]
 
@@ -104,3 +113,59 @@ async def delete_sequence(
     seq = await get_owned_sequence(sequence_id, current_user, db)
     await db.delete(seq)
     await db.commit()
+
+
+@router.post("/{sequence_id}/run/{video_id}", response_model=SequenceRunResponse)
+async def run_sequence(
+    sequence_id: str,
+    video_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Kick off a Celery task that runs this sequence against a video.
+    Returns the SequenceRun row immediately (status 'pending'); poll
+    GET /sequences/runs/{run_id} to watch progress."""
+    seq = await get_owned_sequence(sequence_id, current_user, db)
+    await get_owned_video(video_id, current_user, db)
+
+    run = SequenceRun(
+        sequence_id=seq.id,
+        video_id=video_id,
+        total_steps=len(seq.steps),
+    )
+    db.add(run)
+    await db.commit()
+    await db.refresh(run)
+
+    from ..tasks.sequence_run import run_sequence_on_video
+    task = run_sequence_on_video.delay(run.id)
+    run.task_id = task.id
+    await db.commit()
+    await db.refresh(run)
+    return run
+
+
+@router.get("/runs/{run_id}", response_model=SequenceRunResponse)
+async def get_sequence_run(
+    run_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Poll the status/results of a sequence run."""
+    return await get_owned_sequence_run(run_id, current_user, db)
+
+
+@router.get("/{sequence_id}/runs", response_model=List[SequenceRunResponse])
+async def list_sequence_runs(
+    sequence_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """List all runs of a sequence, most recent first."""
+    await get_owned_sequence(sequence_id, current_user, db)
+    result = await db.execute(
+        select(SequenceRun)
+        .where(SequenceRun.sequence_id == sequence_id)
+        .order_by(SequenceRun.created_at.desc())
+    )
+    return result.scalars().all()

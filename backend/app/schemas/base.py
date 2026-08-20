@@ -127,12 +127,14 @@ class SequenceStep(BaseModel):
 class RegionSequenceCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
     mode: str = Field(default="strict")  # "strict" | "lenient"
+    overlap_threshold: float = Field(default=0.5, ge=0.0, le=1.0)
     steps: List[SequenceStep] = Field(default_factory=list)
 
 
 class RegionSequenceUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=255)
     mode: Optional[str] = None
+    overlap_threshold: Optional[float] = Field(default=None, ge=0.0, le=1.0)
     steps: Optional[List[SequenceStep]] = None
 
 
@@ -141,8 +143,35 @@ class RegionSequenceResponse(BaseModel):
     project_id: str
     name: str
     mode: str
+    overlap_threshold: float
     steps: List[SequenceStep]
     created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+# ── Sequence run schemas ──────────────────────────────────────────
+class SequenceRunStepEvent(BaseModel):
+    step_index: int
+    label: str
+    frame_number: int
+    matched: bool
+    reason: str
+
+
+class SequenceRunResponse(BaseModel):
+    id: str
+    sequence_id: str
+    video_id: str
+    status: str
+    current_step: int
+    total_steps: int
+    passed: bool
+    step_events: List[SequenceRunStepEvent]
+    error: Optional[str]
+    created_at: datetime
+    finished_at: Optional[datetime]
 
     class Config:
         from_attributes = True

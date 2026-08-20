@@ -18,7 +18,7 @@ from ..models.project import Project
 from ..models.image import Image
 from ..models.video import Video
 from ..models.annotation import Annotation
-from ..models.sequence import RegionSequence
+from ..models.sequence import RegionSequence, SequenceRun
 from ..models.user import User
 
 
@@ -84,3 +84,17 @@ async def get_owned_sequence(sequence_id: str, current_user: User, db: AsyncSess
     if not seq:
         raise HTTPException(status_code=404, detail="Sequence not found")
     return seq
+
+
+async def get_owned_sequence_run(run_id: str, current_user: User, db: AsyncSession) -> SequenceRun:
+    """Return the sequence run if its sequence's project belongs to current_user, else raise 404/403."""
+    result = await db.execute(
+        select(SequenceRun)
+        .join(RegionSequence, SequenceRun.sequence_id == RegionSequence.id)
+        .join(Project, RegionSequence.project_id == Project.id)
+        .where(SequenceRun.id == run_id, Project.user_id == current_user.id)
+    )
+    run = result.scalar_one_or_none()
+    if not run:
+        raise HTTPException(status_code=404, detail="Sequence run not found")
+    return run

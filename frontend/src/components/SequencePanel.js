@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import axios from 'axios';
 import { Stage, Layer, Rect, Line, Text, Group } from 'react-konva';
 import useImage from 'use-image';
-import { Route, X, Trash2, Check, AlertTriangle, Plus, Square, Minus, ChevronLeft, MousePointerClick } from 'lucide-react';
+import { Route, X, Trash2, Check, AlertTriangle, Plus, Square, Minus, ChevronLeft, MousePointerClick, Play, Loader2 } from 'lucide-react';
 import './SequencePanel.css';
 
 import { API_URL } from '../config';
@@ -37,6 +37,11 @@ export default function SequencePanel({ project, onClose }) {
 
     const [images, setImages]           = useState([]);
     const [refImage, setRefImage]       = useState(null);
+    const [videos, setVideos]           = useState([]);
+
+    // Per-sequence run state: { [seqId]: { videoId, run } }
+    const [runByCard, setRunByCard]     = useState({});
+    const pollRef = useRef({});
 
     const [editing, setEditing]         = useState(false); // builder open?
     const [seqName, setSeqName]         = useState('');
@@ -58,12 +63,14 @@ export default function SequencePanel({ project, onClose }) {
     // ── Load sequences + images ──────────────────────────────────
     const fetchAll = useCallback(async () => {
         try {
-            const [seqRes, imgRes] = await Promise.all([
+            const [seqRes, imgRes, vidRes] = await Promise.all([
                 axios.get(`${API_URL}/sequences/project/${project.id}`),
                 axios.get(`${API_URL}/images/project/${project.id}`),
+                axios.get(`${API_URL}/videos/project/${project.id}`),
             ]);
             setSequences(seqRes.data);
             setImages(imgRes.data);
+            setVideos(vidRes.data);
             if (imgRes.data.length && !refImage) setRefImage(imgRes.data[0]);
         } catch {
             setError('Failed to load sequences.');
@@ -208,6 +215,42 @@ export default function SequencePanel({ project, onClose }) {
         return STEP_COLORS[idx % STEP_COLORS.length];
     };
 
+    // ── Run a sequence against a video ──────────────────────────────
+    useEffect(() => () => Object.values(pollRef.current).forEach(clearInterval), []);
+
+    const setCardVideo = (seqId, videoId) =>
+        setRunByCard(prev => ({ ...prev, [seqId]: { ...(prev[seqId] || {}), videoId } }));
+
+    const pollRun = (seqId, runId) => {
+        if (pollRef.current[seqId]) clearInterval(pollRef.current[seqId]);
+        pollRef.current[seqId] = setInterval(async () => {
+            try {
+                const res = await axios.get(`${API_URL}/sequences/runs/${runId}`);
+                setRunByCard(prev => ({ ...prev, [seqId]: { ...(prev[seqId] || {}), run: res.data } }));
+                if (['complete', 'error', 'failed'].includes(res.data.status)) {
+                    clearInterval(pollRef.current[seqId]);
+                    delete pollRef.current[seqId];
+                }
+            } catch {
+                clearInterval(pollRef.current[seqId]);
+                delete pollRef.current[seqId];
+            }
+        }, 2000);
+    };
+
+    const startRun = async (seq) => {
+        const videoId = runByCard[seq.id]?.videoId || videos[0]?.id;
+        if (!videoId) { setError('Upload a video for this project first.'); return; }
+        setError(null);
+        try {
+            const res = await axios.post(`${API_URL}/sequences/${seq.id}/run/${videoId}`);
+            setRunByCard(prev => ({ ...prev, [seq.id]: { videoId, run: res.data } }));
+            pollRun(seq.id, res.data.id);
+        } catch (err) {
+            setError(err.response?.data?.detail || 'Failed to start the run.');
+        }
+    };
+
     // ── Render ────────────────────────────────────────────────────
     return (
         <div className="sq-overlay" onClick={onClose}>
@@ -282,6 +325,64 @@ export default function SequencePanel({ project, onClose }) {
                                     ))
                                 )}
                             </div>
+
+                            {sequences.length > 0 && (
+                                <div className="sq-run-section">
+                                    <h4 className="sq-steps-title">Run against a video</h4>
+                                    {videos.length === 0 ? (
+                                        <p className="sq-hint">Import a video for this project first (sidebar → Import Video), then come back here to run a sequence against it.</p>
+                                    ) : (
+                                        sequences.map(seq => {
+                                            const card = runByCard[seq.id] || {};
+                                            const run = card.run;
+                                            const isRunning = run && !['complete', 'error', 'failed'].includes(run.status);
+                                            return (
+                                                <div key={seq.id} className="sq-run-card">
+                                                    <div className="sq-run-row">
+                                                        <span className="sq-run-name">{seq.name}</span>
+                                                        <select
+                                                            className="sq-select sq-run-video-select"
+                                                            value={card.videoId || videos[0]?.id || ''}
+                                                            onChange={e => setCardVideo(seq.id, e.target.value)}
+                                                            disabled={isRunning}
+                                                        >
+                                                            {videos.map(v => <option key={v.id} value={v.id}>{v.original_filename}</option>)}
+                                                        </select>
+                                                        <button className="sq-btn-run" onClick={() => startRun(seq)} disabled={isRunning}>
+                                                            {isRunning ? <Loader2 size={13} className="sq-spin" /> : <Play size={13} />}
+                                                            {isRunning ? 'Running…' : 'Run'}
+                                                        </button>
+                                                    </div>
+                                                    {run && (
+                                                        <div className="sq-run-result">
+                                                            <div className="sq-run-progress">
+                                                                <span className={`sq-run-status sq-run-status--${run.status}`}>
+                                                                    {run.status === 'complete' && run.passed ? '✓ Passed' :
+                                                                     run.status === 'complete' ? '✗ Incomplete' :
+                                                                     run.status === 'error' ? '⚠ Error' :
+                                                                     run.status}
+                                                                </span>
+                                                                <span className="sq-run-step-count">step {run.current_step} / {run.total_steps}</span>
+                                                            </div>
+                                                            {run.error && <p className="sq-run-error">{run.error}</p>}
+                                                            {run.step_events.length > 0 && (
+                                                                <div className="sq-run-events">
+                                                                    {run.step_events.map((ev, i) => (
+                                                                        <span key={i} className={`sq-run-event sq-run-event--${ev.reason}`}>
+                                                                            {ev.label} · frame {ev.frame_number}
+                                                                            {ev.reason === 'matched' ? ' ✓' : ev.reason === 'wrong_region_reset' ? ' ✗ reset' : ' (ignored)'}
+                                                                        </span>
+                                                                    ))}
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            );
+                                        })
+                                    )}
+                                </div>
+                            )}
                         </>
                     ) : (
                         <div className="sq-builder">

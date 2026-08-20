@@ -32,6 +32,7 @@ from typing import Dict
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     Column,
     DateTime,
     Float,
@@ -326,10 +327,54 @@ region_sequences_table = create_dynamic_table(
     ),
     # JSONB: [{ order_index, label, region_type, region_coords, required_class }, ...]
     Column("steps", JSONB, nullable=False, server_default=text("'[]'::jsonb")),
+    Column("overlap_threshold", Float, nullable=False, server_default=text("0.5")),
     Column(
         "created_at",
         DateTime(timezone=True),
         nullable=False,
         server_default=func.now(),
     ),
+)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Table: sequence_runs
+# One attempt at running a saved region_sequence against a video.
+# ─────────────────────────────────────────────────────────────────────────────
+sequence_runs_table = create_dynamic_table(
+    "sequence_runs",
+    Column("id", String(36), primary_key=True, default=lambda: str(uuid.uuid4())),
+    Column(
+        "sequence_id",
+        String(36),
+        ForeignKey("region_sequences.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    ),
+    Column(
+        "video_id",
+        String(36),
+        ForeignKey("videos.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    ),
+    Column(
+        "status",
+        String(20),
+        nullable=False,
+        server_default=text("'pending'"),
+        comment="pending | running | complete | failed | error",
+    ),
+    Column("current_step", Integer, nullable=False, server_default=text("0")),
+    Column("total_steps", Integer, nullable=False, server_default=text("0")),
+    Column("passed", Boolean, nullable=False, server_default=text("false")),
+    Column("step_events", JSONB, nullable=False, server_default=text("'[]'::jsonb")),
+    Column("error", String(1024), nullable=True),
+    Column("task_id", String(36), nullable=True),
+    Column(
+        "created_at",
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    ),
+    Column("finished_at", DateTime(timezone=True), nullable=True),
 )
