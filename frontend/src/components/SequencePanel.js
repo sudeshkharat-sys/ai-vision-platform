@@ -69,17 +69,16 @@ export default function SequencePanel({ project, onClose }) {
     const [regions, setRegions]         = useState([]); // {id, region_type, region_coords, required_class, label}
     const [stepOrder, setStepOrder]     = useState([]); // [regionId, regionId, ...]
 
-    const [drawTool, setDrawTool]       = useState('box'); // 'box' | 'line'
+    // What kind of target the NEXT step being added is:
+    // "box" / "line" — a region you draw on the canvas.
+    // "class" — target = another detected class's own mask (e.g. "M"),
+    //   no drawing needed, just pick classes.
+    const [regionKind, setRegionKind]   = useState('box');
     const [drawing, setDrawing]         = useState(null); // in-progress shape
     const [pendingClass, setPendingClass] = useState('');
     const [pendingLabel, setPendingLabel] = useState('');
-    const [seqThreshold, setSeqThreshold] = useState(0.5);
-
-    // Target type for the NEXT thing added: "region" (drawn on canvas) or
-    // "detection_class" (target = another class's own detected mask, e.g.
-    // "M" — no drawing needed, just class names).
-    const [targetTypeMode, setTargetTypeMode] = useState('region');
     const [pendingTargetClass, setPendingTargetClass] = useState('');
+    const [seqThreshold, setSeqThreshold] = useState(0.5);
 
     // Quick single-image test — no save, no video, instant per-step check
     const [testing, setTesting]         = useState(false);
@@ -143,7 +142,7 @@ export default function SequencePanel({ project, onClose }) {
 
     // ── Drawing a NEW region on canvas ───────────────────────────────
     const handleMouseDown = (e) => {
-        if (targetTypeMode !== 'region') return; // "Detection Class" steps aren't drawn
+        if (regionKind === 'class') return; // "Class" steps aren't drawn
         // Only start a fresh draw when clicking empty canvas, not an existing region
         if (e.target !== e.target.getStage()) return;
         const pos = e.target.getStage().getPointerPosition();
@@ -177,14 +176,14 @@ export default function SequencePanel({ project, onClose }) {
 
         const nx1 = toImgX(Math.min(x1, x2)), nx2 = toImgX(Math.max(x1, x2));
         const ny1 = toImgY(Math.min(y1, y2)), ny2 = toImgY(Math.max(y1, y2));
-        const coords = drawTool === 'line' ? [toImgX(x1), toImgY(y1), toImgX(x2), toImgY(y2)] : [nx1, ny1, nx2, ny2];
+        const coords = regionKind === 'line' ? [toImgX(x1), toImgY(y1), toImgX(x2), toImgY(y2)] : [nx1, ny1, nx2, ny2];
 
         const id = nextRegionId();
         const label = pendingLabel.trim() || `Region ${regions.length + 1}`;
         setRegions(prev => [...prev, {
             id,
             target_type: 'region',
-            region_type: drawTool,
+            region_type: regionKind,
             region_coords: coords,
             required_class: classes[0],
             required_classes: classes,
@@ -544,107 +543,75 @@ export default function SequencePanel({ project, onClose }) {
 
                             <div className="sq-builder-main">
                                 <div className="sq-canvas-wrap">
-                                    <div className="sq-target-type-toggle">
+                                    <div className="sq-toolbar">
                                         <button
-                                            className={`sq-tool-btn ${targetTypeMode === 'region' ? 'sq-tool-btn--active' : ''}`}
-                                            onClick={() => setTargetTypeMode('region')}
-                                            title="Target = a region you draw on the reference frame"
-                                        >Region</button>
+                                            className={`sq-tool-btn ${regionKind === 'box' ? 'sq-tool-btn--active' : ''}`}
+                                            onClick={() => setRegionKind('box')}
+                                            title="Draw a box region on the reference frame"
+                                        ><Square size={13} /> Box</button>
                                         <button
-                                            className={`sq-tool-btn ${targetTypeMode === 'detection_class' ? 'sq-tool-btn--active' : ''}`}
-                                            onClick={() => setTargetTypeMode('detection_class')}
+                                            className={`sq-tool-btn ${regionKind === 'line' ? 'sq-tool-btn--active' : ''}`}
+                                            onClick={() => setRegionKind('line')}
+                                            title="Draw a line region on the reference frame"
+                                        ><Minus size={13} /> Line</button>
+                                        <button
+                                            className={`sq-tool-btn ${regionKind === 'class' ? 'sq-tool-btn--active' : ''}`}
+                                            onClick={() => setRegionKind('class')}
                                             title="Target = another detected class's own mask — no drawing needed"
-                                        >Detection Class</button>
-                                    </div>
+                                        >Class</button>
 
-                                    {targetTypeMode === 'region' ? (
-                                        <>
-                                            <div className="sq-toolbar">
-                                                <button
-                                                    className={`sq-tool-btn ${drawTool === 'box' ? 'sq-tool-btn--active' : ''}`}
-                                                    onClick={() => setDrawTool('box')}
-                                                ><Square size={13} /> Box</button>
-                                                <button
-                                                    className={`sq-tool-btn ${drawTool === 'line' ? 'sq-tool-btn--active' : ''}`}
-                                                    onClick={() => setDrawTool('line')}
-                                                ><Minus size={13} /> Line</button>
-                                                <input
-                                                    className="sq-class-input"
-                                                    placeholder="region name"
-                                                    value={pendingLabel}
-                                                    onChange={e => setPendingLabel(e.target.value)}
-                                                />
-                                                <input
-                                                    className="sq-class-input"
-                                                    placeholder="required class(es) — pick below, or type comma-separated"
-                                                    value={pendingClass}
-                                                    onChange={e => setPendingClass(e.target.value)}
-                                                />
-                                            </div>
-                                            {availableClasses.length > 0 && (
-                                                <div className="sq-class-picker">
-                                                    {availableClasses.map(cls => {
-                                                        const active = pendingClass.split(',').map(c => c.trim()).includes(cls);
-                                                        return (
-                                                            <button
-                                                                key={cls}
-                                                                type="button"
-                                                                className={`sq-class-chip ${active ? 'sq-class-chip--active' : ''}`}
-                                                                onClick={() => toggleIntersectionClass(cls)}
-                                                            >{cls}</button>
-                                                        );
-                                                    })}
-                                                </div>
-                                            )}
-                                            <p className="sq-hint sq-hint--tight">
-                                                <MousePointerClick size={12} /> Draw a new region on empty canvas. Click an already-drawn region to reuse it as the next step.
-                                                Pick two or more classes to require ALL of them on that region at once.
-                                            </p>
-                                        </>
-                                    ) : (
-                                        <>
-                                            <div className="sq-toolbar">
-                                                <select
-                                                    className="sq-class-input"
-                                                    value={pendingTargetClass}
-                                                    onChange={e => setPendingTargetClass(e.target.value)}
-                                                >
-                                                    <option value="">Select target class…</option>
-                                                    {availableClasses.map(cls => <option key={cls} value={cls}>{cls}</option>)}
-                                                </select>
-                                                <input
-                                                    className="sq-class-input"
-                                                    placeholder="intersection class(es) — pick below, or type comma-separated"
-                                                    value={pendingClass}
-                                                    onChange={e => setPendingClass(e.target.value)}
-                                                />
-                                                <input
-                                                    className="sq-class-input"
-                                                    placeholder="step name (optional)"
-                                                    value={pendingLabel}
-                                                    onChange={e => setPendingLabel(e.target.value)}
-                                                />
-                                                <button className="sq-btn-add-step" onClick={addDetectionClassStep}>
-                                                    <Plus size={13} /> Add Step
-                                                </button>
-                                            </div>
-                                            {availableClasses.length > 0 && (
-                                                <div className="sq-class-picker">
-                                                    {availableClasses.map(cls => {
-                                                        const active = pendingClass.split(',').map(c => c.trim()).includes(cls);
-                                                        return (
-                                                            <button
-                                                                key={cls}
-                                                                type="button"
-                                                                className={`sq-class-chip ${active ? 'sq-class-chip--active' : ''}`}
-                                                                onClick={() => toggleIntersectionClass(cls)}
-                                                            >{cls}</button>
-                                                        );
-                                                    })}
-                                                </div>
-                                            )}
-                                        </>
+                                        {regionKind === 'class' ? (
+                                            <select
+                                                className="sq-class-input"
+                                                value={pendingTargetClass}
+                                                onChange={e => setPendingTargetClass(e.target.value)}
+                                            >
+                                                <option value="">Select target class…</option>
+                                                {availableClasses.map(cls => <option key={cls} value={cls}>{cls}</option>)}
+                                            </select>
+                                        ) : (
+                                            <input
+                                                className="sq-class-input"
+                                                placeholder="region name"
+                                                value={pendingLabel}
+                                                onChange={e => setPendingLabel(e.target.value)}
+                                            />
+                                        )}
+                                        <input
+                                            className="sq-class-input"
+                                            placeholder={regionKind === 'class'
+                                                ? 'intersect with class(es) — pick below, or type comma-separated'
+                                                : 'required class(es) — pick below, or type comma-separated'}
+                                            value={pendingClass}
+                                            onChange={e => setPendingClass(e.target.value)}
+                                        />
+                                        {regionKind === 'class' && (
+                                            <button className="sq-btn-add-step" onClick={addDetectionClassStep}>
+                                                <Plus size={13} /> Add Step
+                                            </button>
+                                        )}
+                                    </div>
+                                    {availableClasses.length > 0 && (
+                                        <div className="sq-class-picker">
+                                            {availableClasses.map(cls => {
+                                                const active = pendingClass.split(',').map(c => c.trim()).includes(cls);
+                                                return (
+                                                    <button
+                                                        key={cls}
+                                                        type="button"
+                                                        className={`sq-class-chip ${active ? 'sq-class-chip--active' : ''}`}
+                                                        onClick={() => toggleIntersectionClass(cls)}
+                                                    >{cls}</button>
+                                                );
+                                            })}
+                                        </div>
                                     )}
+                                    <p className="sq-hint sq-hint--tight">
+                                        <MousePointerClick size={12} />
+                                        {regionKind === 'class'
+                                            ? ' Pick a target class + intersect class(es), then click "Add Step" — nothing to draw.'
+                                            : ' Draw a new region on empty canvas. Click an already-drawn region to reuse it as the next step. Pick two or more classes to require ALL of them at once.'}
+                                    </p>
                                     <Stage
                                         ref={stageRef}
                                         width={STAGE_W}
@@ -698,7 +665,7 @@ export default function SequencePanel({ project, onClose }) {
                                                 );
                                             })}
                                             {drawing && (
-                                                drawTool === 'box' ? (
+                                                regionKind === 'box' ? (
                                                     <Rect
                                                         x={Math.min(drawing.x1, drawing.x2)} y={Math.min(drawing.y1, drawing.y2)}
                                                         width={Math.abs(drawing.x2 - drawing.x1)} height={Math.abs(drawing.y2 - drawing.y1)}
