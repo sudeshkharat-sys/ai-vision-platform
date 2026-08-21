@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import axios from 'axios';
 import { Stage, Layer, Rect, Line, Text, Group, Image as KonvaImage } from 'react-konva';
 import useImage from 'use-image';
@@ -15,14 +15,29 @@ const STEP_COLORS = ['#dc143c', '#d97706', '#059669', '#2563eb', '#7c3aed', '#db
 let _regionSeq = 0;
 const nextRegionId = () => `r${Date.now()}_${_regionSeq++}`;
 
-function BackgroundImage({ src }) {
+// Where the reference photo actually sits inside the fixed 640x420 canvas —
+// scaled to fit and centered, so a landscape or portrait photo doesn't fill
+// the whole canvas. Everything that turns a canvas click into a stored
+// region (and back) must use THIS rect, not the raw canvas size, or a
+// region drawn near the edge of a non-640:420 photo ends up recorded in
+// the wrong place relative to the actual image content.
+function computeImageLayout(imgWidth, imgHeight) {
+    if (!imgWidth || !imgHeight) {
+        return { x: 0, y: 0, width: STAGE_W, height: STAGE_H };
+    }
+    const scale = Math.min(STAGE_W / imgWidth, STAGE_H / imgHeight);
+    const width = imgWidth * scale;
+    const height = imgHeight * scale;
+    return { x: (STAGE_W - width) / 2, y: (STAGE_H - height) / 2, width, height };
+}
+
+function BackgroundImage({ src, layout }) {
     const [image] = useImage(src, 'anonymous');
     if (!image) return null;
-    const scale = Math.min(STAGE_W / image.width, STAGE_H / image.height);
     return (
         <Group listening={false}>
             <Rect x={0} y={0} width={STAGE_W} height={STAGE_H} fill="#111318" />
-            <Group x={(STAGE_W - image.width * scale) / 2} y={(STAGE_H - image.height * scale) / 2} scaleX={scale} scaleY={scale}>
+            <Group x={layout.x} y={layout.y} scaleX={layout.width / image.width} scaleY={layout.height / image.height}>
                 <KonvaImage image={image} width={image.width} height={image.height} />
             </Group>
         </Group>
@@ -70,6 +85,14 @@ export default function SequencePanel({ project, onClose }) {
     const [testResults, setTestResults] = useState(null); // { results: [...] } | { error }
 
     const stageRef = useRef(null);
+
+    // The reference photo's actual displayed rect inside the fixed-size
+    // canvas — used to convert every mouse click into a position relative
+    // to the PHOTO, not the canvas frame around it.
+    const imgLayout = useMemo(
+        () => computeImageLayout(refImage?.width, refImage?.height),
+        [refImage]
+    );
 
     // Stale test results are worse than none — clear them whenever the
     // steps or reference image change so nobody trusts an outdated pass/fail.
@@ -142,9 +165,15 @@ export default function SequencePanel({ project, onClose }) {
             return;
         }
 
-        const nx1 = Math.min(x1, x2) / STAGE_W, nx2 = Math.max(x1, x2) / STAGE_W;
-        const ny1 = Math.min(y1, y2) / STAGE_H, ny2 = Math.max(y1, y2) / STAGE_H;
-        const coords = drawTool === 'line' ? [x1 / STAGE_W, y1 / STAGE_H, x2 / STAGE_W, y2 / STAGE_H] : [nx1, ny1, nx2, ny2];
+        // Convert canvas pixel coords -> position relative to the PHOTO
+        // itself (imgLayout), not the raw 640x420 canvas frame around it —
+        // clamped to 0-1 since a drag can end in the letterboxed padding.
+        const toImgX = px => Math.min(1, Math.max(0, (px - imgLayout.x) / imgLayout.width));
+        const toImgY = py => Math.min(1, Math.max(0, (py - imgLayout.y) / imgLayout.height));
+
+        const nx1 = toImgX(Math.min(x1, x2)), nx2 = toImgX(Math.max(x1, x2));
+        const ny1 = toImgY(Math.min(y1, y2)), ny2 = toImgY(Math.max(y1, y2));
+        const coords = drawTool === 'line' ? [toImgX(x1), toImgY(y1), toImgX(x2), toImgY(y2)] : [nx1, ny1, nx2, ny2];
 
         const id = nextRegionId();
         const label = pendingLabel.trim() || `Region ${regions.length + 1}`;
@@ -581,11 +610,18 @@ export default function SequencePanel({ project, onClose }) {
                                     >
                                         <Layer>
                                             {refImage && (
-                                                <BackgroundImage src={`${ORIGIN}${refImage.filepath}?w=${refImage.width}&h=${refImage.height}`} />
+                                                <BackgroundImage
+                                                    src={`${ORIGIN}${refImage.filepath}?w=${refImage.width}&h=${refImage.height}`}
+                                                    layout={imgLayout}
+                                                />
                                             )}
                                             {regions.filter(r => r.target_type !== 'detection_class').map((r, i) => {
                                                 const color = STEP_COLORS[i % STEP_COLORS.length];
                                                 const timesUsed = stepOrder.filter(id => id === r.id).length;
+                                                // Region coords are stored relative to the PHOTO (0-1) — convert
+                                                // back to canvas pixels via the same imgLayout used to draw it.
+                                                const toPx  = fx => imgLayout.x + fx * imgLayout.width;
+                                                const toPy  = fy => imgLayout.y + fy * imgLayout.height;
                                                 if (r.region_type === 'box') {
                                                     const [x1, y1, x2, y2] = r.region_coords;
                                                     return (
@@ -595,11 +631,11 @@ export default function SequencePanel({ project, onClose }) {
                                                             onTap={() => appendExistingRegion(r.id)}
                                                         >
                                                             <Rect
-                                                                x={x1 * STAGE_W} y={y1 * STAGE_H}
-                                                                width={(x2 - x1) * STAGE_W} height={(y2 - y1) * STAGE_H}
+                                                                x={toPx(x1)} y={toPy(y1)}
+                                                                width={toPx(x2) - toPx(x1)} height={toPy(y2) - toPy(y1)}
                                                                 stroke={color} strokeWidth={2} fill={`${color}22`}
                                                             />
-                                                            <Text x={x1 * STAGE_W + 4} y={y1 * STAGE_H + 4} text={`${r.label}${timesUsed > 1 ? ` ×${timesUsed}` : ''}`} fill={color} fontStyle="bold" fontSize={12} />
+                                                            <Text x={toPx(x1) + 4} y={toPy(y1) + 4} text={`${r.label}${timesUsed > 1 ? ` ×${timesUsed}` : ''}`} fill={color} fontStyle="bold" fontSize={12} />
                                                         </Group>
                                                     );
                                                 }
@@ -610,8 +646,8 @@ export default function SequencePanel({ project, onClose }) {
                                                         onClick={() => appendExistingRegion(r.id)}
                                                         onTap={() => appendExistingRegion(r.id)}
                                                     >
-                                                        <Line points={[x1 * STAGE_W, y1 * STAGE_H, x2 * STAGE_W, y2 * STAGE_H]} stroke={color} strokeWidth={3} hitStrokeWidth={16} />
-                                                        <Text x={x1 * STAGE_W + 4} y={y1 * STAGE_H - 16} text={`${r.label}${timesUsed > 1 ? ` ×${timesUsed}` : ''}`} fill={color} fontStyle="bold" fontSize={12} />
+                                                        <Line points={[toPx(x1), toPy(y1), toPx(x2), toPy(y2)]} stroke={color} strokeWidth={3} hitStrokeWidth={16} />
+                                                        <Text x={toPx(x1) + 4} y={toPy(y1) - 16} text={`${r.label}${timesUsed > 1 ? ` ×${timesUsed}` : ''}`} fill={color} fontStyle="bold" fontSize={12} />
                                                     </Group>
                                                 );
                                             })}
