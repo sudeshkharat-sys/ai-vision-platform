@@ -397,16 +397,31 @@ export default function SequencePanel({ project, onClose }) {
                                     <option value="strict">Strict — wrong region resets progress</option>
                                     <option value="lenient">Lenient — wrong region is ignored</option>
                                 </select>
-                                {images.length > 1 && (
-                                    <select
-                                        className="sq-select"
-                                        value={refImage?.id || ''}
-                                        onChange={e => setRefImage(images.find(i => i.id === e.target.value))}
-                                    >
-                                        {images.map(img => <option key={img.id} value={img.id}>{img.filename}</option>)}
-                                    </select>
-                                )}
                             </div>
+
+                            {images.length > 1 && (
+                                <div className="sq-ref-picker">
+                                    <span className="sq-ref-picker-label">Reference frame</span>
+                                    <div className="sq-ref-thumbs">
+                                        {images.map(img => (
+                                            <button
+                                                type="button"
+                                                key={img.id}
+                                                className={`sq-ref-thumb ${refImage?.id === img.id ? 'sq-ref-thumb--active' : ''}`}
+                                                onClick={() => setRefImage(img)}
+                                                title={`${img.filename} — ${img.width}×${img.height}`}
+                                            >
+                                                <img
+                                                    src={`${ORIGIN}${img.filepath}?w=${img.width}&h=${img.height}`}
+                                                    alt={img.filename}
+                                                    loading="lazy"
+                                                />
+                                                <span className="sq-ref-thumb-dims">{img.width}×{img.height}</span>
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
 
                             <div className="sq-builder-main">
                                 <div className="sq-canvas-wrap">

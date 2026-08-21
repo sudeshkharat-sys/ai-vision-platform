@@ -159,6 +159,21 @@
 .sq-builder { display: flex; flex-direction: column; gap: 14px; }
 
 .sq-builder-top { display: flex; gap: 10px; flex-wrap: wrap; }
+
+/* ── Reference-frame thumbnail picker ────────────────── */
+.sq-ref-picker { display: flex; flex-direction: column; gap: 6px; }
+.sq-ref-picker-label {
+  font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: #999;
+}
+.sq-ref-thumbs { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 4px; }
+.sq-ref-thumb {
+  flex-shrink: 0; width: 84px; padding: 3px; background: #fff; border: 2px solid #e5e5e5;
+  border-radius: 8px; cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 3px;
+}
+.sq-ref-thumb:hover { border-color: #d1d1d1; }
+.sq-ref-thumb--active { border-color: #dc143c; }
+.sq-ref-thumb img { width: 100%; height: 56px; object-fit: cover; border-radius: 5px; display: block; background: #111318; }
+.sq-ref-thumb-dims { font-size: 10px; color: #999; font-variant-numeric: tabular-nums; }
 .sq-input, .sq-select {
   font-size: 13px; border: 1px solid #e5e5e5; border-radius: 8px; padding: 8px 12px;
   background: #ffffff; color: #1a1a1a; outline: none;
