@@ -119,17 +119,29 @@ class VideoFrameExtractionRequest(BaseModel):
 class SequenceStep(BaseModel):
     order_index: int
     label: str
-    region_type: str  # "box" | "line"
-    region_coords: List[float]  # normalized [x1, y1, x2, y2]
+
+    # "region" (default): target = a user-drawn region on the reference
+    # frame. "detection_class": target = another detected class's OWN
+    # mask (e.g. use "M"'s predicted mask as the target, no drawn region).
+    target_type: str = "region"
+
+    # Required when target_type == "region".
+    region_type: Optional[str] = None  # "box" | "line"
+    region_coords: Optional[List[float]] = None  # normalized [x1, y1, x2, y2]
+
+    # Required when target_type == "detection_class" — the class whose
+    # own detected mask becomes this step's target area.
+    target_class: Optional[str] = None
+
     # Kept for backward compatibility with sequences saved before
     # required_classes existed — treated as required_classes[0] if that
     # list is absent.
     required_class: str
     # If set (2+ entries), ALL of these classes must have a detection
-    # overlapping this region in the SAME frame for the step to pass —
+    # overlapping the target in the SAME frame for the step to pass —
     # e.g. ["hand", "m"] to require a finger AND the letter "m" both
-    # present over the same key region at once. A single-entry list
-    # behaves the same as the old required_class-only steps.
+    # present at once. A single-entry list behaves the same as the old
+    # required_class-only steps.
     required_classes: Optional[List[str]] = None
 
 

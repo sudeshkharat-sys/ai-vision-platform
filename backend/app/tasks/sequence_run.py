@@ -10,10 +10,16 @@ This is the offline/batch path only — see the design doc for the live
 WebSocket path, which is a separate, not-yet-built piece.
 
 No cross-frame object tracking (ByteTrack) is used yet: each frame, the
-state machine picks the highest-overlap detection of the current step's
-required class as "the" object being followed. That's a reasonable
-approximation for a single-object demo/pilot and is the seam where a real
-tracker would slot in later without changing the state machine's interface.
+matcher picks the highest-confidence detection of a needed class as "the"
+object being followed. That's a reasonable approximation for a
+single-object demo/pilot and is the seam where a real tracker would slot
+in later without changing the state machine's interface.
+
+Both a detector (seed/main) AND a segmenter (seg_seed/seg_main), if the
+project has trained both, run every sampled frame — the segmenter's
+output carries real mask polygons (used for pixel-level intersection);
+the detector's boxes are a fallback for classes it sees that the
+segmenter doesn't.
 """
 
 from __future__ import annotations
@@ -30,6 +36,7 @@ from ultralytics import YOLO
 from ..config import settings
 from ..connectors.statedb_connector import StateDBConnector
 from ..services.sequence_engine import SequenceRunState
+from ..services.seg_model import resolve_seg_model_path
 from .celery_app import celery_app
 
 # Sample every Nth frame — full-frame inference on every frame is unnecessary
@@ -55,13 +62,66 @@ def _resolve_path(filepath: str) -> Path | None:
     return None
 
 
-def _load_model(project_id: str) -> YOLO | None:
+def _load_models(project_id: str) -> tuple[YOLO | None, YOLO | None]:
+    """Returns (detector, segmenter) — either may be None if not trained."""
+    detector = None
     project_model_dir = settings.model_dir / project_id
     for name in ("main_best.pt", "seed_best.pt"):
         path = project_model_dir / name
         if path.exists():
-            return YOLO(str(path))
-    return None
+            detector = YOLO(str(path))
+            break
+
+    segmenter = None
+    seg_path = resolve_seg_model_path(project_id)
+    if seg_path is not None:
+        segmenter = YOLO(str(seg_path))
+
+    return detector, segmenter
+
+
+def _detect_frame(detector: YOLO | None, segmenter: YOLO | None, frame) -> list[dict]:
+    """Run whichever models exist against one frame, returning normalized
+    detections. Segmenter results carry a real "mask" polygon."""
+    h, w = frame.shape[:2]
+    detections: list[dict] = []
+
+    if detector is not None:
+        results = detector.predict(frame, verbose=False, conf=0.25)
+        for r in results:
+            if r.boxes is None:
+                continue
+            names = r.names
+            for box in r.boxes:
+                cls_idx = int(box.cls[0])
+                x1, y1, x2, y2 = box.xyxy[0].tolist()
+                detections.append({
+                    "class_name": names.get(cls_idx, str(cls_idx)),
+                    "xyxy": (x1 / w, y1 / h, x2 / w, y2 / h),
+                    "conf": float(box.conf[0]),
+                })
+
+    if segmenter is not None:
+        results = segmenter.predict(frame, verbose=False, conf=0.25)
+        for r in results:
+            if r.boxes is None:
+                continue
+            names = r.names
+            has_masks = r.masks is not None
+            mask_polys = r.masks.xyn if has_masks else [None] * len(r.boxes)
+            for box, poly in zip(r.boxes, mask_polys):
+                cls_idx = int(box.cls[0])
+                x1, y1, x2, y2 = box.xyxy[0].tolist()
+                det = {
+                    "class_name": names.get(cls_idx, str(cls_idx)),
+                    "xyxy": (x1 / w, y1 / h, x2 / w, y2 / h),
+                    "conf": float(box.conf[0]),
+                }
+                if poly is not None and len(poly) >= 3:
+                    det["mask"] = [[float(px), float(py)] for px, py in poly]
+                detections.append(det)
+
+    return detections
 
 
 @celery_app.task(bind=True, name="run_sequence_on_video")
@@ -99,8 +159,8 @@ def run_sequence_on_video(self, run_id: str) -> dict:
             {"total": len(steps), "task_id": self.request.id, "id": run_id},
         )
 
-    model = _load_model(sequence["project_id"])
-    if model is None:
+    detector, segmenter = _load_models(sequence["project_id"])
+    if detector is None and segmenter is None:
         _fail(db, run_id, "No trained model found for this project — train a model before running a sequence.")
         return {"error": "No trained model"}
 
@@ -130,18 +190,7 @@ def run_sequence_on_video(self, run_id: str) -> dict:
             if frame_number % FRAME_STRIDE != 0:
                 continue
 
-            h, w = frame.shape[:2]
-            results = model.predict(frame, verbose=False, conf=0.25)[0]
-            class_map = results.names
-
-            detections = []
-            for box in results.boxes:
-                cls_idx = int(box.cls[0])
-                x1, y1, x2, y2 = box.xyxy[0].tolist()
-                detections.append({
-                    "class_name": class_map[cls_idx],
-                    "xyxy": (x1 / w, y1 / h, x2 / w, y2 / h),
-                })
+            detections = _detect_frame(detector, segmenter, frame)
 
             event = state.process_frame(frame_number, detections)
             if event is not None:

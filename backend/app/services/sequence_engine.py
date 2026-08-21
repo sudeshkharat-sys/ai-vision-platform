@@ -5,21 +5,26 @@ The per-run state machine: given a saved sequence's ordered steps and a
 stream of per-frame detections, tracks how far through the sequence a
 single tracked object has progressed.
 
-A step can require MORE THAN ONE class to be present in its region at
-once — e.g. ["hand", "m"] to require a finger AND the letter "m" both
-detected overlapping the same key region in the same frame, not just
-either one alone. This is an AND condition across classes, not tracked
-as separate objects with IDs (no ByteTrack yet) — for each required
-class, the highest-overlap detection of that class this frame is used.
-That keeps this class simple, testable with fake data, and swappable
-later for a real multi-object tracker without changing its interface.
+Box and "detection_class" target steps delegate their match check to
+sequence_match.evaluate_step, which does real pixel-level mask
+intersection (Intersection Area / Target Area x 100, per spec) shared
+with the single-image tester. Line regions are handled here directly,
+since a line crossing needs motion between frames — something that
+single-frame mask intersection can't express.
+
+This module does NOT track objects across frames (no ByteTrack) — for
+each required class, the highest-confidence detection of that class this
+frame is used. That keeps this class simple, testable with fake data,
+and swappable later for a real multi-object tracker without changing its
+interface.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from .sequence_geometry import step_matches, box_from_region_coords, overlap_ratio
+from .sequence_geometry import segments_intersect
+from .sequence_match import evaluate_step
 
 
 @dataclass
@@ -40,11 +45,15 @@ def _step_classes(step: dict) -> list[str]:
     return [step["required_class"]]
 
 
+def _is_line_region(step: dict) -> bool:
+    return step.get("target_type", "region") == "region" and step.get("region_type") == "line"
+
+
 @dataclass
 class SequenceRunState:
     steps: list[dict]
     mode: str = "strict"                # "strict" | "lenient"
-    overlap_threshold: float = 0.5
+    overlap_threshold: float = 0.5      # 0-1 fraction; converted to 0-100 for evaluate_step
     current_step: int = 0
     # Per-class last-seen center point, for line-region crossing checks.
     prev_centers: dict[str, tuple[float, float]] = field(default_factory=dict)
@@ -60,40 +69,24 @@ class SequenceRunState:
         return self.steps[self.current_step]
 
     def process_frame(self, frame_number: int, detections: list[dict]) -> StepEvent | None:
-        """detections: [{"class_name": str, "xyxy": (x1,y1,x2,y2)}, ...] for this frame,
-        already normalized 0-1. Returns a StepEvent if something notable happened
-        (a step matched, or a wrong-region hit in strict mode reset progress).
+        """detections: [{"class_name": str, "xyxy": (x1,y1,x2,y2),
+        "mask": [[x,y],...] (optional), "conf": float}, ...] for this
+        frame, already normalized 0-1. Returns a StepEvent if something
+        notable happened (a step matched, or a wrong-region hit in strict
+        mode reset progress).
         """
         if self.is_complete:
             return None
 
         target = self.current_target()
         needed_classes = _step_classes(target)
-        region_xyxy = box_from_region_coords(target["region_coords"]) if target["region_type"] == "box" else None
+        threshold_pct = self.overlap_threshold * 100.0
 
-        # Every required class must independently match this step's region
-        # in this same frame — an AND condition, not "any one of them".
-        per_class_matched = {}
-        for cls in needed_classes:
-            best_xyxy, best_score = None, 0.0
-            for det in detections:
-                if det["class_name"] != cls:
-                    continue
-                if region_xyxy is not None:
-                    score = overlap_ratio(det["xyxy"], region_xyxy)
-                    if score > best_score:
-                        best_score, best_xyxy = score, det["xyxy"]
-                elif best_xyxy is None:
-                    best_xyxy = det["xyxy"]  # line region: track for crossing check below
-
-            class_matched = False
-            if best_xyxy is not None:
-                class_matched = step_matches(target, best_xyxy, self.prev_centers.get(cls), self.overlap_threshold)
-                dx1, dy1, dx2, dy2 = best_xyxy
-                self.prev_centers[cls] = ((dx1 + dx2) / 2, (dy1 + dy2) / 2)
-            per_class_matched[cls] = class_matched
-
-        matched = bool(needed_classes) and all(per_class_matched.values())
+        if _is_line_region(target):
+            matched = self._check_line_region(target, needed_classes, detections)
+        else:
+            result = evaluate_step(target, detections, threshold_pct)
+            matched = result["matched"]
 
         if matched:
             event = StepEvent(
@@ -105,27 +98,25 @@ class SequenceRunState:
             )
             self.events.append(event)
             self.current_step += 1
-            # Reset motion history for the classes just used, so the next
-            # step's line-region (if any) starts without stale history.
             for cls in needed_classes:
                 self.prev_centers.pop(cls, None)
             return event
 
         # Wrong-region hit: any of this step's required classes has a
-        # detection landing in a DIFFERENT step's box region instead.
+        # detection landing in a DIFFERENT step's box/detection_class
+        # target instead. (Only checked for non-line steps — a line
+        # region's "hit" is a crossing event, not a static landing.)
         wrong_region_hit = False
         for cls in needed_classes:
-            for det in detections:
-                if det["class_name"] != cls:
+            for idx, step in enumerate(self.steps):
+                if idx == self.current_step or _is_line_region(step):
                     continue
-                for idx, step in enumerate(self.steps):
-                    if idx == self.current_step or step["region_type"] != "box":
-                        continue
-                    other_region = box_from_region_coords(step["region_coords"])
-                    if overlap_ratio(det["xyxy"], other_region) >= self.overlap_threshold:
-                        wrong_region_hit = True
-                        break
-                if wrong_region_hit:
+                other_needed = _step_classes(step)
+                if cls not in other_needed:
+                    continue
+                other_result = evaluate_step(step, detections, threshold_pct)
+                if other_result["matched"]:
+                    wrong_region_hit = True
                     break
             if wrong_region_hit:
                 break
@@ -153,3 +144,32 @@ class SequenceRunState:
             )
 
         return None
+
+    def _check_line_region(self, target: dict, needed_classes: list[str], detections: list[dict]) -> bool:
+        """All required classes must have crossed the line THIS frame
+        (each tracked via its own prev_centers entry)."""
+        coords = target["region_coords"]
+        p3, p4 = (coords[0], coords[1]), (coords[2], coords[3])
+
+        all_crossed = True
+        for cls in needed_classes:
+            best_xyxy, best_conf = None, -1.0
+            for det in detections:
+                if det["class_name"] != cls:
+                    continue
+                conf = det.get("conf", 0.0)
+                if conf > best_conf:
+                    best_conf, best_xyxy = conf, det["xyxy"]
+
+            crossed = False
+            if best_xyxy is not None:
+                dx1, dy1, dx2, dy2 = best_xyxy
+                curr_center = ((dx1 + dx2) / 2, (dy1 + dy2) / 2)
+                prev_center = self.prev_centers.get(cls)
+                if prev_center is not None:
+                    crossed = segments_intersect(prev_center, curr_center, p3, p4)
+                self.prev_centers[cls] = curr_center
+            if not crossed:
+                all_crossed = False
+
+        return all_crossed

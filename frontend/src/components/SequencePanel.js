@@ -59,6 +59,12 @@ export default function SequencePanel({ project, onClose }) {
     const [pendingLabel, setPendingLabel] = useState('');
     const [seqThreshold, setSeqThreshold] = useState(0.5);
 
+    // Target type for the NEXT thing added: "region" (drawn on canvas) or
+    // "detection_class" (target = another class's own detected mask, e.g.
+    // "M" — no drawing needed, just class names).
+    const [targetTypeMode, setTargetTypeMode] = useState('region');
+    const [pendingTargetClass, setPendingTargetClass] = useState('');
+
     // Quick single-image test — no save, no video, instant per-step check
     const [testing, setTesting]         = useState(false);
     const [testResults, setTestResults] = useState(null); // { results: [...] } | { error }
@@ -110,6 +116,7 @@ export default function SequencePanel({ project, onClose }) {
 
     // ── Drawing a NEW region on canvas ───────────────────────────────
     const handleMouseDown = (e) => {
+        if (targetTypeMode !== 'region') return; // "Detection Class" steps aren't drawn
         // Only start a fresh draw when clicking empty canvas, not an existing region
         if (e.target !== e.target.getStage()) return;
         const pos = e.target.getStage().getPointerPosition();
@@ -143,6 +150,7 @@ export default function SequencePanel({ project, onClose }) {
         const label = pendingLabel.trim() || `Region ${regions.length + 1}`;
         setRegions(prev => [...prev, {
             id,
+            target_type: 'region',
             region_type: drawTool,
             region_coords: coords,
             required_class: classes[0],
@@ -151,6 +159,29 @@ export default function SequencePanel({ project, onClose }) {
         }]);
         setStepOrder(prev => [...prev, id]);
         setDrawing(null);
+        setError(null);
+        setPendingLabel('');
+    };
+
+    // ── Add a "Detection Class" step — target = another class's own
+    // detected mask (e.g. "M"), no region drawn on canvas ─────────────
+    const addDetectionClassStep = () => {
+        const targetClass = pendingTargetClass.trim();
+        const classes = pendingClass.split(',').map(c => c.trim()).filter(Boolean);
+        if (!targetClass) { setError('Set the target class (e.g. "M") first.'); return; }
+        if (classes.length === 0) { setError('Set the intersection class(es) (e.g. "fingertip") first.'); return; }
+
+        const id = nextRegionId();
+        const label = pendingLabel.trim() || `${targetClass} ⋂ ${classes.join('+')}`;
+        setRegions(prev => [...prev, {
+            id,
+            target_type: 'detection_class',
+            target_class: targetClass,
+            required_class: classes[0],
+            required_classes: classes,
+            label,
+        }]);
+        setStepOrder(prev => [...prev, id]);
         setError(null);
         setPendingLabel('');
     };
@@ -187,8 +218,10 @@ export default function SequencePanel({ project, onClose }) {
         return {
             order_index: i,
             label: r.label,
+            target_type: r.target_type || 'region',
             region_type: r.region_type,
             region_coords: r.region_coords,
+            target_class: r.target_class,
             required_class: r.required_class,
             required_classes: r.required_classes && r.required_classes.length > 1 ? r.required_classes : undefined,
         };
@@ -470,32 +503,73 @@ export default function SequencePanel({ project, onClose }) {
 
                             <div className="sq-builder-main">
                                 <div className="sq-canvas-wrap">
-                                    <div className="sq-toolbar">
+                                    <div className="sq-target-type-toggle">
                                         <button
-                                            className={`sq-tool-btn ${drawTool === 'box' ? 'sq-tool-btn--active' : ''}`}
-                                            onClick={() => setDrawTool('box')}
-                                        ><Square size={13} /> Box</button>
+                                            className={`sq-tool-btn ${targetTypeMode === 'region' ? 'sq-tool-btn--active' : ''}`}
+                                            onClick={() => setTargetTypeMode('region')}
+                                            title="Target = a region you draw on the reference frame"
+                                        >Region</button>
                                         <button
-                                            className={`sq-tool-btn ${drawTool === 'line' ? 'sq-tool-btn--active' : ''}`}
-                                            onClick={() => setDrawTool('line')}
-                                        ><Minus size={13} /> Line</button>
-                                        <input
-                                            className="sq-class-input"
-                                            placeholder="region name (e.g. S key, Gate 1)"
-                                            value={pendingLabel}
-                                            onChange={e => setPendingLabel(e.target.value)}
-                                        />
-                                        <input
-                                            className="sq-class-input"
-                                            placeholder="required class(es), comma-separated (e.g. hand, m)"
-                                            value={pendingClass}
-                                            onChange={e => setPendingClass(e.target.value)}
-                                        />
+                                            className={`sq-tool-btn ${targetTypeMode === 'detection_class' ? 'sq-tool-btn--active' : ''}`}
+                                            onClick={() => setTargetTypeMode('detection_class')}
+                                            title='Target = another detected class\'s own mask (e.g. "M") — no drawing needed'
+                                        >Detection Class</button>
                                     </div>
-                                    <p className="sq-hint sq-hint--tight">
-                                        <MousePointerClick size={12} /> Draw a new region on empty canvas. Click an already-drawn region to reuse it as the next step (e.g. the "S" key a second time).
-                                        Enter two or more classes separated by commas (e.g. <code>hand, m</code>) to require ALL of them on that region at once.
-                                    </p>
+
+                                    {targetTypeMode === 'region' ? (
+                                        <>
+                                            <div className="sq-toolbar">
+                                                <button
+                                                    className={`sq-tool-btn ${drawTool === 'box' ? 'sq-tool-btn--active' : ''}`}
+                                                    onClick={() => setDrawTool('box')}
+                                                ><Square size={13} /> Box</button>
+                                                <button
+                                                    className={`sq-tool-btn ${drawTool === 'line' ? 'sq-tool-btn--active' : ''}`}
+                                                    onClick={() => setDrawTool('line')}
+                                                ><Minus size={13} /> Line</button>
+                                                <input
+                                                    className="sq-class-input"
+                                                    placeholder="region name (e.g. S key, Gate 1)"
+                                                    value={pendingLabel}
+                                                    onChange={e => setPendingLabel(e.target.value)}
+                                                />
+                                                <input
+                                                    className="sq-class-input"
+                                                    placeholder="required class(es), comma-separated (e.g. hand, m)"
+                                                    value={pendingClass}
+                                                    onChange={e => setPendingClass(e.target.value)}
+                                                />
+                                            </div>
+                                            <p className="sq-hint sq-hint--tight">
+                                                <MousePointerClick size={12} /> Draw a new region on empty canvas. Click an already-drawn region to reuse it as the next step (e.g. the "S" key a second time).
+                                                Enter two or more classes separated by commas (e.g. <code>hand, m</code>) to require ALL of them on that region at once.
+                                            </p>
+                                        </>
+                                    ) : (
+                                        <div className="sq-toolbar">
+                                            <input
+                                                className="sq-class-input"
+                                                placeholder="target class (e.g. M)"
+                                                value={pendingTargetClass}
+                                                onChange={e => setPendingTargetClass(e.target.value)}
+                                            />
+                                            <input
+                                                className="sq-class-input"
+                                                placeholder="intersection class(es), comma-separated (e.g. fingertip)"
+                                                value={pendingClass}
+                                                onChange={e => setPendingClass(e.target.value)}
+                                            />
+                                            <input
+                                                className="sq-class-input"
+                                                placeholder="step name (optional)"
+                                                value={pendingLabel}
+                                                onChange={e => setPendingLabel(e.target.value)}
+                                            />
+                                            <button className="sq-btn-add-step" onClick={addDetectionClassStep}>
+                                                <Plus size={13} /> Add Step
+                                            </button>
+                                        </div>
+                                    )}
                                     <Stage
                                         ref={stageRef}
                                         width={STAGE_W}
@@ -509,7 +583,7 @@ export default function SequencePanel({ project, onClose }) {
                                             {refImage && (
                                                 <BackgroundImage src={`${ORIGIN}${refImage.filepath}?w=${refImage.width}&h=${refImage.height}`} />
                                             )}
-                                            {regions.map((r, i) => {
+                                            {regions.filter(r => r.target_type !== 'detection_class').map((r, i) => {
                                                 const color = STEP_COLORS[i % STEP_COLORS.length];
                                                 const timesUsed = stepOrder.filter(id => id === r.id).length;
                                                 if (r.region_type === 'box') {
