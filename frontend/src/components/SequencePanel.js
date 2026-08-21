@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import axios from 'axios';
 import { Stage, Layer, Rect, Line, Text, Group, Image as KonvaImage } from 'react-konva';
 import useImage from 'use-image';
-import { Route, X, Trash2, Check, AlertTriangle, Plus, Square, Minus, ChevronLeft, MousePointerClick, Play, Loader2 } from 'lucide-react';
+import { Route, X, Trash2, Check, AlertTriangle, Plus, Square, Minus, ChevronLeft, MousePointerClick, Play, Loader2, Download } from 'lucide-react';
 import './SequencePanel.css';
 
 import { API_URL } from '../config';
@@ -289,6 +289,18 @@ export default function SequencePanel({ project, onClose }) {
         }
     };
 
+    const handleExportSequence = (seq) => {
+        const blob = new Blob([JSON.stringify(seq, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${seq.name.replace(/[^a-z0-9_-]+/gi, '_')}.json`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+    };
+
     const handleTestOnImage = async () => {
         if (!refImage) { setError('Pick a reference frame to test against first.'); return; }
         if (stepOrder.length === 0) { setError('Draw at least one region first.'); return; }
@@ -462,6 +474,13 @@ export default function SequencePanel({ project, onClose }) {
                                                         <button className="sq-btn-run" onClick={() => startRun(seq)} disabled={isRunning}>
                                                             {isRunning ? <Loader2 size={13} className="sq-spin" /> : <Play size={13} />}
                                                             {isRunning ? 'Running…' : 'Run'}
+                                                        </button>
+                                                        <button
+                                                            className="sq-btn-export"
+                                                            onClick={() => handleExportSequence(seq)}
+                                                            title="Download this sequence as JSON — use it with scripts/sequence_viewer.py to watch it run live on your own machine"
+                                                        >
+                                                            <Download size={13} /> Export
                                                         </button>
                                                     </div>
                                                     {run && (
