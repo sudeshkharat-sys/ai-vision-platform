@@ -852,6 +852,7 @@ export default function ReviewPanel({ project, images, onClose, onAnnotationsUpd
                                                 {/* In-progress polyline/segment: placed points + a guide line to the cursor */}
                                                 {drawnPolylinePoints.length > 0 && (
                                                     <Line
+                                                        listening={false}
                                                         points={[
                                                             ...drawnPolylinePoints.flatMap(p => [p.x, p.y]),
                                                             ...(polylineCursor && !pendingPolyline ? [polylineCursor.x, polylineCursor.y] : []),
