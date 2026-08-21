@@ -473,6 +473,22 @@
   flex-wrap: wrap;
 }
 
+.canvas-nav {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-right: 12px;
+  border-right: 1px solid #e5e5e5;
+}
+
+.canvas-nav-count {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: #666666;
+  min-width: 52px;
+  text-align: center;
+}
+
 .canvas-filename {
   font-size: 14px;
   font-weight: 600;

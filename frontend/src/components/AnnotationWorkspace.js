@@ -875,6 +875,15 @@ Do you want to proceed?`;
         setLoadedImageSize({ width: w, height: h });
     }, []);
 
+    const handleNavigateImage = (direction) => {
+        if (!currentImage || images.length === 0) return;
+        const idx = images.findIndex(img => img.id === currentImage.id);
+        if (idx === -1) return;
+        const nextIdx = direction === 'next' ? idx + 1 : idx - 1;
+        if (nextIdx < 0 || nextIdx >= images.length) return;
+        handleImageClick(images[nextIdx]);
+    };
+
     const handleImageClick = (image) => {
         setCurrentImage(image);
         setLoadedImageSize(null); // reset until new image loads
@@ -1592,6 +1601,23 @@ Do you want to proceed?`;
                 {currentImage ? (
                     <div className="canvas-wrapper">
                         <div className="canvas-toolbar">
+                            <div className="canvas-nav">
+                                <button
+                                    className="btn-toolbar"
+                                    onClick={() => handleNavigateImage('prev')}
+                                    disabled={images.findIndex(img => img.id === currentImage.id) <= 0}
+                                    title="Previous image"
+                                ><ArrowLeft size={14} /></button>
+                                <span className="canvas-nav-count">
+                                    {images.findIndex(img => img.id === currentImage.id) + 1} / {images.length}
+                                </span>
+                                <button
+                                    className="btn-toolbar"
+                                    onClick={() => handleNavigateImage('next')}
+                                    disabled={images.findIndex(img => img.id === currentImage.id) >= images.length - 1}
+                                    title="Next image"
+                                ><ArrowRight size={14} /></button>
+                            </div>
                             <span className="canvas-filename">{currentImage.filename}</span>
                             <span className="canvas-dims">{imgW} × {imgH}px</span>
                             <span className="canvas-hint" title="Scroll to zoom · hold Space + drag to pan">
@@ -2097,7 +2123,8 @@ Do you want to proceed?`;
                     onClose={() => setShowModelsPanel(false)}
                     onGoToTrain={(type) => {
                         if (type === 'seed') setShowTrainingPanel(true);
-                        else setShowMainTrainingPanel(true);
+                        else if (type === 'main') setShowMainTrainingPanel(true);
+                        else setShowSegPanel(true); // 'seg_seed' | 'seg_main'
                     }}
                 />
             )}

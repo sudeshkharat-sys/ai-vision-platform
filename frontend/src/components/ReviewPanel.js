@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import axios from 'axios';
-import { Stage, Layer, Rect, Text, Image as KonvaImg, Group } from 'react-konva';
+import { Stage, Layer, Rect, Line, Text, Image as KonvaImg, Group } from 'react-konva';
 import useImage from 'use-image';
 import './ReviewPanel.css';
 import { Check, X, Sparkles, ChevronLeft, ChevronRight, ZoomIn, ZoomOut, Maximize2, Trash2 } from 'lucide-react';
@@ -659,16 +659,33 @@ export default function ReviewPanel({ project, images, onClose, onAnnotationsUpd
                                                         ann.class_name.length * fs * 0.6 + padX * 2
                                                     );
 
+                                                    const hasOutline = (ann.annotation_type === 'polygon' || ann.annotation_type === 'segment')
+                                                        && Array.isArray(ann.points) && ann.points.length >= 3;
+                                                    const outlinePoints = hasOutline
+                                                        ? ann.points.flatMap(([px, py]) => [px * imgW, py * imgH])
+                                                        : null;
+
                                                     return (
                                                         <React.Fragment key={ann.id}>
-                                                            <Rect
-                                                                x={bx} y={by}
-                                                                width={bw} height={bh}
-                                                                stroke={color}
-                                                                strokeWidth={isAuto ? 2 / scale : 1.5 / scale}
-                                                                dash={isAuto ? [6 / scale, 3 / scale] : undefined}
-                                                                fill={fill}
-                                                            />
+                                                            {hasOutline ? (
+                                                                <Line
+                                                                    points={outlinePoints}
+                                                                    closed
+                                                                    stroke={color}
+                                                                    strokeWidth={isAuto ? 2 / scale : 1.5 / scale}
+                                                                    dash={isAuto ? [6 / scale, 3 / scale] : undefined}
+                                                                    fill={fill}
+                                                                />
+                                                            ) : (
+                                                                <Rect
+                                                                    x={bx} y={by}
+                                                                    width={bw} height={bh}
+                                                                    stroke={color}
+                                                                    strokeWidth={isAuto ? 2 / scale : 1.5 / scale}
+                                                                    dash={isAuto ? [6 / scale, 3 / scale] : undefined}
+                                                                    fill={fill}
+                                                                />
+                                                            )}
                                                             {/* Label pill */}
                                                             <Rect
                                                                 x={bx} y={by - lh}

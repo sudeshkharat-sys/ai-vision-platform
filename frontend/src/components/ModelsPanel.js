@@ -109,7 +109,6 @@ function MetricPill({ label, value, color }) {
    Model Card
    ───────────────────────────────────────────────────────────────── */
 function ModelCard({ type, data, onTrain, onDownload, downloading }) {
-    const isSeed = type === 'seed';
     const config = {
         seed: {
             label: 'Seed Model',
@@ -128,6 +127,24 @@ function ModelCard({ type, data, onTrain, onDownload, downloading }) {
             light: 'rgba(184,16,46,0.08)',
             sparkColor: '#b8102e',
             trainLabel: <><Target size={14} /> Train Main Model</>,
+        },
+        seg_seed: {
+            label: 'Segment Seed',
+            desc: 'Fast bootstrap mask model trained on a small hand-annotated batch',
+            icon: <Leaf size={20} />,
+            accent: ['#7c3aed', '#a78bfa'],
+            light: 'rgba(124,58,237,0.08)',
+            sparkColor: '#7c3aed',
+            trainLabel: <><Leaf size={14} /> Train Segment Seed</>,
+        },
+        seg_main: {
+            label: 'Segment Main',
+            desc: 'Full-accuracy mask model for production segmentation',
+            icon: <Target size={20} />,
+            accent: ['#5b21b6', '#7c3aed'],
+            light: 'rgba(91,33,182,0.08)',
+            sparkColor: '#5b21b6',
+            trainLabel: <><Target size={14} /> Train Segment Main</>,
         },
     }[type];
 
@@ -242,7 +259,7 @@ function ModelCard({ type, data, onTrain, onDownload, downloading }) {
                 /* Not trained state */
                 <div className="mp-card-empty">
                     <div className="mp-card-empty-icon" style={{ color: config.accent[0] }}>
-                        {isSeed ? <Leaf size={36} /> : <Target size={36} />}
+                        {React.cloneElement(config.icon, { size: 36 })}
                     </div>
                     <p className="mp-card-empty-text">
                         No trained model yet.<br />
@@ -519,6 +536,20 @@ const ModelsPanel = ({ project, onClose, onGoToTrain }) => {
                                 onDownload={handleDownload}
                                 downloading={downloading}
                             />
+                            <ModelCard
+                                type="seg_seed"
+                                data={details.seg_seed}
+                                onTrain={handleTrain}
+                                onDownload={handleDownload}
+                                downloading={downloading}
+                            />
+                            <ModelCard
+                                type="seg_main"
+                                data={details.seg_main}
+                                onTrain={handleTrain}
+                                onDownload={handleDownload}
+                                downloading={downloading}
+                            />
                             <OcrRecognizerCard
                                 crnn={ocrStatus}
                                 onDownload={handleDownloadOcrFile}
@@ -549,6 +580,15 @@ const ModelsPanel = ({ project, onClose, onGoToTrain }) => {
                                 <div>
                                     <strong>mAP@50 ≥ 70%</strong> is considered good. Aim for
                                     mAP@50-95 ≥ 50% for production use.
+                                </div>
+                            </div>
+                            <div className="mp-tip">
+                                <span className="mp-tip-icon"><Info size={14} /></span>
+                                <div>
+                                    <strong>Segment Seed/Main</strong> — the mask-outline
+                                    equivalents of Seed/Main, trained on annotations drawn with
+                                    the Segment tool. Segment auto-annotate uses Main over Seed
+                                    when both exist.
                                 </div>
                             </div>
                         </div>
