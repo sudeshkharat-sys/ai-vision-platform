@@ -541,7 +541,7 @@ export default function SequencePanel({ project, onClose }) {
                                         <button
                                             className={`sq-tool-btn ${targetTypeMode === 'detection_class' ? 'sq-tool-btn--active' : ''}`}
                                             onClick={() => setTargetTypeMode('detection_class')}
-                                            title='Target = another detected class\'s own mask (e.g. "M") — no drawing needed'
+                                            title={'Target = another detected class\'s own mask (e.g. "M") — no drawing needed'}
                                         >Detection Class</button>
                                     </div>
 
