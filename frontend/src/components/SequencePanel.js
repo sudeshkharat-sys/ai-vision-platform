@@ -212,7 +212,7 @@ export default function SequencePanel({ project, onClose }) {
         if (classes.length === 0) { setError('Select at least one intersection class first.'); return; }
 
         const id = nextRegionId();
-        const label = pendingLabel.trim() || `${targetClass} ⋂ ${classes.join('+')}`;
+        const label = pendingLabel.trim() || `${targetClass} x ${classes.join('+')}`;
         setRegions(prev => [...prev, {
             id,
             target_type: 'detection_class',
