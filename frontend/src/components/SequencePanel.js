@@ -464,6 +464,16 @@ export default function SequencePanel({ project, onClose }) {
                                                     </div>
                                                     {run && (
                                                         <div className="sq-run-result">
+                                                            {run.status === 'running' && run.latest_frame_url && (
+                                                                <div className="sq-run-live">
+                                                                    <img
+                                                                        className="sq-run-live-img"
+                                                                        src={`${ORIGIN}${run.latest_frame_url}?f=${run.latest_frame_number}`}
+                                                                        alt="Live processing preview"
+                                                                    />
+                                                                    <span className="sq-run-live-badge">● live · frame {run.latest_frame_number}</span>
+                                                                </div>
+                                                            )}
                                                             <div className="sq-run-progress">
                                                                 <span className={`sq-run-status sq-run-status--${run.status}`}>
                                                                     {run.status === 'complete' && run.passed ? '✓ Passed' :

@@ -223,6 +223,10 @@ class SequenceRunResponse(BaseModel):
     passed: bool
     step_events: List[SequenceRunStepEvent]
     error: Optional[str]
+    # Overwritten continuously while status == "running" — poll this for a
+    # near-live view of what the model is currently seeing in the video.
+    latest_frame_url: Optional[str] = None
+    latest_frame_number: Optional[int] = None
     created_at: datetime
     finished_at: Optional[datetime]
 

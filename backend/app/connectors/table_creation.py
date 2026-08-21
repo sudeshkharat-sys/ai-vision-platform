@@ -370,6 +370,8 @@ sequence_runs_table = create_dynamic_table(
     Column("step_events", JSONB, nullable=False, server_default=text("'[]'::jsonb")),
     Column("error", String(1024), nullable=True),
     Column("task_id", String(36), nullable=True),
+    Column("latest_frame_url", String(512), nullable=True),
+    Column("latest_frame_number", Integer, nullable=True),
     Column(
         "created_at",
         DateTime(timezone=True),

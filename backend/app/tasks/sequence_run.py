@@ -128,36 +128,45 @@ _DEBUG_COLORS = {
     "matched": (74, 222, 128),          # green
     "wrong_region_reset": (68, 68, 239),  # red (BGR)
     "wrong_region_ignored": (11, 170, 250),  # amber
+    "watching": (250, 170, 11),         # blue — no event yet, just live progress
 }
+
+
+def _draw_overlay(frame, detections: list[dict], target: dict | None, reason: str):
+    """Draw detection boxes/labels + the current step's region onto a copy
+    of the frame. Shared by the permanent per-event snapshots and the
+    continuously-overwritten live frame."""
+    img = frame.copy()
+    h, w = img.shape[:2]
+
+    for det in detections:
+        x1, y1, x2, y2 = det["xyxy"]
+        p1, p2 = (int(x1 * w), int(y1 * h)), (int(x2 * w), int(y2 * h))
+        cv2.rectangle(img, p1, p2, (255, 255, 255), 1)
+        label = f'{det["class_name"]} {det.get("conf", 0):.2f}'
+        cv2.putText(img, label, (p1[0], max(14, p1[1] - 6)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
+
+    if target and target.get("target_type", "region") == "region" and target.get("region_type") == "box":
+        rx1, ry1, rx2, ry2 = target["region_coords"]
+        color = _DEBUG_COLORS.get(reason, (0, 165, 255))
+        cv2.rectangle(img, (int(rx1 * w), int(ry1 * h)), (int(rx2 * w), int(ry2 * h)), color, 2)
+
+    step_label = target.get("label", "") if target else ""
+    cv2.putText(img, f'Step: {step_label}  ({reason})', (10, h - 12),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.55, _DEBUG_COLORS.get(reason, (255, 255, 255)), 1, cv2.LINE_AA)
+    return img
 
 
 def _save_debug_frame(frame, detections: list[dict], target: dict, project_id: str, run_id: str,
                        frame_number: int, reason: str) -> str | None:
     """Draw the frame's detections + the current step's region (if a box)
-    onto a copy of the frame and save it, so a run can actually be
-    debugged by looking at what the model saw at the moment a step
-    passed or reset — not just a text log. Returns the web-accessible
-    URL, or None if saving failed (never blocks the run itself)."""
+    onto a copy of the frame and save it as a PERMANENT snapshot for this
+    event, so a run can actually be debugged by looking at what the model
+    saw at the moment a step passed or reset — not just a text log. Returns
+    the web-accessible URL, or None if saving failed (never blocks the run)."""
     try:
-        img = frame.copy()
-        h, w = img.shape[:2]
-
-        for det in detections:
-            x1, y1, x2, y2 = det["xyxy"]
-            p1, p2 = (int(x1 * w), int(y1 * h)), (int(x2 * w), int(y2 * h))
-            cv2.rectangle(img, p1, p2, (255, 255, 255), 1)
-            label = f'{det["class_name"]} {det.get("conf", 0):.2f}'
-            cv2.putText(img, label, (p1[0], max(14, p1[1] - 6)),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
-
-        if target.get("target_type", "region") == "region" and target.get("region_type") == "box":
-            rx1, ry1, rx2, ry2 = target["region_coords"]
-            color = _DEBUG_COLORS.get(reason, (0, 165, 255))
-            cv2.rectangle(img, (int(rx1 * w), int(ry1 * h)), (int(rx2 * w), int(ry2 * h)), color, 2)
-
-        cv2.putText(img, f'Step: {target.get("label", "")}  ({reason})', (10, h - 12),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.55, _DEBUG_COLORS.get(reason, (255, 255, 255)), 1, cv2.LINE_AA)
-
+        img = _draw_overlay(frame, detections, target, reason)
         out_dir = settings.upload_dir / project_id / "sequence_debug" / run_id
         out_dir.mkdir(parents=True, exist_ok=True)
         filename = f"frame_{frame_number}_{reason}.jpg"
@@ -165,6 +174,23 @@ def _save_debug_frame(frame, detections: list[dict], target: dict, project_id: s
         return f"/uploads/{project_id}/sequence_debug/{run_id}/{filename}"
     except Exception:
         logger.exception("Failed to save debug frame for run {}", run_id)
+        return None
+
+
+def _save_live_frame(frame, detections: list[dict], target: dict | None, project_id: str, run_id: str,
+                      reason: str = "watching") -> str | None:
+    """Overwrite a single 'latest frame' snapshot every processed frame, so
+    the frontend can poll it while status == 'running' for a near-live view
+    of what the model is currently seeing. The filename never changes —
+    the caller cache-busts requests via the frame_number field."""
+    try:
+        img = _draw_overlay(frame, detections, target, reason)
+        out_dir = settings.upload_dir / project_id / "sequence_debug" / run_id
+        out_dir.mkdir(parents=True, exist_ok=True)
+        cv2.imwrite(str(out_dir / "live.jpg"), img, [cv2.IMWRITE_JPEG_QUALITY, 70])
+        return f"/uploads/{project_id}/sequence_debug/{run_id}/live.jpg"
+    except Exception:
+        logger.exception("Failed to save live frame for run {}", run_id)
         return None
 
 
@@ -248,6 +274,12 @@ def run_sequence_on_video(self, run_id: str) -> dict:
             evaluated_step = steps[state.current_step] if not state.is_complete else None
 
             event = state.process_frame(frame_number, detections)
+
+            live_frame_url = _save_live_frame(
+                frame, detections, evaluated_step, sequence["project_id"], run_id,
+                reason=event.reason if event is not None else "watching",
+            )
+
             if event is not None:
                 event_dict = dict(event.__dict__)
                 if evaluated_step is not None:
@@ -262,13 +294,25 @@ def run_sequence_on_video(self, run_id: str) -> dict:
                 with db.get_session() as conn:
                     conn.execute(
                         text(
-                            "UPDATE sequence_runs SET current_step = :cs, step_events = :events WHERE id = :id"
+                            "UPDATE sequence_runs SET current_step = :cs, step_events = :events, "
+                            "latest_frame_url = :lfu, latest_frame_number = :lfn WHERE id = :id"
                         ),
                         {
                             "cs": state.current_step,
                             "events": json.dumps(event_log),
+                            "lfu": live_frame_url,
+                            "lfn": frame_number,
                             "id": run_id,
                         },
+                    )
+            else:
+                with db.get_session() as conn:
+                    conn.execute(
+                        text(
+                            "UPDATE sequence_runs SET latest_frame_url = :lfu, latest_frame_number = :lfn "
+                            "WHERE id = :id"
+                        ),
+                        {"lfu": live_frame_url, "lfn": frame_number, "id": run_id},
                     )
 
             if state.is_complete:

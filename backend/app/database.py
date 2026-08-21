@@ -116,3 +116,10 @@ async def init_db() -> None:
         await conn.execute(text(
             "ALTER TABLE annotations ADD COLUMN IF NOT EXISTS points JSONB"
         ))
+        # Migration: live progress snapshot while a sequence run is in progress
+        await conn.execute(text(
+            "ALTER TABLE sequence_runs ADD COLUMN IF NOT EXISTS latest_frame_url VARCHAR(512)"
+        ))
+        await conn.execute(text(
+            "ALTER TABLE sequence_runs ADD COLUMN IF NOT EXISTS latest_frame_number INTEGER"
+        ))

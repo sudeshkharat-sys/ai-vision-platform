@@ -51,5 +51,10 @@ class SequenceRun(Base):
     error: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     task_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
 
+    # Continuously overwritten while the run is in progress, so the frontend
+    # can poll and show a near-live "what the model is seeing right now" view.
+    latest_frame_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    latest_frame_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

@@ -167,6 +167,17 @@
   border: 1px solid rgba(0,0,0,0.08);
 }
 
+.sq-run-live { position: relative; display: inline-block; margin-bottom: 8px; }
+.sq-run-live-img {
+  width: 100%; max-width: 420px; height: auto; border-radius: 8px; display: block;
+  border: 1px solid #e5e5e5;
+}
+.sq-run-live-badge {
+  position: absolute; top: 6px; left: 6px; font-size: 10px; font-weight: 600;
+  background: rgba(0,0,0,0.6); color: #fff; padding: 2px 7px; border-radius: 10px;
+  letter-spacing: 0.02em;
+}
+
 /* ── Builder ─────────────────────────────────────────── */
 .sq-builder { display: flex; flex-direction: column; gap: 14px; }
 
