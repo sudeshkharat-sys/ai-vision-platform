@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import axios from 'axios';
-import { Stage, Layer, Rect, Line, Text, Group } from 'react-konva';
+import { Stage, Layer, Rect, Line, Text, Group, Image as KonvaImage } from 'react-konva';
 import useImage from 'use-image';
 import { Route, X, Trash2, Check, AlertTriangle, Plus, Square, Minus, ChevronLeft, MousePointerClick, Play, Loader2 } from 'lucide-react';
 import './SequencePanel.css';
@@ -23,7 +23,7 @@ function BackgroundImage({ src }) {
         <Group listening={false}>
             <Rect x={0} y={0} width={STAGE_W} height={STAGE_H} fill="#111318" />
             <Group x={(STAGE_W - image.width * scale) / 2} y={(STAGE_H - image.height * scale) / 2} scaleX={scale} scaleY={scale}>
-                <Rect width={image.width} height={image.height} fillPatternImage={image} />
+                <KonvaImage image={image} width={image.width} height={image.height} />
             </Group>
         </Group>
     );
