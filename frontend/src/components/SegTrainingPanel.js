@@ -80,9 +80,12 @@ const EpochProgress = ({ meta }) => {
 //  SegTrainingPanel — instance-segmentation training (YOLO-seg)
 // ══════════════════════════════════════════════════════════════════
 const SegTrainingPanel = ({ project, onClose }) => {
-    const [segStatus, setSegStatus] = useState(null);
+    const [segSeedStatus, setSegSeedStatus] = useState(null);
+    const [segMainStatus, setSegMainStatus] = useState(null);
+    const [segLegacyStatus, setSegLegacyStatus] = useState(null);
     const [statusLoading, setStatusLoading] = useState(true);
     const [selectedModel, setSelectedModel] = useState(DEFAULT_SEG_MODEL);
+    const [modelType, setModelType] = useState('main'); // 'seed' | 'main'
     const [epochs, setEpochs] = useState(100);
     const [imgsz, setImgsz] = useState(640);
     const [batch, setBatch] = useState(-1);
@@ -146,7 +149,11 @@ const SegTrainingPanel = ({ project, onClose }) => {
     const loadStatus = useCallback(() => {
         setStatusLoading(true);
         axios.get(`${API_URL}/pipeline/model-details/${project.id}`)
-            .then(res => setSegStatus(res.data.seg || null))
+            .then(res => {
+                setSegSeedStatus(res.data.seg_seed || null);
+                setSegMainStatus(res.data.seg_main || null);
+                setSegLegacyStatus(res.data.seg || null);
+            })
             .catch(() => {})
             .finally(() => setStatusLoading(false));
     }, [project.id]);
@@ -202,7 +209,7 @@ const SegTrainingPanel = ({ project, onClose }) => {
         setLaunching(true);
         try {
             const res = await axios.post(`${API_URL}/pipeline/train-seg/${project.id}`, {
-                model_name: selectedModel, epochs, imgsz, preprocess, batch,
+                model_name: selectedModel, model_type: modelType, epochs, imgsz, preprocess, batch,
                 aug_fliplr: augFliplr ? 0.5 : 0.0,
                 aug_flipud: augFlipud ? 0.1 : 0.0,
                 aug_mosaic: augMosaic ? 0.5 : 0.0,
@@ -250,11 +257,25 @@ const SegTrainingPanel = ({ project, onClose }) => {
                             <div className="mtp-loading"><div className="mtp-spinner" /><span>Loading…</span></div>
                         ) : (
                             <div className="mtp-model-status-row">
-                                <div className={`mtp-model-chip ${segStatus?.exists ? 'mtp-model-chip--ok' : 'mtp-model-chip--none'}`}>
-                                    {segStatus?.exists ? '✅' : '○'} seg_best.pt {segStatus?.exists ? `(${segStatus.file_size_mb} MB)` : '(not trained yet)'}
+                                <div className={`mtp-model-chip ${segSeedStatus?.exists ? 'mtp-model-chip--ok' : 'mtp-model-chip--none'}`}>
+                                    {segSeedStatus?.exists ? '✅' : '○'} Seed {segSeedStatus?.exists ? `(${segSeedStatus.file_size_mb} MB)` : '(not trained yet)'}
                                 </div>
+                                <div className={`mtp-model-chip ${segMainStatus?.exists ? 'mtp-model-chip--ok' : 'mtp-model-chip--none'}`}>
+                                    {segMainStatus?.exists ? '✅' : '○'} Main {segMainStatus?.exists ? `(${segMainStatus.file_size_mb} MB)` : '(not trained yet)'}
+                                </div>
+                                {segLegacyStatus?.exists && (
+                                    <div className="mtp-model-chip mtp-model-chip--ok" title="Trained before the seed/main split existed — still used as a fallback">
+                                        ✅ Legacy seg_best.pt ({segLegacyStatus.file_size_mb} MB)
+                                    </div>
+                                )}
                             </div>
                         )}
+                        <div className="mtp-warning" style={{ marginTop: 8 }}>
+                            No segmentation model yet? Train <b>Seed</b> first on a small
+                            hand-annotated batch (20–50 images) so Auto-Annotate can propose
+                            masks for the rest — then train <b>Main</b> once more images are
+                            labeled. Auto-Annotate always prefers Main over Seed when both exist.
+                        </div>
                         <div className="mtp-warning" style={{ marginTop: 8 }}>
                             Draw at least one annotation with the Segment tool (mask outline, not a box or precision polyline) before training — bbox-only images are skipped.
                         </div>
@@ -307,6 +328,21 @@ const SegTrainingPanel = ({ project, onClose }) => {
 
                     <section className="mtp-section">
                         <p className="mtp-section-title">Training Config</p>
+
+                        <div className="mtp-tabs" style={{ marginBottom: 12 }}>
+                            <button
+                                type="button"
+                                className={`mtp-tab ${modelType === 'seed' ? 'mtp-tab--active' : ''}`}
+                                onClick={() => setModelType('seed')}
+                                disabled={running}
+                            >Seed (bootstrap)</button>
+                            <button
+                                type="button"
+                                className={`mtp-tab ${modelType === 'main' ? 'mtp-tab--active' : ''}`}
+                                onClick={() => setModelType('main')}
+                                disabled={running}
+                            >Main</button>
+                        </div>
 
                         <div className="mtp-model-row">
                             <label className="mtp-model-label">Starting Weights (YOLO-seg)</label>
@@ -500,7 +536,7 @@ const SegTrainingPanel = ({ project, onClose }) => {
                         onClick={handleTrain}
                         disabled={launching || running}
                     >
-                        {launching ? 'Queuing…' : running ? 'Training…' : <><Scissors size={16} /> Start Segmentation Training</>}
+                        {launching ? 'Queuing…' : running ? 'Training…' : <><Scissors size={16} /> Train {modelType === 'seed' ? 'Seed' : 'Main'} Segmentation Model</>}
                     </button>
                 </div>
             </div>

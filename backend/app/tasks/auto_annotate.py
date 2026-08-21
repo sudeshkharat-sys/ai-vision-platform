@@ -118,8 +118,9 @@ def auto_annotate_remaining(self, project_id: str, image_ids: list = None,
         shows up as an editable polyline ready to drag onto the object's
         true rotated outline — much faster than drawing one from scratch.
         "segment" uses the project's trained segmentation model
-        (seg_best.pt) and stores its ACTUAL predicted mask outline
-        (r.masks.xy) as the polygon — for projects annotated with the
+        (seg_main_best.pt, falling back to seg_seed_best.pt / legacy
+        seg_best.pt) and stores its ACTUAL predicted mask outline
+        (r.masks.xyn) as the polygon — for projects annotated with the
         Segment tool, so auto-annotate proposes the same shape they were
         trained on instead of a box.
     """
@@ -127,13 +128,16 @@ def auto_annotate_remaining(self, project_id: str, image_ids: list = None,
 
     # ── 1. Load the right model for the requested shape ──────────────
     is_segment = shape == "segment"
-    model_filename = "seg_best.pt" if is_segment else "seed_best.pt"
-    model_path = settings.model_dir.resolve() / project_id / model_filename
-    if not model_path.exists():
-        if is_segment:
+    if is_segment:
+        from ..services.seg_model import resolve_seg_model_path
+        model_path = resolve_seg_model_path(project_id)
+        if model_path is None:
             return {"error": "No trained segmentation model found. Train the segmentation "
-                              "model first, or use shape=bbox/polygon instead."}
-        return {"error": "Seed model not found. Train the seed model first."}
+                              "model (seed or main) first, or use shape=bbox/polygon instead."}
+    else:
+        model_path = settings.model_dir.resolve() / project_id / "seed_best.pt"
+        if not model_path.exists():
+            return {"error": "Seed model not found. Train the seed model first."}
 
     model = YOLO(str(model_path))
     class_map = model.names  # {cls_idx: 'class_name', ...}

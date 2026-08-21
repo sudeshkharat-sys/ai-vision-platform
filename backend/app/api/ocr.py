@@ -457,9 +457,12 @@ def _yolo_plate_region(project_id: str, img: np.ndarray, conf: float = 0.25):
 
 def _yolo_seg_predict_raw(project_id: str, img: np.ndarray, conf: float):
     """Load (and cache) the project's trained YOLO-seg model and run inference.
-    Returns raw ultralytics results, or None if no seg_best.pt exists."""
-    model_path = settings.model_dir.resolve() / project_id / "seg_best.pt"
-    if not model_path.exists():
+    Prefers seg_main_best.pt, falls back to seg_seed_best.pt, then the
+    legacy seg_best.pt name (pre seed/main split). Returns raw ultralytics
+    results, or None if no segmentation model has been trained yet."""
+    from ..services.seg_model import resolve_seg_model_path
+    model_path = resolve_seg_model_path(project_id)
+    if model_path is None:
         return None
 
     mtime = model_path.stat().st_mtime
@@ -1528,7 +1531,8 @@ class OcrAutoLabelRequest(BaseModel):
     #   LHS/RHS plate photos.
     # "segment" — the trained segmentation model's ACTUAL predicted mask
     #   outline (real per-character polygon, not a box), for projects
-    #   annotated with the Segment tool. Requires seg_best.pt to exist.
+    #   annotated with the Segment tool. Requires a trained seed or main
+    #   segmentation model to exist.
     shape: str = "bbox"
 
 
@@ -1550,12 +1554,12 @@ async def ocr_auto_annotate(
     req = body or OcrAutoLabelRequest()
 
     if req.shape == "segment":
-        seg_model_path = settings.model_dir.resolve() / project_id / "seg_best.pt"
-        if not seg_model_path.exists():
+        from ..services.seg_model import resolve_seg_model_path
+        if resolve_seg_model_path(project_id) is None:
             raise HTTPException(
                 status_code=404,
                 detail="No trained segmentation model found. Train the segmentation "
-                       "model (Train Segmentation Model) first, or use shape=bbox/polygon instead.",
+                       "model (seed or main) first, or use shape=bbox/polygon instead.",
             )
     else:
         model, classes, img_size = _load_project_model(project_id)

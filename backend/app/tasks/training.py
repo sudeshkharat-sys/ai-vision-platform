@@ -993,6 +993,7 @@ def train_seg_model(
     self,
     project_id: str,
     model_name: str = "yolo11n-seg.pt",
+    model_type: str = "main",
     epochs: int = 100,
     imgsz: int = 640,
     preprocess: bool = True,
@@ -1017,10 +1018,20 @@ def train_seg_model(
     infers task=segment from the checkpoint name.
 
     Phases mirror train_seed_model: DB reads -> dataset build -> train ->
-    persist seg_best.pt. Augmentation is tuned the same way too — most seg
+    persist the weights. Augmentation is tuned the same way too — most seg
     projects here are dotted/engraved CHARACTER masks, and flips/large
     rotations mirror glyph identity (S<->2, 6<->9) just as badly for a
     mask as for a box, so the same char-project auto-clamp applies.
+
+    model_type : str
+        "seed" persists seg_seed_best.pt — a fast bootstrap model meant to
+        be trained on a small, hand-annotated starter batch so that
+        auto-annotate (shape=segment) can propose masks for the rest.
+        "main" (default) persists seg_main_best.pt — the fuller model
+        trained once more of the project is labeled. Auto-annotate and
+        OCR reading prefer seg_main_best.pt when it exists, falling back
+        to seg_seed_best.pt, then the legacy seg_best.pt filename used
+        before this seed/main split existed.
     """
     db = StateDBConnector()
 
@@ -1126,7 +1137,8 @@ def train_seg_model(
         raise Ignore()
 
     best_model_path = results.save_dir / "weights" / "best.pt"
-    target_path = settings.model_dir / project_id / "seg_best.pt"
+    target_filename = "seg_seed_best.pt" if model_type == "seed" else "seg_main_best.pt"
+    target_path = settings.model_dir / project_id / target_filename
     target_path.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy(best_model_path, target_path)
     shutil.rmtree(dataset_path)

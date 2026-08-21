@@ -190,6 +190,7 @@ async def start_main_training(
 
 class TrainSegRequest(BaseModel):
     model_name: str = "yolo11n-seg.pt"
+    model_type: str = "main"  # "seed" -> seg_seed_best.pt | "main" -> seg_main_best.pt
     custom_weights: Optional[str] = None
     epochs: int = 100
     imgsz: int = 640
@@ -217,8 +218,10 @@ async def start_seg_training(
 ):
     await get_owned_project(project_id, current_user, db)
     req = body or TrainSegRequest()
+    if req.model_type not in ("seed", "main"):
+        raise HTTPException(status_code=400, detail="model_type must be 'seed' or 'main'")
     task = train_seg_model.delay(
-        project_id, req.model_name, req.epochs, req.imgsz, req.preprocess, req.batch,
+        project_id, req.model_name, req.model_type, req.epochs, req.imgsz, req.preprocess, req.batch,
         req.custom_weights, req.aug_fliplr, req.aug_flipud, req.aug_mosaic, req.aug_hsv_v,
         req.aug_hsv_h, req.aug_hsv_s, req.aug_degrees, req.aug_translate,
         req.aug_scale, req.aug_mixup, req.aug_copy_paste,
@@ -450,16 +453,22 @@ async def get_model_status(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Check whether trained seed/main models exist for this project."""
+    """Check whether trained seed/main models (detection and segmentation) exist for this project."""
     await get_owned_project(project_id, current_user, db)
     seed_path = settings.model_dir / project_id / "seed_best.pt"
     main_path = settings.model_dir / project_id / "main_best.pt"
+    seg_seed_path = settings.model_dir / project_id / "seg_seed_best.pt"
+    seg_main_path = settings.model_dir / project_id / "seg_main_best.pt"
     return {
         "has_seed_model":  seed_path.exists(),
         "model_path":      str(seed_path) if seed_path.exists() else None,
         "seed_model_path": str(seed_path) if seed_path.exists() else None,
         "has_main_model":  main_path.exists(),
         "main_model_path": str(main_path) if main_path.exists() else None,
+        "has_seg_seed_model": seg_seed_path.exists(),
+        "seg_seed_model_path": str(seg_seed_path) if seg_seed_path.exists() else None,
+        "has_seg_main_model": seg_main_path.exists(),
+        "seg_main_model_path": str(seg_main_path) if seg_main_path.exists() else None,
     }
 
 
@@ -472,9 +481,11 @@ async def get_model_details(
     """Return rich details about trained models for a project."""
     await get_owned_project(project_id, current_user, db)
 
-    seed_path = settings.model_dir / project_id / "seed_best.pt"
-    main_path = settings.model_dir / project_id / "main_best.pt"
-    seg_path  = settings.model_dir / project_id / "seg_best.pt"
+    seed_path     = settings.model_dir / project_id / "seed_best.pt"
+    main_path     = settings.model_dir / project_id / "main_best.pt"
+    seg_seed_path = settings.model_dir / project_id / "seg_seed_best.pt"
+    seg_main_path = settings.model_dir / project_id / "seg_main_best.pt"
+    seg_legacy_path = settings.model_dir / project_id / "seg_best.pt"  # pre seed/main split
 
     def file_info(path):
         if not path.exists():
@@ -506,9 +517,13 @@ async def get_model_details(
         }
 
     return {
-        "seed": {**file_info(seed_path), "last_job": await latest_job("seed_training")},
-        "main": {**file_info(main_path), "last_job": await latest_job("main_training")},
-        "seg":  {**file_info(seg_path),  "last_job": await latest_job("seg_training")},
+        "seed":     {**file_info(seed_path), "last_job": await latest_job("seed_training")},
+        "main":     {**file_info(main_path), "last_job": await latest_job("main_training")},
+        "seg_seed": {**file_info(seg_seed_path), "last_job": await latest_job("seg_training")},
+        "seg_main": {**file_info(seg_main_path), "last_job": await latest_job("seg_training")},
+        # Legacy single-stage seg model, from before the seed/main split — still
+        # used as a fallback by auto-annotate/OCR if neither of the above exist.
+        "seg":      file_info(seg_legacy_path),
     }
 
 
@@ -522,8 +537,8 @@ async def download_model(
     """Stream the trained model weights file as a download."""
     await get_owned_project(project_id, current_user, db)
 
-    if model_type not in ("seed", "main", "seg"):
-        raise HTTPException(status_code=400, detail="model_type must be 'seed', 'main', or 'seg'")
+    if model_type not in ("seed", "main", "seg", "seg_seed", "seg_main"):
+        raise HTTPException(status_code=400, detail="model_type must be 'seed', 'main', 'seg', 'seg_seed', or 'seg_main'")
 
     filename = f"{model_type}_best.pt"
     path = settings.model_dir / project_id / filename
