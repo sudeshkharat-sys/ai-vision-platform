@@ -132,6 +132,28 @@ _DEBUG_COLORS = {
     "watching": (250, 170, 11),         # blue — no event yet, just live progress
 }
 
+# Fixed palette (BGR) cycled through by class name so "hand" and "m" (or any
+# two classes) never render the same color — a hash-of-name would work too
+# but drifts between runs as classes are added/removed; a stable cycle over
+# a small palette is simpler to reason about and still visually distinct.
+_CLASS_PALETTE = [
+    (80, 220, 255),   # amber
+    (255, 140, 60),   # blue
+    (120, 220, 120),  # green
+    (200, 120, 255),  # pink
+    (60, 200, 255),   # gold
+    (255, 200, 80),   # cyan
+    (150, 150, 255),  # salmon
+    (255, 100, 200),  # violet
+]
+_class_color_cache: dict[str, tuple[int, int, int]] = {}
+
+
+def _color_for_class(class_name: str) -> tuple[int, int, int]:
+    if class_name not in _class_color_cache:
+        _class_color_cache[class_name] = _CLASS_PALETTE[len(_class_color_cache) % len(_CLASS_PALETTE)]
+    return _class_color_cache[class_name]
+
 
 def _draw_overlay(frame, detections: list[dict], target: dict | None, reason: str):
     """Draw detection boxes/labels + the current step's region onto a copy
@@ -139,7 +161,9 @@ def _draw_overlay(frame, detections: list[dict], target: dict | None, reason: st
     continuously-overwritten live frame. Detections with a real
     segmentation mask (from the segmenter) get their actual polygon
     outline + a light fill drawn instead of just a bounding box, so the
-    snapshot reflects what the segmenter actually saw, not an approximation."""
+    snapshot reflects what the segmenter actually saw, not an approximation.
+    Each class gets its own color so different classes are distinguishable
+    at a glance instead of every detection looking identical."""
     img = frame.copy()
     h, w = img.shape[:2]
 
@@ -147,17 +171,18 @@ def _draw_overlay(frame, detections: list[dict], target: dict | None, reason: st
         x1, y1, x2, y2 = det["xyxy"]
         p1, p2 = (int(x1 * w), int(y1 * h)), (int(x2 * w), int(y2 * h))
         label_anchor = p1
+        color = _color_for_class(det["class_name"])
 
         mask = det.get("mask")
         if mask and len(mask) >= 3:
             pts = np.array([[int(px * w), int(py * h)] for px, py in mask], dtype=np.int32)
             overlay = img.copy()
-            cv2.fillPoly(overlay, [pts], (80, 220, 255))
+            cv2.fillPoly(overlay, [pts], color)
             cv2.addWeighted(overlay, 0.3, img, 0.7, 0, img)
-            cv2.polylines(img, [pts], isClosed=True, color=(80, 220, 255), thickness=2)
+            cv2.polylines(img, [pts], isClosed=True, color=color, thickness=2)
             label_anchor = (int(pts[:, 0].min()), int(pts[:, 1].min()))
         else:
-            cv2.rectangle(img, p1, p2, (255, 255, 255), 1)
+            cv2.rectangle(img, p1, p2, color, 2)
 
         label = f'{det["class_name"]} {det.get("conf", 0):.2f}'
         cv2.putText(img, label, (label_anchor[0], max(14, label_anchor[1] - 6)),
