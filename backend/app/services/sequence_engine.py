@@ -5,19 +5,21 @@ The per-run state machine: given a saved sequence's ordered steps and a
 stream of per-frame detections, tracks how far through the sequence a
 single tracked object has progressed.
 
-This module does NOT track objects across frames (no ByteTrack) — the
-caller is expected to already know which detection is "the" object being
-followed for this run (e.g. the highest-confidence detection of the
-current step's required class). That keeps this class simple, testable
-with fake data, and swappable later for a real multi-object tracker
-without changing its interface.
+A step can require MORE THAN ONE class to be present in its region at
+once — e.g. ["hand", "m"] to require a finger AND the letter "m" both
+detected overlapping the same key region in the same frame, not just
+either one alone. This is an AND condition across classes, not tracked
+as separate objects with IDs (no ByteTrack yet) — for each required
+class, the highest-overlap detection of that class this frame is used.
+That keeps this class simple, testable with fake data, and swappable
+later for a real multi-object tracker without changing its interface.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from .sequence_geometry import step_matches
+from .sequence_geometry import step_matches, box_from_region_coords, overlap_ratio
 
 
 @dataclass
@@ -29,13 +31,23 @@ class StepEvent:
     reason: str  # "matched" | "wrong_region_reset" | "wrong_region_ignored"
 
 
+def _step_classes(step: dict) -> list[str]:
+    """A step's required classes — required_classes if set (2+ classes,
+    ALL must be present at once), else the single legacy required_class."""
+    classes = step.get("required_classes")
+    if classes:
+        return list(classes)
+    return [step["required_class"]]
+
+
 @dataclass
 class SequenceRunState:
     steps: list[dict]
     mode: str = "strict"                # "strict" | "lenient"
     overlap_threshold: float = 0.5
     current_step: int = 0
-    prev_center: tuple[float, float] | None = None
+    # Per-class last-seen center point, for line-region crossing checks.
+    prev_centers: dict[str, tuple[float, float]] = field(default_factory=dict)
     events: list[StepEvent] = field(default_factory=list)
 
     @property
@@ -56,34 +68,32 @@ class SequenceRunState:
             return None
 
         target = self.current_target()
-        required_class = target["required_class"]
+        needed_classes = _step_classes(target)
+        region_xyxy = box_from_region_coords(target["region_coords"]) if target["region_type"] == "box" else None
 
-        # Best candidate: highest-overlap detection of the required class.
-        best_xyxy, best_score = None, 0.0
-        wrong_region_hit = False
+        # Every required class must independently match this step's region
+        # in this same frame — an AND condition, not "any one of them".
+        per_class_matched = {}
+        for cls in needed_classes:
+            best_xyxy, best_score = None, 0.0
+            for det in detections:
+                if det["class_name"] != cls:
+                    continue
+                if region_xyxy is not None:
+                    score = overlap_ratio(det["xyxy"], region_xyxy)
+                    if score > best_score:
+                        best_score, best_xyxy = score, det["xyxy"]
+                elif best_xyxy is None:
+                    best_xyxy = det["xyxy"]  # line region: track for crossing check below
 
-        for det in detections:
-            if det["class_name"] != required_class:
-                continue
-            from .sequence_geometry import box_from_region_coords, overlap_ratio
-            region_xyxy = box_from_region_coords(target["region_coords"]) if target["region_type"] == "box" else None
+            class_matched = False
+            if best_xyxy is not None:
+                class_matched = step_matches(target, best_xyxy, self.prev_centers.get(cls), self.overlap_threshold)
+                dx1, dy1, dx2, dy2 = best_xyxy
+                self.prev_centers[cls] = ((dx1 + dx2) / 2, (dy1 + dy2) / 2)
+            per_class_matched[cls] = class_matched
 
-            if region_xyxy is not None:
-                score = overlap_ratio(det["xyxy"], region_xyxy)
-                if score > best_score:
-                    best_score, best_xyxy = score, det["xyxy"]
-
-        matched = False
-        if best_xyxy is not None:
-            matched = step_matches(target, best_xyxy, self.prev_center, self.overlap_threshold)
-
-        # Track motion center for line-region crossing checks next frame,
-        # using whichever detection of the required class we saw (even if no match).
-        for det in detections:
-            if det["class_name"] == required_class:
-                dx1, dy1, dx2, dy2 = det["xyxy"]
-                self.prev_center = ((dx1 + dx2) / 2, (dy1 + dy2) / 2)
-                break
+        matched = bool(needed_classes) and all(per_class_matched.values())
 
         if matched:
             event = StepEvent(
@@ -95,22 +105,27 @@ class SequenceRunState:
             )
             self.events.append(event)
             self.current_step += 1
-            self.prev_center = None  # reset motion history for the next step's region
+            # Reset motion history for the classes just used, so the next
+            # step's line-region (if any) starts without stale history.
+            for cls in needed_classes:
+                self.prev_centers.pop(cls, None)
             return event
 
-        # Check if a required-class detection landed in a DIFFERENT step's region
-        # (wrong-region hit) — only meaningful for box regions, where "landed in"
-        # is well defined without motion history.
-        for det in detections:
-            if det["class_name"] != required_class:
-                continue
-            for idx, step in enumerate(self.steps):
-                if idx == self.current_step or step["region_type"] != "box":
+        # Wrong-region hit: any of this step's required classes has a
+        # detection landing in a DIFFERENT step's box region instead.
+        wrong_region_hit = False
+        for cls in needed_classes:
+            for det in detections:
+                if det["class_name"] != cls:
                     continue
-                from .sequence_geometry import box_from_region_coords, overlap_ratio
-                region_xyxy = box_from_region_coords(step["region_coords"])
-                if overlap_ratio(det["xyxy"], region_xyxy) >= self.overlap_threshold:
-                    wrong_region_hit = True
+                for idx, step in enumerate(self.steps):
+                    if idx == self.current_step or step["region_type"] != "box":
+                        continue
+                    other_region = box_from_region_coords(step["region_coords"])
+                    if overlap_ratio(det["xyxy"], other_region) >= self.overlap_threshold:
+                        wrong_region_hit = True
+                        break
+                if wrong_region_hit:
                     break
             if wrong_region_hit:
                 break
@@ -125,7 +140,7 @@ class SequenceRunState:
             )
             self.events.append(event)
             self.current_step = 0
-            self.prev_center = None
+            self.prev_centers = {}
             return event
 
         if wrong_region_hit:  # lenient

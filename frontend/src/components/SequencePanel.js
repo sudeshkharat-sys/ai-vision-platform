@@ -119,8 +119,9 @@ export default function SequencePanel({ project, onClose }) {
         const dist = Math.hypot(x2 - x1, y2 - y1);
         if (dist < 8) { setDrawing(null); return; } // ignore accidental clicks
 
-        if (!pendingClass.trim()) {
-            setError('Set a "required object class" before drawing a new region.');
+        const classes = pendingClass.split(',').map(c => c.trim()).filter(Boolean);
+        if (classes.length === 0) {
+            setError('Set a "required object class" before drawing a new region — comma-separate two or more to require all of them at once (e.g. "hand, m").');
             setDrawing(null);
             return;
         }
@@ -135,7 +136,8 @@ export default function SequencePanel({ project, onClose }) {
             id,
             region_type: drawTool,
             region_coords: coords,
-            required_class: pendingClass.trim(),
+            required_class: classes[0],
+            required_classes: classes,
             label,
         }]);
         setStepOrder(prev => [...prev, id]);
@@ -184,6 +186,7 @@ export default function SequencePanel({ project, onClose }) {
                     region_type: r.region_type,
                     region_coords: r.region_coords,
                     required_class: r.required_class,
+                    required_classes: r.required_classes && r.required_classes.length > 1 ? r.required_classes : undefined,
                 };
             });
             const res = await axios.post(`${API_URL}/sequences/project/${project.id}`, {
@@ -312,7 +315,7 @@ export default function SequencePanel({ project, onClose }) {
                                                         <React.Fragment key={i}>
                                                             {i > 0 && <span className="sq-step-arrow">→</span>}
                                                             <span className="sq-step-chip" style={{ borderColor: STEP_COLORS[i % STEP_COLORS.length] }}>
-                                                                {s.label} <em>({s.required_class})</em>
+                                                                {s.label} <em>({(s.required_classes && s.required_classes.length > 1) ? s.required_classes.join(' + ') : s.required_class})</em>
                                                             </span>
                                                         </React.Fragment>
                                                     ))}
@@ -442,13 +445,14 @@ export default function SequencePanel({ project, onClose }) {
                                         />
                                         <input
                                             className="sq-class-input"
-                                            placeholder="required object class (e.g. finger)"
+                                            placeholder="required class(es), comma-separated (e.g. hand, m)"
                                             value={pendingClass}
                                             onChange={e => setPendingClass(e.target.value)}
                                         />
                                     </div>
                                     <p className="sq-hint sq-hint--tight">
                                         <MousePointerClick size={12} /> Draw a new region on empty canvas. Click an already-drawn region to reuse it as the next step (e.g. the "S" key a second time).
+                                        Enter two or more classes separated by commas (e.g. <code>hand, m</code>) to require ALL of them on that region at once.
                                     </p>
                                     <Stage
                                         ref={stageRef}
@@ -524,7 +528,7 @@ export default function SequencePanel({ project, onClose }) {
                                                         <span className="sq-step-dot" style={{ background: regionColor(regionId) }} />
                                                         <span className="sq-step-num">{i + 1}.</span>
                                                         <span className="sq-step-region-label">{r.label}</span>
-                                                        <span className="sq-step-class">{r.required_class}</span>
+                                                        <span className="sq-step-class">{(r.required_classes && r.required_classes.length > 1) ? r.required_classes.join(' + ') : r.required_class}</span>
                                                         <div className="sq-step-actions">
                                                             <button onClick={() => moveStep(i, -1)} disabled={i === 0} title="Move up">↑</button>
                                                             <button onClick={() => moveStep(i, 1)} disabled={i === stepOrder.length - 1} title="Move down">↓</button>

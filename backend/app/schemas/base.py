@@ -121,7 +121,16 @@ class SequenceStep(BaseModel):
     label: str
     region_type: str  # "box" | "line"
     region_coords: List[float]  # normalized [x1, y1, x2, y2]
+    # Kept for backward compatibility with sequences saved before
+    # required_classes existed — treated as required_classes[0] if that
+    # list is absent.
     required_class: str
+    # If set (2+ entries), ALL of these classes must have a detection
+    # overlapping this region in the SAME frame for the step to pass —
+    # e.g. ["hand", "m"] to require a finger AND the letter "m" both
+    # present over the same key region at once. A single-entry list
+    # behaves the same as the old required_class-only steps.
+    required_classes: Optional[List[str]] = None
 
 
 class RegionSequenceCreate(BaseModel):
