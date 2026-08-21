@@ -115,14 +115,24 @@ def auto_annotate_remaining(self, project_id: str, image_ids: list = None,
     shape : str
         "bbox" (default) inserts plain axis-aligned boxes. "polygon" inserts
         each detection as a 4-corner polygon (the box's own corners) so it
-        shows up as an editable polyline ready to drag onto the character's
+        shows up as an editable polyline ready to drag onto the object's
         true rotated outline — much faster than drawing one from scratch.
+        "segment" uses the project's trained segmentation model
+        (seg_best.pt) and stores its ACTUAL predicted mask outline
+        (r.masks.xy) as the polygon — for projects annotated with the
+        Segment tool, so auto-annotate proposes the same shape they were
+        trained on instead of a box.
     """
     db = StateDBConnector()
 
-    # ── 1. Check seed model (no DB needed) ──────────────────────────
-    model_path = settings.model_dir.resolve() / project_id / "seed_best.pt"
+    # ── 1. Load the right model for the requested shape ──────────────
+    is_segment = shape == "segment"
+    model_filename = "seg_best.pt" if is_segment else "seed_best.pt"
+    model_path = settings.model_dir.resolve() / project_id / model_filename
     if not model_path.exists():
+        if is_segment:
+            return {"error": "No trained segmentation model found. Train the segmentation "
+                              "model first, or use shape=bbox/polygon instead."}
         return {"error": "Seed model not found. Train the seed model first."}
 
     model = YOLO(str(model_path))
@@ -230,6 +240,31 @@ def auto_annotate_remaining(self, project_id: str, image_ids: list = None,
             # Build annotation rows — now storing confidence for filtering
             ann_rows = []
             for r in results:
+                if is_segment:
+                    if r.masks is None or r.boxes is None:
+                        continue
+                    # r.masks.xyn is already normalized (0-1) per-point — the
+                    # model's REAL predicted mask outline, not a box corner.
+                    for poly, box in zip(r.masks.xyn, r.boxes):
+                        cls_idx = int(box.cls[0].cpu().numpy())
+                        class_name = class_map.get(cls_idx)
+                        if not class_name or poly is None or len(poly) < 3:
+                            continue
+                        box_conf = float(box.conf[0].cpu().numpy())
+                        xywhn = box.xywhn[0].cpu().numpy().tolist()
+                        points = [[float(px), float(py)] for px, py in poly]
+                        ann_rows.append({
+                            "ann_id":          str(uuid.uuid4()),
+                            "image_id":        img["id"],
+                            "class_name":      class_name,
+                            "bbox":            xywhn,
+                            "conf":            box_conf,
+                            "annotation_type": "polygon",
+                            "bbox_json":       json.dumps(xywhn),
+                            "points_json":     json.dumps(points),
+                        })
+                    continue
+
                 for box in r.boxes:
                     cls_idx = int(box.cls[0].cpu().numpy())
                     class_name = class_map.get(cls_idx)

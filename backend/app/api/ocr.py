@@ -1522,8 +1522,14 @@ async def predict_ocr(
 class OcrAutoLabelRequest(BaseModel):
     image_ids: Optional[List[str]] = None
     min_conf: float = 0.5
-    shape: str = "bbox"  # "bbox" | "polygon" — polygon gives editable polylines,
-                          # useful for angled LHS/RHS plate photos
+    # "bbox" — plain axis-aligned boxes from the character detector.
+    # "polygon" — same detector, but stores the box's own 4 corners as an
+    #   editable polyline (a rectangle you can then drag), for angled
+    #   LHS/RHS plate photos.
+    # "segment" — the trained segmentation model's ACTUAL predicted mask
+    #   outline (real per-character polygon, not a box), for projects
+    #   annotated with the Segment tool. Requires seg_best.pt to exist.
+    shape: str = "bbox"
 
 
 @router.post("/auto-annotate/{project_id}")
@@ -1541,8 +1547,18 @@ async def ocr_auto_annotate(
     faster after every training cycle.
     """
     await get_owned_project(project_id, current_user, db)
-    model, classes, img_size = _load_project_model(project_id)
     req = body or OcrAutoLabelRequest()
+
+    if req.shape == "segment":
+        seg_model_path = settings.model_dir.resolve() / project_id / "seg_best.pt"
+        if not seg_model_path.exists():
+            raise HTTPException(
+                status_code=404,
+                detail="No trained segmentation model found. Train the segmentation "
+                       "model (Train Segmentation Model) first, or use shape=bbox/polygon instead.",
+            )
+    else:
+        model, classes, img_size = _load_project_model(project_id)
 
     q = select(Image).where(Image.project_id == project_id, Image.status == "pending")
     if req.image_ids:
@@ -1568,36 +1584,69 @@ async def ocr_auto_annotate(
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         H, W = gray.shape
 
-        boxes = _yolo_char_boxes(project_id, img)
-        if boxes is None:
-            boxes, _region = _segment_with_plate_hint(project_id, img, gray)
-        crops, kept = [], []
-        for (x, y, w, h) in boxes:
-            bbox = [(x + w / 2) / W, (y + h / 2) / H, w / W, h / H]
-            crop = _extract_char_crop(img, bbox, img_size)
-            if crop is not None:
-                crops.append(crop)
-                kept.append(bbox)
-        if not crops:
-            continue
-
-        batch = np.stack(crops).astype(np.float32)[..., None] / 255.0
-        probs = model.predict(batch, verbose=0)
-
         added = 0
-        for bbox, p in zip(kept, probs):
-            idx = int(p.argmax())
-            if float(p[idx]) < req.min_conf:
+
+        if req.shape == "segment":
+            # Real per-character mask outline from the trained seg model —
+            # not a box, the actual predicted polygon (r.masks.xy).
+            results = _yolo_seg_predict_raw(project_id, img, conf=req.min_conf)
+            if results is None:
                 continue
-            db.add(Annotation(
-                image_id=img_row.id,
-                class_name=classes[idx],
-                bbox=bbox,
-                annotation_type="polygon" if req.shape == "polygon" else "bbox",
-                points=_bbox_to_points(bbox) if req.shape == "polygon" else None,
-                source="auto",
-            ))
-            added += 1
+            for r in results:
+                if r.masks is None or r.boxes is None:
+                    continue
+                names = r.names
+                for poly, b in zip(r.masks.xy, r.boxes):
+                    label = str(names.get(int(b.cls[0]), "")).strip()
+                    conf = float(b.conf[0])
+                    if not label or poly is None or len(poly) < 3 or conf < req.min_conf:
+                        continue
+                    x1, y1, x2, y2 = (float(v) for v in b.xyxy[0])
+                    w, h = x2 - x1, y2 - y1
+                    if w < 2 or h < 2:
+                        continue
+                    bbox = [(x1 + w / 2) / W, (y1 + h / 2) / H, w / W, h / H]
+                    points = [[float(px) / W, float(py) / H] for px, py in poly]
+                    db.add(Annotation(
+                        image_id=img_row.id,
+                        class_name=label,
+                        bbox=bbox,
+                        annotation_type="polygon",
+                        points=points,
+                        source="auto",
+                    ))
+                    added += 1
+        else:
+            boxes = _yolo_char_boxes(project_id, img)
+            if boxes is None:
+                boxes, _region = _segment_with_plate_hint(project_id, img, gray)
+            crops, kept = [], []
+            for (x, y, w, h) in boxes:
+                bbox = [(x + w / 2) / W, (y + h / 2) / H, w / W, h / H]
+                crop = _extract_char_crop(img, bbox, img_size)
+                if crop is not None:
+                    crops.append(crop)
+                    kept.append(bbox)
+            if not crops:
+                continue
+
+            batch = np.stack(crops).astype(np.float32)[..., None] / 255.0
+            probs = model.predict(batch, verbose=0)
+
+            for bbox, p in zip(kept, probs):
+                idx = int(p.argmax())
+                if float(p[idx]) < req.min_conf:
+                    continue
+                db.add(Annotation(
+                    image_id=img_row.id,
+                    class_name=classes[idx],
+                    bbox=bbox,
+                    annotation_type="polygon" if req.shape == "polygon" else "bbox",
+                    points=_bbox_to_points(bbox) if req.shape == "polygon" else None,
+                    source="auto",
+                ))
+                added += 1
+
         if added:
             img_row.status = "annotated"
             labeled += added

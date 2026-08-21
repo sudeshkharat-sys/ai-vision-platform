@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import axios from 'axios';
 import './AutoAnnotatePanel.css';
-import { Sparkles, X, RefreshCw, Square, AlertTriangle, Check, ChevronLeft, Clock, Clipboard, PenTool } from 'lucide-react';
+import { Sparkles, X, RefreshCw, Square, AlertTriangle, Check, ChevronLeft, Clock, Clipboard, PenTool, Scissors } from 'lucide-react';
 import logoImg from '../logo.png';
 
 import { API_URL, BASE_URL } from '../config';
@@ -547,7 +547,11 @@ const AutoAnnotatePanel = ({ project, onClose, onAnnotationsUpdated }) => {
                                 <div className="aap-conf-row">
                                     <label className="aap-conf-label">
                                         Annotation shape
-                                        <span className="aap-conf-hint">Polyline gives editable corners — drag to hug rotated/angled shapes</span>
+                                        <span className="aap-conf-hint">
+                                            {shape === 'segment'
+                                                ? "Uses the trained Segmentation model's actual predicted mask outline"
+                                                : 'Polyline gives editable corners — drag to hug rotated/angled shapes'}
+                                        </span>
                                     </label>
                                     <div className="aap-shape-toggle">
                                         <button
@@ -560,6 +564,12 @@ const AutoAnnotatePanel = ({ project, onClose, onAnnotationsUpdated }) => {
                                             className={`aap-shape-btn ${shape === 'polygon' ? 'aap-shape-btn--active' : ''}`}
                                             onClick={() => setShape('polygon')}
                                         ><PenTool size={13} /> Polyline</button>
+                                        <button
+                                            type="button"
+                                            className={`aap-shape-btn ${shape === 'segment' ? 'aap-shape-btn--active' : ''}`}
+                                            onClick={() => setShape('segment')}
+                                            title="Requires a trained segmentation model (Train Segmentation Model)"
+                                        ><Scissors size={13} /> Segment</button>
                                     </div>
                                 </div>
                             </section>

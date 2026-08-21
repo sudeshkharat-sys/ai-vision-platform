@@ -786,8 +786,9 @@ Do you want to proceed?`;
     const handleOcrAutoLabel = async () => {
         setOcrAutoLabeling(true);
         try {
+            const shapeForMode = drawMode === 'segment' ? 'segment' : drawMode === 'polyline' ? 'polygon' : 'bbox';
             const res = await axios.post(`${API_URL}/ocr/auto-annotate/${project.id}`, {
-                shape: drawMode === 'polyline' ? 'polygon' : 'bbox',
+                shape: shapeForMode,
             });
             showStatus(`✓ ${res.data.detail || `Pre-labeled ${res.data.labeled} characters.`}`);
             // Refresh image list + current image's annotations
@@ -1335,9 +1336,9 @@ Do you want to proceed?`;
                             className="btn-action btn-action-secondary"
                             onClick={handleOcrAutoLabel}
                             disabled={ocrAutoLabeling || images.filter(img => img.status === 'pending').length === 0}
-                            title={`Use the trained OCR model to pre-label pending photos as ${drawMode === 'polyline' ? 'polylines' : 'boxes'} (current canvas tool) — review and correct after`}
+                            title={`Use the trained OCR model to pre-label pending photos as ${drawMode === 'segment' ? 'segmentation masks (requires a trained segmentation model)' : drawMode === 'polyline' ? 'polylines' : 'boxes'} (current canvas tool) — review and correct after`}
                         >
-                            <Sparkles size={14} /> {ocrAutoLabeling ? 'Labeling…' : `Auto-Label Characters (${drawMode === 'polyline' ? 'Polyline' : 'Box'})`}
+                            <Sparkles size={14} /> {ocrAutoLabeling ? 'Labeling…' : `Auto-Label Characters (${drawMode === 'segment' ? 'Segment' : drawMode === 'polyline' ? 'Polyline' : 'Box'})`}
                         </button>
                         <button
                             className="btn-action btn-action-al"
@@ -1397,9 +1398,9 @@ Do you want to proceed?`;
                             className="btn-action btn-action-secondary"
                             onClick={handleOcrAutoLabel}
                             disabled={ocrAutoLabeling || images.filter(img => img.status === 'pending').length === 0}
-                            title={`Use the trained OCR model to pre-label pending photos as ${drawMode === 'polyline' ? 'polylines' : 'boxes'} (current canvas tool) — review and correct after`}
+                            title={`Use the trained OCR model to pre-label pending photos as ${drawMode === 'segment' ? 'segmentation masks (requires a trained segmentation model)' : drawMode === 'polyline' ? 'polylines' : 'boxes'} (current canvas tool) — review and correct after`}
                         >
-                            <Sparkles size={14} /> {ocrAutoLabeling ? 'Labeling…' : `Auto-Label Characters (${drawMode === 'polyline' ? 'Polyline' : 'Box'})`}
+                            <Sparkles size={14} /> {ocrAutoLabeling ? 'Labeling…' : `Auto-Label Characters (${drawMode === 'segment' ? 'Segment' : drawMode === 'polyline' ? 'Polyline' : 'Box'})`}
                         </button>
                         <button
                             className="btn-action btn-action-al"
