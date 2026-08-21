@@ -347,6 +347,24 @@
   flex: 1;
   text-align: right;
 }
+.rp-draw-mode-toggle {
+  display: flex;
+  gap: 3px;
+  flex-shrink: 0;
+}
+.rp-draw-mode-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: 1px solid #e5e5e5;
+  border-radius: 5px;
+  padding: 4px 6px;
+  cursor: pointer;
+  color: #666;
+}
+.rp-draw-mode-btn:hover { background: #f5f5f5; }
+.rp-draw-mode-btn--active { background: #dc143c; border-color: #dc143c; color: #fff; }
 .rp-zoom-btn {
   display: inline-flex;
   align-items: center;

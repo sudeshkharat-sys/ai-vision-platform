@@ -3,7 +3,7 @@ import axios from 'axios';
 import { Stage, Layer, Rect, Line, Text, Image as KonvaImg, Group } from 'react-konva';
 import useImage from 'use-image';
 import './ReviewPanel.css';
-import { Check, X, Sparkles, ChevronLeft, ChevronRight, ZoomIn, ZoomOut, Maximize2, Trash2 } from 'lucide-react';
+import { Check, X, Sparkles, ChevronLeft, ChevronRight, ZoomIn, ZoomOut, Maximize2, Trash2, Square, PenTool, Scissors } from 'lucide-react';
 import logoImg from '../logo.png';
 
 import { API_URL, BASE_URL } from '../config';
@@ -85,6 +85,11 @@ export default function ReviewPanel({ project, images, onClose, onAnnotationsUpd
     const [isDrawing, setIsDrawing] = useState(false);
     const [newAnnotation, setNewAnnotation] = useState(null);
     const [pendingAnnotation, setPendingAnnotation] = useState(null);
+    const [drawMode, setDrawMode] = useState('box'); // 'box' | 'polyline' | 'segment'
+    const [newPolylinePoints, setNewPolylinePoints] = useState([]); // [{x,y}, ...] while drawing
+    const [polylineCursor, setPolylineCursor] = useState(null);
+    const [pendingPolyline, setPendingPolyline] = useState(null); // finished points, awaiting class
+    const [pendingShapeType, setPendingShapeType] = useState(null); // 'polygon' | 'segment'
     const [statusMsg, setStatusMsg] = useState(null);
     // Actual displayed dimensions after EXIF orientation is applied by the browser
     const [loadedImageSize, setLoadedImageSize] = useState(null);
@@ -348,9 +353,14 @@ export default function ReviewPanel({ project, images, onClose, onAnnotationsUpd
     // Keyboard shortcuts
     useEffect(() => {
         const handler = (e) => {
-            if (pendingAnnotation) return;
+            if (pendingAnnotation || pendingPolyline) return;
             const tag = document.activeElement?.tagName;
             if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+
+            if ((drawMode === 'polyline' || drawMode === 'segment') && newPolylinePoints.length > 0) {
+                if (e.key === 'Enter') { e.preventDefault(); finishPolyline(); return; }
+                if (e.key === 'Escape') { e.preventDefault(); cancelPolyline(); return; }
+            }
 
             if (e.key === 'ArrowRight') { e.preventDefault(); navigate(1); }
             if (e.key === 'ArrowLeft')  { e.preventDefault(); navigate(-1); }
@@ -360,7 +370,7 @@ export default function ReviewPanel({ project, images, onClose, onAnnotationsUpd
         };
         window.addEventListener('keydown', handler);
         return () => window.removeEventListener('keydown', handler);
-    }, [pendingAnnotation, navigate, handleAcceptAll, handleRejectAll, onClose, onAnnotationsUpdated]);
+    }, [pendingAnnotation, pendingPolyline, drawMode, newPolylinePoints, finishPolyline, cancelPolyline, navigate, handleAcceptAll, handleRejectAll, onClose, onAnnotationsUpdated]);
 
     // Zoom via mouse wheel — zoom around the cursor point
     const handleWheel = (e) => {
@@ -388,15 +398,25 @@ export default function ReviewPanel({ project, images, onClose, onAnnotationsUpd
     const resetZoom = () => { setUserZoom(1); setStagePos({ x: 0, y: 0 }); };
 
     const handleMouseDown = (e) => {
-        if (pendingAnnotation) return;
+        if (pendingAnnotation || pendingPolyline) return;
         const cls = e.target.getClassName ? e.target.getClassName() : '';
-        if (cls === 'Rect' || cls === 'Group' || cls === 'Text') return;
+        if (cls === 'Rect' || cls === 'Group' || cls === 'Text' || cls === 'Line' || cls === 'Circle') return;
         const pos = e.target.getStage().getRelativePointerPosition();
+
+        if (drawMode === 'polyline' || drawMode === 'segment') {
+            setNewPolylinePoints(prev => [...prev, pos]);
+            return;
+        }
         setIsDrawing(true);
         setNewAnnotation({ x: pos.x, y: pos.y, width: 0, height: 0 });
     };
 
     const handleMouseMove = (e) => {
+        if (drawMode === 'polyline' || drawMode === 'segment') {
+            if (newPolylinePoints.length === 0) return;
+            setPolylineCursor(e.target.getStage().getRelativePointerPosition());
+            return;
+        }
         if (!isDrawing) return;
         const pos = e.target.getStage().getRelativePointerPosition();
         setNewAnnotation(prev => ({
@@ -407,6 +427,7 @@ export default function ReviewPanel({ project, images, onClose, onAnnotationsUpd
     };
 
     const handleMouseUp = () => {
+        if (drawMode === 'polyline' || drawMode === 'segment') return; // finished via double-click / Enter
         setIsDrawing(false);
         if (!newAnnotation || Math.abs(newAnnotation.width) < 5 / userZoom || Math.abs(newAnnotation.height) < 5 / userZoom) {
             setNewAnnotation(null);
@@ -418,32 +439,83 @@ export default function ReviewPanel({ project, images, onClose, onAnnotationsUpd
         setNewAnnotation(null);
     };
 
+    // Switching tools mid-draw discards whatever was in progress
+    const changeDrawMode = (mode) => {
+        setDrawMode(mode);
+        setIsDrawing(false);
+        setNewAnnotation(null);
+        setNewPolylinePoints([]);
+        setPolylineCursor(null);
+    };
+
+    const finishPolyline = useCallback(() => {
+        if (newPolylinePoints.length < 3) {
+            setNewPolylinePoints([]);
+            setPolylineCursor(null);
+            return;
+        }
+        setPendingPolyline(newPolylinePoints);
+        setPendingShapeType(drawMode === 'segment' ? 'segment' : 'polygon');
+        setNewPolylinePoints([]);
+        setPolylineCursor(null);
+    }, [newPolylinePoints, drawMode]);
+
+    const cancelPolyline = useCallback(() => {
+        setNewPolylinePoints([]);
+        setPolylineCursor(null);
+    }, []);
+
     const handleClassConfirm = async (className) => {
-        if (!pendingAnnotation || !currentImage) return;
-        const { x, y, width: w, height: h } = pendingAnnotation;
-        const bbox = [
-            (x + w / 2) / imgW,
-            (y + h / 2) / imgH,
-            w / imgW,
-            h / imgH,
-        ];
-        try {
-            const res = await axios.post(`${API_URL}/annotations`, {
+        if (!currentImage) return;
+
+        let payload;
+        if (pendingPolyline) {
+            const xs = pendingPolyline.map(p => p.x);
+            const ys = pendingPolyline.map(p => p.y);
+            const x1 = Math.min(...xs), x2 = Math.max(...xs);
+            const y1 = Math.min(...ys), y2 = Math.max(...ys);
+            const bbox = [
+                (x1 + x2) / 2 / imgW,
+                (y1 + y2) / 2 / imgH,
+                (x2 - x1) / imgW,
+                (y2 - y1) / imgH,
+            ];
+            payload = {
                 image_id: currentImage.id,
                 class_name: className,
                 bbox,
+                annotation_type: pendingShapeType === 'segment' ? 'segment' : 'polygon',
+                points: pendingPolyline.map(p => [p.x / imgW, p.y / imgH]),
                 source: 'manual',
-            });
+            };
+        } else if (pendingAnnotation) {
+            const { x, y, width: w, height: h } = pendingAnnotation;
+            const bbox = [
+                (x + w / 2) / imgW,
+                (y + h / 2) / imgH,
+                w / imgW,
+                h / imgH,
+            ];
+            payload = { image_id: currentImage.id, class_name: className, bbox, source: 'manual' };
+        } else {
+            return;
+        }
+
+        try {
+            const res = await axios.post(`${API_URL}/annotations`, payload);
             setAnnotations(prev => [...prev, res.data]);
             showStatus(`+ Added "${className}"`);
         } catch {
             // silent
         }
         setPendingAnnotation(null);
+        setPendingPolyline(null);
+        setPendingShapeType(null);
     };
 
     const autoCount = annotations.filter(a => a.source !== 'manual').length;
     const drawnBox = pendingAnnotation || newAnnotation;
+    const drawnPolylinePoints = pendingPolyline || newPolylinePoints;
     const progressPct = reviewImages.length > 0 ? (reviewedIds.size / reviewImages.length) * 100 : 0;
 
     // Class dropdown — shared between the normal view and the empty state, so
@@ -600,8 +672,27 @@ export default function ReviewPanel({ project, images, onClose, onAnnotationsUpd
                                     <div className="rp-canvas-toolbar">
                                         <span className="rp-canvas-filename">{currentImage.filename}</span>
                                         <span className="rp-canvas-dims">{imgW} × {imgH}px</span>
+                                        <div className="rp-draw-mode-toggle">
+                                            <button
+                                                className={`rp-draw-mode-btn ${drawMode === 'box' ? 'rp-draw-mode-btn--active' : ''}`}
+                                                onClick={() => changeDrawMode('box')}
+                                                title="Box tool"
+                                            ><Square size={13} /></button>
+                                            <button
+                                                className={`rp-draw-mode-btn ${drawMode === 'polyline' ? 'rp-draw-mode-btn--active' : ''}`}
+                                                onClick={() => changeDrawMode('polyline')}
+                                                title="Polyline tool — click to place points, double-click or Enter to finish, Esc to cancel"
+                                            ><PenTool size={13} /></button>
+                                            <button
+                                                className={`rp-draw-mode-btn ${drawMode === 'segment' ? 'rp-draw-mode-btn--active' : ''}`}
+                                                onClick={() => changeDrawMode('segment')}
+                                                title="Segment tool — trace the real mask outline"
+                                            ><Scissors size={13} /></button>
+                                        </div>
                                         <span className="rp-canvas-hint">
-                                            {'Draw a box to add annotation · scroll to zoom'}
+                                            {(drawMode === 'polyline' || drawMode === 'segment')
+                                                ? 'Click to place points · double-click or Enter to finish · Esc to cancel'
+                                                : 'Draw a box to add annotation · scroll to zoom'}
                                         </span>
                                         <button className="rp-zoom-btn" onClick={() => setUserZoom(z => Math.min(15, z * 1.3))} title="Zoom in"><ZoomIn size={14} /></button>
                                         <span className="rp-zoom-pct">{Math.round(userZoom * 100)}%</span>
@@ -633,6 +724,7 @@ export default function ReviewPanel({ project, images, onClose, onAnnotationsUpd
                                             onMouseDown={handleMouseDown}
                                             onMouseMove={handleMouseMove}
                                             onMouseUp={handleMouseUp}
+                                            onDblClick={(drawMode === 'polyline' || drawMode === 'segment') ? finishPolyline : undefined}
                                         >
                                             <Layer>
                                                 <CanvasImage
@@ -756,14 +848,29 @@ export default function ReviewPanel({ project, images, onClose, onAnnotationsUpd
                                                         fill="rgba(220,20,60,0.08)"
                                                     />
                                                 )}
+
+                                                {/* In-progress polyline/segment: placed points + a guide line to the cursor */}
+                                                {drawnPolylinePoints.length > 0 && (
+                                                    <Line
+                                                        points={[
+                                                            ...drawnPolylinePoints.flatMap(p => [p.x, p.y]),
+                                                            ...(polylineCursor && !pendingPolyline ? [polylineCursor.x, polylineCursor.y] : []),
+                                                        ]}
+                                                        closed={!!pendingPolyline}
+                                                        stroke="#dc143c"
+                                                        strokeWidth={2 / (scale * userZoom)}
+                                                        dash={[6 / (scale * userZoom), 3 / (scale * userZoom)]}
+                                                        fill={pendingPolyline ? 'rgba(220,20,60,0.08)' : undefined}
+                                                    />
+                                                )}
                                             </Layer>
                                         </Stage>
 
-                                        {pendingAnnotation && (
+                                        {(pendingAnnotation || pendingPolyline) && (
                                             <ClassPicker
                                                 classes={project.classes || []}
                                                 onConfirm={handleClassConfirm}
-                                                onCancel={() => setPendingAnnotation(null)}
+                                                onCancel={() => { setPendingAnnotation(null); setPendingPolyline(null); setPendingShapeType(null); }}
                                             />
                                         )}
                                     </div>
