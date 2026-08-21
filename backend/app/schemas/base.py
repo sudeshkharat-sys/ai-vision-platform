@@ -160,6 +160,34 @@ class RegionSequenceResponse(BaseModel):
         from_attributes = True
 
 
+# ── Single-image quick test (no save, no video needed) ────────────
+class SequenceTestImageRequest(BaseModel):
+    image_id: str
+    steps: List[SequenceStep] = Field(..., min_length=1)
+    overlap_threshold: float = Field(default=0.5, ge=0.0, le=1.0)
+
+
+class SequenceTestClassResult(BaseModel):
+    class_name: str
+    matched: bool
+    best_overlap: float
+
+
+class SequenceTestStepResult(BaseModel):
+    order_index: int
+    label: str
+    region_type: str
+    testable: bool  # False for line regions — no motion history in a single still image
+    passed: Optional[bool] = None
+    per_class: List[SequenceTestClassResult] = Field(default_factory=list)
+    note: Optional[str] = None
+
+
+class SequenceTestImageResponse(BaseModel):
+    image_id: str
+    results: List[SequenceTestStepResult]
+
+
 # ── Sequence run schemas ──────────────────────────────────────────
 class SequenceRunStepEvent(BaseModel):
     step_index: int

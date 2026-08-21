@@ -14,10 +14,11 @@ live/webcam path is still not implemented — see the design doc.
 
 from typing import List
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
+from ..config import settings
 from ..database import get_db
 from ..models.sequence import RegionSequence, SequenceRun
 from ..models.user import User
@@ -26,9 +27,11 @@ from ..schemas.base import (
     RegionSequenceUpdate,
     RegionSequenceResponse,
     SequenceRunResponse,
+    SequenceTestImageRequest,
+    SequenceTestImageResponse,
 )
 from ..api.auth import get_current_user
-from ..api.deps import get_owned_project, get_owned_sequence, get_owned_video, get_owned_sequence_run
+from ..api.deps import get_owned_project, get_owned_sequence, get_owned_video, get_owned_sequence_run, get_owned_image
 
 router = APIRouter(prefix="/sequences", tags=["sequences"])
 
@@ -169,3 +172,44 @@ async def list_sequence_runs(
         .order_by(SequenceRun.created_at.desc())
     )
     return result.scalars().all()
+
+
+@router.post("/test-image/{project_id}", response_model=SequenceTestImageResponse)
+async def test_sequence_on_image(
+    project_id: str,
+    body: SequenceTestImageRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Quick single-image check: run the project's trained model(s) once
+    against one existing image and report, per step, whether that step's
+    region+class(es) would currently match — without saving a sequence or
+    running a full video job. Line regions can't be tested this way (no
+    motion in a single image) and are reported as not testable."""
+    await get_owned_project(project_id, current_user, db)
+    image = await get_owned_image(body.image_id, current_user, db)
+
+    import cv2
+    from ..tasks.auto_annotate import _resolve_image_path
+    from ..services.sequence_test import collect_detections, evaluate_step
+
+    real_path = _resolve_image_path(image.filepath)
+    if real_path is None:
+        raise HTTPException(status_code=404, detail="Image file not found on disk")
+
+    img_bgr = cv2.imread(str(real_path))
+    if img_bgr is None:
+        raise HTTPException(status_code=422, detail="Could not decode image")
+
+    detections = collect_detections(project_id, img_bgr)
+    if not detections and not any(
+        (settings.model_dir.resolve() / project_id / name).exists()
+        for name in ("main_best.pt", "seed_best.pt", "seg_main_best.pt", "seg_seed_best.pt", "seg_best.pt")
+    ):
+        raise HTTPException(status_code=404, detail="No trained model found for this project yet.")
+
+    results = [
+        evaluate_step(step.model_dump(), detections, body.overlap_threshold)
+        for step in body.steps
+    ]
+    return {"image_id": body.image_id, "results": results}

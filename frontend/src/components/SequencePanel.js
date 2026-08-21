@@ -57,8 +57,17 @@ export default function SequencePanel({ project, onClose }) {
     const [drawing, setDrawing]         = useState(null); // in-progress shape
     const [pendingClass, setPendingClass] = useState('');
     const [pendingLabel, setPendingLabel] = useState('');
+    const [seqThreshold, setSeqThreshold] = useState(0.5);
+
+    // Quick single-image test — no save, no video, instant per-step check
+    const [testing, setTesting]         = useState(false);
+    const [testResults, setTestResults] = useState(null); // { results: [...] } | { error }
 
     const stageRef = useRef(null);
+
+    // Stale test results are worse than none — clear them whenever the
+    // steps or reference image change so nobody trusts an outdated pass/fail.
+    useEffect(() => { setTestResults(null); }, [stepOrder, refImage]);
 
     // ── Load sequences + images ──────────────────────────────────
     const fetchAll = useCallback(async () => {
@@ -172,26 +181,29 @@ export default function SequencePanel({ project, onClose }) {
         setStepOrder(prev => prev.filter(id => id !== regionId));
     };
 
-    // ── Save / delete sequence ──────────────────────────────────────
+    // ── Save / test / delete sequence ─────────────────────────────────
+    const buildStepsPayload = () => stepOrder.map((regionId, i) => {
+        const r = regions.find(reg => reg.id === regionId);
+        return {
+            order_index: i,
+            label: r.label,
+            region_type: r.region_type,
+            region_coords: r.region_coords,
+            required_class: r.required_class,
+            required_classes: r.required_classes && r.required_classes.length > 1 ? r.required_classes : undefined,
+        };
+    });
+
     const handleSave = async () => {
         if (!seqName.trim()) { setError('Give the sequence a name.'); return; }
         if (stepOrder.length === 0) { setError('Draw at least one region and add it to the sequence.'); return; }
         setError(null);
         try {
-            const steps = stepOrder.map((regionId, i) => {
-                const r = regions.find(reg => reg.id === regionId);
-                return {
-                    order_index: i,
-                    label: r.label,
-                    region_type: r.region_type,
-                    region_coords: r.region_coords,
-                    required_class: r.required_class,
-                    required_classes: r.required_classes && r.required_classes.length > 1 ? r.required_classes : undefined,
-                };
-            });
+            const steps = buildStepsPayload();
             const res = await axios.post(`${API_URL}/sequences/project/${project.id}`, {
                 name: seqName.trim(),
                 mode: seqMode,
+                overlap_threshold: seqThreshold,
                 steps,
             });
             setSequences(prev => [res.data, ...prev]);
@@ -199,6 +211,27 @@ export default function SequencePanel({ project, onClose }) {
             showSuccess(`Sequence "${res.data.name}" saved with ${steps.length} step${steps.length !== 1 ? 's' : ''}.`);
         } catch (err) {
             setError(err.response?.data?.detail || 'Failed to save sequence.');
+        }
+    };
+
+    const handleTestOnImage = async () => {
+        if (!refImage) { setError('Pick a reference frame to test against first.'); return; }
+        if (stepOrder.length === 0) { setError('Draw at least one region first.'); return; }
+        setError(null);
+        setTesting(true);
+        setTestResults(null);
+        try {
+            const steps = buildStepsPayload();
+            const res = await axios.post(`${API_URL}/sequences/test-image/${project.id}`, {
+                image_id: refImage.id,
+                steps,
+                overlap_threshold: seqThreshold,
+            });
+            setTestResults(res.data);
+        } catch (err) {
+            setTestResults({ error: err.response?.data?.detail || 'Test failed.' });
+        } finally {
+            setTesting(false);
         }
     };
 
@@ -400,6 +433,15 @@ export default function SequencePanel({ project, onClose }) {
                                     <option value="strict">Strict — wrong region resets progress</option>
                                     <option value="lenient">Lenient — wrong region is ignored</option>
                                 </select>
+                                <label className="sq-threshold-field" title="How much of the detected object's box must overlap a region to count as 'on it'">
+                                    Overlap ≥
+                                    <input
+                                        type="number" min="0.1" max="1" step="0.05"
+                                        className="sq-threshold-input"
+                                        value={seqThreshold}
+                                        onChange={e => setSeqThreshold(Math.min(1, Math.max(0.1, parseFloat(e.target.value) || 0.5)))}
+                                    />
+                                </label>
                             </div>
 
                             {images.length > 1 && (
@@ -558,11 +600,45 @@ export default function SequencePanel({ project, onClose }) {
                                             </div>
                                         </>
                                     )}
+
+                                    {testResults && (
+                                        <>
+                                            <h4 className="sq-steps-title sq-steps-title--spaced">Test result (single image, no order/motion check)</h4>
+                                            {testResults.error ? (
+                                                <p className="sq-hint" style={{ color: '#dc2626' }}>{testResults.error}</p>
+                                            ) : (
+                                                <ol className="sq-steps-list">
+                                                    {testResults.results.map((r, i) => (
+                                                        <li key={i} className="sq-test-row">
+                                                            <span className={`sq-test-badge ${!r.testable ? 'sq-test-badge--na' : r.passed ? 'sq-test-badge--pass' : 'sq-test-badge--fail'}`}>
+                                                                {!r.testable ? '—' : r.passed ? '✓' : '✕'}
+                                                            </span>
+                                                            <span className="sq-test-label">{r.label}</span>
+                                                            {r.note ? (
+                                                                <span className="sq-test-note">{r.note}</span>
+                                                            ) : (
+                                                                <span className="sq-test-classes">
+                                                                    {r.per_class.map((c, j) => (
+                                                                        <span key={j} className={`sq-test-class ${c.matched ? 'sq-test-class--ok' : 'sq-test-class--miss'}`}>
+                                                                            {c.class_name} ({(c.best_overlap * 100).toFixed(0)}%)
+                                                                        </span>
+                                                                    ))}
+                                                                </span>
+                                                            )}
+                                                        </li>
+                                                    ))}
+                                                </ol>
+                                            )}
+                                        </>
+                                    )}
                                 </div>
                             </div>
 
                             <div className="sq-builder-footer">
                                 <button className="sq-btn-cancel" onClick={() => setEditing(false)}>Cancel</button>
+                                <button className="sq-btn-test" onClick={handleTestOnImage} disabled={testing}>
+                                    {testing ? 'Testing…' : 'Test on Image'}
+                                </button>
                                 <button className="sq-btn-save" onClick={handleSave}><Check size={15} /> Save Sequence</button>
                             </div>
                         </div>
