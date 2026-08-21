@@ -65,7 +65,7 @@ export default function SequencePanel({ project, onClose }) {
 
     // Regions are the unique shapes drawn on the frame (a keyboard has one region per key).
     // stepOrder is the ordered sequence of region ids to visit — a region id CAN repeat
-    // (e.g. the "S" key region is visited twice when spelling "SUDESH").
+    // (e.g. the "A" checkpoint region is visited twice in a repeated pattern).
     const [regions, setRegions]         = useState([]); // {id, region_type, region_coords, required_class, label}
     const [stepOrder, setStepOrder]     = useState([]); // [regionId, regionId, ...]
 
@@ -379,7 +379,7 @@ export default function SequencePanel({ project, onClose }) {
                             <p className="sq-subtitle">
                                 {editing
                                     ? 'Draw regions, then click one to add it to the sequence — a region can be reused (e.g. a key pressed twice)'
-                                    : 'Define ordered region checkpoints — e.g. hand-gate 1 → 2 → 3, then key S → U → D → E → S → H'}
+                                    : 'Define ordered checkpoints — e.g. Checkpoint A → B → C, then class X → Y → Z'}
                             </p>
                         </div>
                     </div>
