@@ -350,6 +350,23 @@ export default function ReviewPanel({ project, images, onClose, onAnnotationsUpd
         }
     }, [activeClassName, project, reviewImages.length, onAnnotationsUpdated, showStatus, loadClassCounts]);
 
+    const finishPolyline = useCallback(() => {
+        if (newPolylinePoints.length < 3) {
+            setNewPolylinePoints([]);
+            setPolylineCursor(null);
+            return;
+        }
+        setPendingPolyline(newPolylinePoints);
+        setPendingShapeType(drawMode === 'segment' ? 'segment' : 'polygon');
+        setNewPolylinePoints([]);
+        setPolylineCursor(null);
+    }, [newPolylinePoints, drawMode]);
+
+    const cancelPolyline = useCallback(() => {
+        setNewPolylinePoints([]);
+        setPolylineCursor(null);
+    }, []);
+
     // Keyboard shortcuts
     useEffect(() => {
         const handler = (e) => {
@@ -447,23 +464,6 @@ export default function ReviewPanel({ project, images, onClose, onAnnotationsUpd
         setNewPolylinePoints([]);
         setPolylineCursor(null);
     };
-
-    const finishPolyline = useCallback(() => {
-        if (newPolylinePoints.length < 3) {
-            setNewPolylinePoints([]);
-            setPolylineCursor(null);
-            return;
-        }
-        setPendingPolyline(newPolylinePoints);
-        setPendingShapeType(drawMode === 'segment' ? 'segment' : 'polygon');
-        setNewPolylinePoints([]);
-        setPolylineCursor(null);
-    }, [newPolylinePoints, drawMode]);
-
-    const cancelPolyline = useCallback(() => {
-        setNewPolylinePoints([]);
-        setPolylineCursor(null);
-    }, []);
 
     const handleClassConfirm = async (className) => {
         if (!currentImage) return;
