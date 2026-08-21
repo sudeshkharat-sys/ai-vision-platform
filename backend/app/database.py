@@ -123,3 +123,11 @@ async def init_db() -> None:
         await conn.execute(text(
             "ALTER TABLE sequence_runs ADD COLUMN IF NOT EXISTS latest_frame_number INTEGER"
         ))
+        # Migration: remember the reference frame's orientation so a run can
+        # detect a landscape/portrait mismatch against the actual video
+        await conn.execute(text(
+            "ALTER TABLE region_sequences ADD COLUMN IF NOT EXISTS ref_image_width INTEGER"
+        ))
+        await conn.execute(text(
+            "ALTER TABLE region_sequences ADD COLUMN IF NOT EXISTS ref_image_height INTEGER"
+        ))

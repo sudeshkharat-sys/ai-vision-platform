@@ -328,6 +328,11 @@ region_sequences_table = create_dynamic_table(
     # JSONB: [{ order_index, label, region_type, region_coords, required_class }, ...]
     Column("steps", JSONB, nullable=False, server_default=text("'[]'::jsonb")),
     Column("overlap_threshold", Float, nullable=False, server_default=text("0.5")),
+    # Dimensions of the reference frame the regions were drawn against —
+    # lets a run detect a landscape/portrait mismatch against the actual
+    # video and auto-rotate frames to match before matching regions.
+    Column("ref_image_width", Integer, nullable=True),
+    Column("ref_image_height", Integer, nullable=True),
     Column(
         "created_at",
         DateTime(timezone=True),

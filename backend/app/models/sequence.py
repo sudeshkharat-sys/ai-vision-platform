@@ -20,6 +20,13 @@ class RegionSequence(Base):
     # Fraction of the detected object's box that must overlap a box region to count as "on it"
     overlap_threshold: Mapped[float] = mapped_column(Float, default=0.5)
 
+    # Dimensions of the reference frame the regions were drawn against —
+    # if a video run's frames come out in a different orientation
+    # (landscape vs portrait), the run auto-rotates them to match before
+    # evaluating regions, instead of silently matching against the wrong area.
+    ref_image_width: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    ref_image_height: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
     # Ordered list of steps:
     # [{ "order_index": 0, "label": "Middle Socket", "region_type": "box"|"line",
     #    "region_coords": [x1,y1,x2,y2] (normalized 0-1), "required_class": "bulb" }, ...]

@@ -244,6 +244,28 @@ def run_sequence_on_video(self, run_id: str) -> dict:
         _fail(db, run_id, "Could not open video file")
         return {"error": "Could not open video"}
 
+    # Regions were drawn against a reference frame with its own orientation.
+    # If the video's actual frames come out the other way round (e.g.
+    # regions drawn on a portrait reference but the raw video decodes as
+    # landscape, or vice versa), normalized region_coords land on
+    # completely the wrong part of the frame and every step silently fails.
+    # Auto-rotate every frame 90° to match the reference's orientation
+    # whenever they disagree.
+    rotate_code = None
+    ref_w, ref_h = sequence.get("ref_image_width"), sequence.get("ref_image_height")
+    if ref_w and ref_h:
+        video_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+        video_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+        ref_is_portrait = ref_h > ref_w
+        video_is_portrait = video_h > video_w
+        if video_w and video_h and ref_is_portrait != video_is_portrait:
+            rotate_code = cv2.ROTATE_90_CLOCKWISE
+            logger.info(
+                "Sequence run {}: reference frame is {} but video decodes as {} — rotating frames to match",
+                run_id, "portrait" if ref_is_portrait else "landscape",
+                "portrait" if video_is_portrait else "landscape",
+            )
+
     state = SequenceRunState(
         steps=steps,
         mode=sequence["mode"],
@@ -262,6 +284,8 @@ def run_sequence_on_video(self, run_id: str) -> dict:
             ok, frame = cap.read()
             if not ok:
                 break
+            if rotate_code is not None:
+                frame = cv2.rotate(frame, rotate_code)
             frame_number += 1
             if frame_number % FRAME_STRIDE != 0:
                 continue

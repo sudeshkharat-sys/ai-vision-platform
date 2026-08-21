@@ -52,6 +52,8 @@ async def create_sequence(
         mode=body.mode,
         overlap_threshold=body.overlap_threshold,
         steps=[step.model_dump() for step in body.steps],
+        ref_image_width=body.ref_image_width,
+        ref_image_height=body.ref_image_height,
     )
     db.add(seq)
     await db.commit()
@@ -101,6 +103,10 @@ async def update_sequence(
         seq.overlap_threshold = body.overlap_threshold
     if body.steps is not None:
         seq.steps = [step.model_dump() for step in body.steps]
+    if body.ref_image_width is not None:
+        seq.ref_image_width = body.ref_image_width
+    if body.ref_image_height is not None:
+        seq.ref_image_height = body.ref_image_height
 
     await db.commit()
     await db.refresh(seq)

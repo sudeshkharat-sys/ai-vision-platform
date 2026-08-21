@@ -278,6 +278,8 @@ export default function SequencePanel({ project, onClose }) {
                 mode: seqMode,
                 overlap_threshold: seqThreshold,
                 steps,
+                ref_image_width: refImage?.width,
+                ref_image_height: refImage?.height,
             });
             setSequences(prev => [res.data, ...prev]);
             setEditing(false);

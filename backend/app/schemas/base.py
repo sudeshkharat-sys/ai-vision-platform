@@ -150,6 +150,10 @@ class RegionSequenceCreate(BaseModel):
     mode: str = Field(default="strict")  # "strict" | "lenient"
     overlap_threshold: float = Field(default=0.5, ge=0.0, le=1.0)
     steps: List[SequenceStep] = Field(default_factory=list)
+    # Dimensions of the reference frame regions were drawn against — used
+    # at run time to detect a landscape/portrait mismatch vs the video.
+    ref_image_width: Optional[int] = None
+    ref_image_height: Optional[int] = None
 
 
 class RegionSequenceUpdate(BaseModel):
@@ -157,6 +161,8 @@ class RegionSequenceUpdate(BaseModel):
     mode: Optional[str] = None
     overlap_threshold: Optional[float] = Field(default=None, ge=0.0, le=1.0)
     steps: Optional[List[SequenceStep]] = None
+    ref_image_width: Optional[int] = None
+    ref_image_height: Optional[int] = None
 
 
 class RegionSequenceResponse(BaseModel):
@@ -166,6 +172,8 @@ class RegionSequenceResponse(BaseModel):
     mode: str
     overlap_threshold: float
     steps: List[SequenceStep]
+    ref_image_width: Optional[int] = None
+    ref_image_height: Optional[int] = None
     created_at: datetime
 
     class Config:
