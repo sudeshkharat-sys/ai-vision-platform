@@ -446,7 +446,7 @@ export default function SequencePanel({ project, onClose }) {
                                     >
                                         <Layer>
                                             {refImage && (
-                                                <BackgroundImage src={`${ORIGIN}${refImage.filepath}`} />
+                                                <BackgroundImage src={`${ORIGIN}${refImage.filepath}?w=${refImage.width}&h=${refImage.height}`} />
                                             )}
                                             {regions.map((r, i) => {
                                                 const color = STEP_COLORS[i % STEP_COLORS.length];
