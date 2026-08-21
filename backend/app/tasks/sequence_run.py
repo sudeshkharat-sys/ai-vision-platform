@@ -29,6 +29,7 @@ import os
 from pathlib import Path
 
 import cv2
+import numpy as np
 from loguru import logger
 from sqlalchemy import text
 from ultralytics import YOLO
@@ -135,16 +136,31 @@ _DEBUG_COLORS = {
 def _draw_overlay(frame, detections: list[dict], target: dict | None, reason: str):
     """Draw detection boxes/labels + the current step's region onto a copy
     of the frame. Shared by the permanent per-event snapshots and the
-    continuously-overwritten live frame."""
+    continuously-overwritten live frame. Detections with a real
+    segmentation mask (from the segmenter) get their actual polygon
+    outline + a light fill drawn instead of just a bounding box, so the
+    snapshot reflects what the segmenter actually saw, not an approximation."""
     img = frame.copy()
     h, w = img.shape[:2]
 
     for det in detections:
         x1, y1, x2, y2 = det["xyxy"]
         p1, p2 = (int(x1 * w), int(y1 * h)), (int(x2 * w), int(y2 * h))
-        cv2.rectangle(img, p1, p2, (255, 255, 255), 1)
+        label_anchor = p1
+
+        mask = det.get("mask")
+        if mask and len(mask) >= 3:
+            pts = np.array([[int(px * w), int(py * h)] for px, py in mask], dtype=np.int32)
+            overlay = img.copy()
+            cv2.fillPoly(overlay, [pts], (80, 220, 255))
+            cv2.addWeighted(overlay, 0.3, img, 0.7, 0, img)
+            cv2.polylines(img, [pts], isClosed=True, color=(80, 220, 255), thickness=2)
+            label_anchor = (int(pts[:, 0].min()), int(pts[:, 1].min()))
+        else:
+            cv2.rectangle(img, p1, p2, (255, 255, 255), 1)
+
         label = f'{det["class_name"]} {det.get("conf", 0):.2f}'
-        cv2.putText(img, label, (p1[0], max(14, p1[1] - 6)),
+        cv2.putText(img, label, (label_anchor[0], max(14, label_anchor[1] - 6)),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
 
     if target and target.get("target_type", "region") == "region" and target.get("region_type") == "box":
