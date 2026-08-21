@@ -124,6 +124,50 @@ def _detect_frame(detector: YOLO | None, segmenter: YOLO | None, frame) -> list[
     return detections
 
 
+_DEBUG_COLORS = {
+    "matched": (74, 222, 128),          # green
+    "wrong_region_reset": (68, 68, 239),  # red (BGR)
+    "wrong_region_ignored": (11, 170, 250),  # amber
+}
+
+
+def _save_debug_frame(frame, detections: list[dict], target: dict, project_id: str, run_id: str,
+                       frame_number: int, reason: str) -> str | None:
+    """Draw the frame's detections + the current step's region (if a box)
+    onto a copy of the frame and save it, so a run can actually be
+    debugged by looking at what the model saw at the moment a step
+    passed or reset — not just a text log. Returns the web-accessible
+    URL, or None if saving failed (never blocks the run itself)."""
+    try:
+        img = frame.copy()
+        h, w = img.shape[:2]
+
+        for det in detections:
+            x1, y1, x2, y2 = det["xyxy"]
+            p1, p2 = (int(x1 * w), int(y1 * h)), (int(x2 * w), int(y2 * h))
+            cv2.rectangle(img, p1, p2, (255, 255, 255), 1)
+            label = f'{det["class_name"]} {det.get("conf", 0):.2f}'
+            cv2.putText(img, label, (p1[0], max(14, p1[1] - 6)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
+
+        if target.get("target_type", "region") == "region" and target.get("region_type") == "box":
+            rx1, ry1, rx2, ry2 = target["region_coords"]
+            color = _DEBUG_COLORS.get(reason, (0, 165, 255))
+            cv2.rectangle(img, (int(rx1 * w), int(ry1 * h)), (int(rx2 * w), int(ry2 * h)), color, 2)
+
+        cv2.putText(img, f'Step: {target.get("label", "")}  ({reason})', (10, h - 12),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.55, _DEBUG_COLORS.get(reason, (255, 255, 255)), 1, cv2.LINE_AA)
+
+        out_dir = settings.upload_dir / project_id / "sequence_debug" / run_id
+        out_dir.mkdir(parents=True, exist_ok=True)
+        filename = f"frame_{frame_number}_{reason}.jpg"
+        cv2.imwrite(str(out_dir / filename), img, [cv2.IMWRITE_JPEG_QUALITY, 80])
+        return f"/uploads/{project_id}/sequence_debug/{run_id}/{filename}"
+    except Exception:
+        logger.exception("Failed to save debug frame for run {}", run_id)
+        return None
+
+
 @celery_app.task(bind=True, name="run_sequence_on_video")
 def run_sequence_on_video(self, run_id: str) -> dict:
     db = StateDBConnector()
@@ -180,6 +224,12 @@ def run_sequence_on_video(self, run_id: str) -> dict:
         overlap_threshold=sequence["overlap_threshold"],
     )
 
+    # Persistent log of event dicts (each optionally carrying a
+    # "frame_url" debug snapshot) — the single source of truth written to
+    # the DB both mid-run and at completion, so a debug image attached to
+    # an earlier event is never lost by re-deriving from state.events.
+    event_log: list[dict] = []
+
     frame_number = 0
     try:
         while True:
@@ -192,8 +242,23 @@ def run_sequence_on_video(self, run_id: str) -> dict:
 
             detections = _detect_frame(detector, segmenter, frame)
 
+            # The step being evaluated THIS frame — captured before
+            # process_frame() potentially advances current_step, so the
+            # debug snapshot shows the region/step that was actually judged.
+            evaluated_step = steps[state.current_step] if not state.is_complete else None
+
             event = state.process_frame(frame_number, detections)
             if event is not None:
+                event_dict = dict(event.__dict__)
+                if evaluated_step is not None:
+                    frame_url = _save_debug_frame(
+                        frame, detections, evaluated_step,
+                        sequence["project_id"], run_id, frame_number, event.reason,
+                    )
+                    if frame_url:
+                        event_dict["frame_url"] = frame_url
+                event_log.append(event_dict)
+
                 with db.get_session() as conn:
                     conn.execute(
                         text(
@@ -201,7 +266,7 @@ def run_sequence_on_video(self, run_id: str) -> dict:
                         ),
                         {
                             "cs": state.current_step,
-                            "events": json.dumps([e.__dict__ for e in state.events]),
+                            "events": json.dumps(event_log),
                             "id": run_id,
                         },
                     )
@@ -224,7 +289,7 @@ def run_sequence_on_video(self, run_id: str) -> dict:
             {
                 "passed": state.is_complete,
                 "cs": state.current_step,
-                "events": json.dumps([e.__dict__ for e in state.events]),
+                "events": json.dumps(event_log),
                 "id": run_id,
             },
         )

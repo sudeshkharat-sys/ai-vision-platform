@@ -477,10 +477,17 @@ export default function SequencePanel({ project, onClose }) {
                                                             {run.step_events.length > 0 && (
                                                                 <div className="sq-run-events">
                                                                     {run.step_events.map((ev, i) => (
-                                                                        <span key={i} className={`sq-run-event sq-run-event--${ev.reason}`}>
-                                                                            {ev.label} · frame {ev.frame_number}
-                                                                            {ev.reason === 'matched' ? ' ✓' : ev.reason === 'wrong_region_reset' ? ' ✗ reset' : ' (ignored)'}
-                                                                        </span>
+                                                                        <div key={i} className={`sq-run-event-card sq-run-event-card--${ev.reason}`}>
+                                                                            {ev.frame_url && (
+                                                                                <a href={`${ORIGIN}${ev.frame_url}`} target="_blank" rel="noopener noreferrer">
+                                                                                    <img className="sq-run-event-thumb" src={`${ORIGIN}${ev.frame_url}`} alt={`${ev.label} at frame ${ev.frame_number}`} />
+                                                                                </a>
+                                                                            )}
+                                                                            <span className={`sq-run-event sq-run-event--${ev.reason}`}>
+                                                                                {ev.label} · frame {ev.frame_number}
+                                                                                {ev.reason === 'matched' ? ' ✓' : ev.reason === 'wrong_region_reset' ? ' ✗ reset' : ' (ignored)'}
+                                                                            </span>
+                                                                        </div>
                                                                     ))}
                                                                 </div>
                                                             )}

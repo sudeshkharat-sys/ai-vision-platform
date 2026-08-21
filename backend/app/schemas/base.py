@@ -207,6 +207,10 @@ class SequenceRunStepEvent(BaseModel):
     frame_number: int
     matched: bool
     reason: str
+    # Annotated snapshot of the frame at this event (detections + the
+    # step's region drawn on it) — lets you SEE what the model saw,
+    # not just read a pass/fail log. Absent if the snapshot failed to save.
+    frame_url: Optional[str] = None
 
 
 class SequenceRunResponse(BaseModel):
