@@ -298,6 +298,24 @@
 .vp-btn-delete:hover:not(:disabled) { background: rgba(220,38,38,0.06); color: #dc2626; border-color: rgba(220,38,38,0.25); }
 .vp-btn-delete:disabled { opacity: 0.4; cursor: not-allowed; }
 
+/* ── Rotate buttons ───────────────────────────────────── */
+.vp-btn-rotate {
+  background: none;
+  border: 1px solid #e5e5e5;
+  border-radius: 6px;
+  color: #999999;
+  cursor: pointer;
+  padding: 4px 8px;
+  font-size: 14px;
+  line-height: 1;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.vp-btn-rotate:hover:not(:disabled) { background: rgba(37,99,235,0.06); color: #2563eb; border-color: rgba(37,99,235,0.25); }
+.vp-btn-rotate:disabled { opacity: 0.4; cursor: not-allowed; }
+
 /* ── Extraction progress ─────────────────────────────── */
 .vp-extraction-progress { display: flex; flex-direction: column; gap: 6px; }
 

@@ -108,6 +108,10 @@ class VideoResponse(BaseModel):
         from_attributes = True
 
 
+class VideoRotateRequest(BaseModel):
+    direction: str = Field(default="cw")  # "cw" | "ccw" | "180"
+
+
 class VideoFrameExtractionRequest(BaseModel):
     # Extract 1 frame every `sample_every_n` frames (e.g. 30 = 1 fps at 30fps video)
     sample_every_n: int = Field(default=30, ge=1, le=3000)

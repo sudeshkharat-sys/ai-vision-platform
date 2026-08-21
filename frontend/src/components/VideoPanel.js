@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import axios from 'axios';
-import { Film, X, Video, Trash2, Check, Square, AlertTriangle, Upload, ChevronLeft } from 'lucide-react';
+import { Film, X, Video, Trash2, Check, Square, AlertTriangle, Upload, ChevronLeft, RotateCw, RotateCcw } from 'lucide-react';
 import './VideoPanel.css';
 import logoImg from '../logo.png';
 
@@ -24,6 +24,7 @@ function StatusBadge({ status }) {
     const map = {
         uploaded:   { label: 'Uploaded',    cls: 'vp-badge vp-badge--uploaded' },
         extracting: { label: 'Extracting…', cls: 'vp-badge vp-badge--extracting' },
+        rotating:   { label: 'Rotating…',   cls: 'vp-badge vp-badge--extracting' },
         done:       { label: 'Done',         cls: 'vp-badge vp-badge--done' },
         failed:     { label: 'Failed',       cls: 'vp-badge vp-badge--failed' },
         stopped:    { label: 'Stopped',      cls: 'vp-badge vp-badge--stopped' },
@@ -57,18 +58,18 @@ export default function VideoPanel({ project, onClose, onFramesExtracted }) {
         fetchVideos().finally(() => setLoading(false));
     }, [fetchVideos]);
 
-    // ── Poll extracting videos ─────────────────────────────────────
+    // ── Poll extracting/rotating videos ─────────────────────────────
     useEffect(() => {
-        const extractingIds = videos.filter(v => v.status === 'extracting').map(v => v.id);
+        const busyIds = videos.filter(v => v.status === 'extracting' || v.status === 'rotating').map(v => v.id);
 
-        extractingIds.forEach(id => {
+        busyIds.forEach(id => {
             if (pollingRef.current[id]) return;
             pollingRef.current[id] = setInterval(async () => {
                 try {
                     const res = await axios.get(`${API_URL}/videos/${id}`);
                     const updated = res.data;
                     setVideos(prev => prev.map(v => v.id === id ? updated : v));
-                    if (updated.status !== 'extracting') {
+                    if (updated.status !== 'extracting' && updated.status !== 'rotating') {
                         clearInterval(pollingRef.current[id]);
                         delete pollingRef.current[id];
                         if (updated.status === 'done' && onFramesExtracted) {
@@ -83,7 +84,7 @@ export default function VideoPanel({ project, onClose, onFramesExtracted }) {
         });
 
         Object.keys(pollingRef.current).forEach(id => {
-            if (!extractingIds.includes(id)) {
+            if (!busyIds.includes(id)) {
                 clearInterval(pollingRef.current[id]);
                 delete pollingRef.current[id];
             }
@@ -151,6 +152,18 @@ export default function VideoPanel({ project, onClose, onFramesExtracted }) {
             showSuccess('Extraction stopped. Frames extracted so far are kept in the image list.');
         } catch (err) {
             setError(err.response?.data?.detail || 'Failed to stop extraction.');
+        }
+    };
+
+    // ── Rotate video ───────────────────────────────────────────────
+    const handleRotate = async (videoId, direction) => {
+        setError(null);
+        try {
+            const res = await axios.post(`${API_URL}/videos/${videoId}/rotate`, { direction });
+            setVideos(prev => prev.map(v => v.id === videoId ? res.data : v));
+            showSuccess('Rotating video…');
+        } catch (err) {
+            setError(err.response?.data?.detail || 'Failed to start rotation.');
         }
     };
 
@@ -257,6 +270,7 @@ export default function VideoPanel({ project, onClose, onFramesExtracted }) {
                             videos.map(video => {
                                 const cfg = extractConfig[video.id] || {};
                                 const isExtracting = video.status === 'extracting';
+                                const isRotating   = video.status === 'rotating';
                                 const isDone       = video.status === 'done';
                                 const isStopped    = video.status === 'stopped';
 
@@ -278,13 +292,35 @@ export default function VideoPanel({ project, onClose, onFramesExtracted }) {
                                             <div className="vp-card-actions">
                                                 <StatusBadge status={video.status} />
                                                 <button
+                                                    className="vp-btn-rotate"
+                                                    onClick={() => handleRotate(video.id, 'ccw')}
+                                                    title="Rotate video 90° counter-clockwise"
+                                                    disabled={isExtracting || isRotating}
+                                                ><RotateCcw size={14} /></button>
+                                                <button
+                                                    className="vp-btn-rotate"
+                                                    onClick={() => handleRotate(video.id, 'cw')}
+                                                    title="Rotate video 90° clockwise"
+                                                    disabled={isExtracting || isRotating}
+                                                ><RotateCw size={14} /></button>
+                                                <button
                                                     className="vp-btn-delete"
                                                     onClick={() => handleDelete(video.id)}
                                                     title="Delete video and extracted frames"
-                                                    disabled={isExtracting}
+                                                    disabled={isExtracting || isRotating}
                                                 ><Trash2 size={14} /></button>
                                             </div>
                                         </div>
+
+                                        {/* Rotating progress */}
+                                        {isRotating && (
+                                            <div className="vp-extraction-progress">
+                                                <div className="vp-extraction-bar">
+                                                    <div className="vp-extraction-fill vp-extraction-fill--animated" />
+                                                </div>
+                                                <span className="vp-extraction-label">Rotating video — re-encoding, this can take a moment…</span>
+                                            </div>
+                                        )}
 
                                         {/* Extraction progress bar + stop button */}
                                         {isExtracting && (
@@ -324,7 +360,7 @@ export default function VideoPanel({ project, onClose, onFramesExtracted }) {
                                         )}
 
                                         {/* Extraction controls */}
-                                        {!isExtracting && (
+                                        {!isExtracting && !isRotating && (
                                             <div className="vp-extract-controls">
                                                 <div className="vp-extract-field">
                                                     <label className="vp-extract-label">

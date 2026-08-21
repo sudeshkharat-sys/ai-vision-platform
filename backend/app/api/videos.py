@@ -26,7 +26,7 @@ from ..database import get_db
 from ..models.video import Video
 from ..models.image import Image
 from ..models.user import User
-from ..schemas.base import VideoResponse, VideoFrameExtractionRequest
+from ..schemas.base import VideoResponse, VideoFrameExtractionRequest, VideoRotateRequest
 from ..config import settings
 from ..api.auth import get_current_user
 from ..api.deps import get_owned_project, get_owned_video
@@ -131,6 +131,34 @@ async def extract_frames(
 
     video.status = "extracting"
     video.frames_extracted = 0
+    video.task_id = task.id
+    await db.commit()
+    await db.refresh(video)
+    return video
+
+
+@router.post("/{video_id}/rotate", response_model=VideoResponse)
+async def rotate_video_endpoint(
+    video_id: str,
+    body: VideoRotateRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Kick off a Celery task that physically rotates the video file
+    (90°/180°), re-encoding it and updating width/height. Poll
+    GET /videos/{video_id} for status ('rotating' -> 'uploaded'/'failed')."""
+    video = await get_owned_video(video_id, current_user, db)
+
+    if video.status in ("extracting", "rotating"):
+        raise HTTPException(status_code=409, detail="Video is busy — wait for the current operation to finish")
+    if body.direction not in ("cw", "ccw", "180"):
+        raise HTTPException(status_code=400, detail="direction must be 'cw', 'ccw', or '180'")
+
+    from ..tasks.video_processing import rotate_video
+
+    task = rotate_video.delay(video_id, direction=body.direction)
+
+    video.status = "rotating"
     video.task_id = task.id
     await db.commit()
     await db.refresh(video)

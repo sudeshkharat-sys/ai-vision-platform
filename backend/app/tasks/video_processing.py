@@ -230,3 +230,112 @@ def extract_video_frames(
         except Exception:
             pass
         raise
+
+
+_ROTATE_CODES = {
+    "cw": cv2.ROTATE_90_CLOCKWISE,
+    "ccw": cv2.ROTATE_90_COUNTERCLOCKWISE,
+    "180": cv2.ROTATE_180,
+}
+
+
+@celery_app.task(bind=True, name="rotate_video")
+def rotate_video(self, video_id: str, direction: str = "cw") -> dict:
+    """Physically re-encode a video file rotated by 90°/180°, so the file
+    itself is landscape/portrait the way the user actually wants it —
+    instead of relying on the sequence-run auto-rotate workaround for every
+    future use of this video. Implemented with OpenCV (already a hard
+    dependency here) rather than ffmpeg, which isn't guaranteed installed."""
+    db = StateDBConnector()
+    rotate_code = _ROTATE_CODES.get(direction)
+    if rotate_code is None:
+        return {"status": "failed", "reason": f"unknown direction '{direction}'"}
+
+    try:
+        with db.get_session() as conn:
+            video_rows = db.execute_query(
+                conn,
+                "SELECT id, project_id, filepath FROM videos WHERE id = :vid",
+                {"vid": video_id},
+            )
+        if not video_rows:
+            return {"status": "failed", "reason": "video not found"}
+
+        video_row = video_rows[0]
+        project_id = video_row["project_id"]
+        filepath_str = video_row["filepath"]
+
+        with db.get_session() as conn:
+            db.execute_update(
+                conn, "UPDATE videos SET status = 'rotating' WHERE id = :vid", {"vid": video_id}
+            )
+
+        video_path = _resolve_video_path(filepath_str)
+        if video_path is None:
+            with db.get_session() as conn:
+                db.execute_update(
+                    conn, "UPDATE videos SET status = 'failed' WHERE id = :vid", {"vid": video_id}
+                )
+            return {"status": "failed", "reason": "file not found on disk"}
+
+        cap = cv2.VideoCapture(str(video_path))
+        if not cap.isOpened():
+            with db.get_session() as conn:
+                db.execute_update(
+                    conn, "UPDATE videos SET status = 'failed' WHERE id = :vid", {"vid": video_id}
+                )
+            return {"status": "failed", "reason": "cv2 could not open file"}
+
+        fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
+        src_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        src_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        out_w, out_h = (src_h, src_w) if rotate_code != cv2.ROTATE_180 else (src_w, src_h)
+
+        tmp_path = video_path.with_suffix(video_path.suffix + ".rotating.mp4")
+        writer = cv2.VideoWriter(str(tmp_path), cv2.VideoWriter_fourcc(*"mp4v"), fps, (out_w, out_h))
+
+        frame_count = 0
+        while True:
+            ok, frame = cap.read()
+            if not ok:
+                break
+            writer.write(cv2.rotate(frame, rotate_code))
+            frame_count += 1
+        cap.release()
+        writer.release()
+
+        # Swap the rotated file in as the video's permanent file. The
+        # output is always .mp4 (OpenCV's mp4v codec) even if the source
+        # had a different container, so the DB filepath's extension changes
+        # too — update it alongside width/height so playback stays correct.
+        final_path = video_path.with_suffix(".mp4")
+        video_path.unlink(missing_ok=True)
+        tmp_path.rename(final_path)
+        new_rel_path = f"/uploads/{project_id}/videos/{final_path.name}"
+
+        with db.get_session() as conn:
+            db.execute_update(
+                conn,
+                """UPDATE videos
+                   SET status = 'uploaded', filepath = :fpath, width = :w, height = :h,
+                       fps = :fps, total_frames = :tf, file_size = :fsize
+                   WHERE id = :vid""",
+                {
+                    "fpath": new_rel_path, "w": out_w, "h": out_h, "fps": fps,
+                    "tf": frame_count, "fsize": final_path.stat().st_size, "vid": video_id,
+                },
+            )
+
+        logger.info(f"[video] Rotated {video_id} ({direction}): {src_w}x{src_h} -> {out_w}x{out_h}")
+        return {"status": "done", "width": out_w, "height": out_h}
+
+    except Exception as exc:
+        logger.exception(f"[video] rotate_video failed for {video_id}: {exc}")
+        try:
+            with db.get_session() as conn:
+                db.execute_update(
+                    conn, "UPDATE videos SET status = 'failed' WHERE id = :vid", {"vid": video_id}
+                )
+        except Exception:
+            pass
+        raise
