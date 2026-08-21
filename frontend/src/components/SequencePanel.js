@@ -53,6 +53,7 @@ export default function SequencePanel({ project, onClose }) {
     const [images, setImages]           = useState([]);
     const [refImage, setRefImage]       = useState(null);
     const [videos, setVideos]           = useState([]);
+    const [availableClasses, setAvailableClasses] = useState([]); // real classes annotated in this project (count > 0)
 
     // Per-sequence run state: { [seqId]: { videoId, run } }
     const [runByCard, setRunByCard]     = useState({});
@@ -98,17 +99,20 @@ export default function SequencePanel({ project, onClose }) {
     // steps or reference image change so nobody trusts an outdated pass/fail.
     useEffect(() => { setTestResults(null); }, [stepOrder, refImage]);
 
-    // ── Load sequences + images ──────────────────────────────────
+    // ── Load sequences + images + the project's actual annotated classes ──
     const fetchAll = useCallback(async () => {
         try {
-            const [seqRes, imgRes, vidRes] = await Promise.all([
+            const [seqRes, imgRes, vidRes, statsRes] = await Promise.all([
                 axios.get(`${API_URL}/sequences/project/${project.id}`),
                 axios.get(`${API_URL}/images/project/${project.id}`),
                 axios.get(`${API_URL}/videos/project/${project.id}`),
+                axios.get(`${API_URL}/pipeline/training-stats/${project.id}`).catch(() => ({ data: {} })),
             ]);
             setSequences(seqRes.data);
             setImages(imgRes.data);
             setVideos(vidRes.data);
+            const breakdown = statsRes.data?.class_breakdown || {};
+            setAvailableClasses(Object.keys(breakdown).filter(c => breakdown[c] > 0).sort());
             if (imgRes.data.length && !refImage) setRefImage(imgRes.data[0]);
         } catch {
             setError('Failed to load sequences.');
@@ -192,13 +196,21 @@ export default function SequencePanel({ project, onClose }) {
         setPendingLabel('');
     };
 
+    // ── Pick a class from the project's real annotated classes instead
+    // of typing it — toggles it in/out of the comma-separated field ────
+    const toggleIntersectionClass = (cls) => {
+        const current = pendingClass.split(',').map(c => c.trim()).filter(Boolean);
+        const next = current.includes(cls) ? current.filter(c => c !== cls) : [...current, cls];
+        setPendingClass(next.join(', '));
+    };
+
     // ── Add a "Detection Class" step — target = another class's own
     // detected mask (e.g. "M"), no region drawn on canvas ─────────────
     const addDetectionClassStep = () => {
         const targetClass = pendingTargetClass.trim();
         const classes = pendingClass.split(',').map(c => c.trim()).filter(Boolean);
-        if (!targetClass) { setError('Set the target class (e.g. "M") first.'); return; }
-        if (classes.length === 0) { setError('Set the intersection class(es) (e.g. "fingertip") first.'); return; }
+        if (!targetClass) { setError('Select a target class first.'); return; }
+        if (classes.length === 0) { setError('Select at least one intersection class first.'); return; }
 
         const id = nextRegionId();
         const label = pendingLabel.trim() || `${targetClass} ⋂ ${classes.join('+')}`;
@@ -487,7 +499,7 @@ export default function SequencePanel({ project, onClose }) {
                             <div className="sq-builder-top">
                                 <input
                                     className="sq-input"
-                                    placeholder="Sequence name (e.g. Type SUDESH on virtual keyboard)"
+                                    placeholder="Sequence name"
                                     value={seqName}
                                     onChange={e => setSeqName(e.target.value)}
                                 />
@@ -541,7 +553,7 @@ export default function SequencePanel({ project, onClose }) {
                                         <button
                                             className={`sq-tool-btn ${targetTypeMode === 'detection_class' ? 'sq-tool-btn--active' : ''}`}
                                             onClick={() => setTargetTypeMode('detection_class')}
-                                            title={'Target = another detected class\'s own mask (e.g. "M") — no drawing needed'}
+                                            title="Target = another detected class's own mask — no drawing needed"
                                         >Detection Class</button>
                                     </div>
 
@@ -558,46 +570,80 @@ export default function SequencePanel({ project, onClose }) {
                                                 ><Minus size={13} /> Line</button>
                                                 <input
                                                     className="sq-class-input"
-                                                    placeholder="region name (e.g. S key, Gate 1)"
+                                                    placeholder="region name"
                                                     value={pendingLabel}
                                                     onChange={e => setPendingLabel(e.target.value)}
                                                 />
                                                 <input
                                                     className="sq-class-input"
-                                                    placeholder="required class(es), comma-separated (e.g. hand, m)"
+                                                    placeholder="required class(es) — pick below, or type comma-separated"
                                                     value={pendingClass}
                                                     onChange={e => setPendingClass(e.target.value)}
                                                 />
                                             </div>
+                                            {availableClasses.length > 0 && (
+                                                <div className="sq-class-picker">
+                                                    {availableClasses.map(cls => {
+                                                        const active = pendingClass.split(',').map(c => c.trim()).includes(cls);
+                                                        return (
+                                                            <button
+                                                                key={cls}
+                                                                type="button"
+                                                                className={`sq-class-chip ${active ? 'sq-class-chip--active' : ''}`}
+                                                                onClick={() => toggleIntersectionClass(cls)}
+                                                            >{cls}</button>
+                                                        );
+                                                    })}
+                                                </div>
+                                            )}
                                             <p className="sq-hint sq-hint--tight">
-                                                <MousePointerClick size={12} /> Draw a new region on empty canvas. Click an already-drawn region to reuse it as the next step (e.g. the "S" key a second time).
-                                                Enter two or more classes separated by commas (e.g. <code>hand, m</code>) to require ALL of them on that region at once.
+                                                <MousePointerClick size={12} /> Draw a new region on empty canvas. Click an already-drawn region to reuse it as the next step.
+                                                Pick two or more classes to require ALL of them on that region at once.
                                             </p>
                                         </>
                                     ) : (
-                                        <div className="sq-toolbar">
-                                            <input
-                                                className="sq-class-input"
-                                                placeholder="target class (e.g. M)"
-                                                value={pendingTargetClass}
-                                                onChange={e => setPendingTargetClass(e.target.value)}
-                                            />
-                                            <input
-                                                className="sq-class-input"
-                                                placeholder="intersection class(es), comma-separated (e.g. fingertip)"
-                                                value={pendingClass}
-                                                onChange={e => setPendingClass(e.target.value)}
-                                            />
-                                            <input
-                                                className="sq-class-input"
-                                                placeholder="step name (optional)"
-                                                value={pendingLabel}
-                                                onChange={e => setPendingLabel(e.target.value)}
-                                            />
-                                            <button className="sq-btn-add-step" onClick={addDetectionClassStep}>
-                                                <Plus size={13} /> Add Step
-                                            </button>
-                                        </div>
+                                        <>
+                                            <div className="sq-toolbar">
+                                                <select
+                                                    className="sq-class-input"
+                                                    value={pendingTargetClass}
+                                                    onChange={e => setPendingTargetClass(e.target.value)}
+                                                >
+                                                    <option value="">Select target class…</option>
+                                                    {availableClasses.map(cls => <option key={cls} value={cls}>{cls}</option>)}
+                                                </select>
+                                                <input
+                                                    className="sq-class-input"
+                                                    placeholder="intersection class(es) — pick below, or type comma-separated"
+                                                    value={pendingClass}
+                                                    onChange={e => setPendingClass(e.target.value)}
+                                                />
+                                                <input
+                                                    className="sq-class-input"
+                                                    placeholder="step name (optional)"
+                                                    value={pendingLabel}
+                                                    onChange={e => setPendingLabel(e.target.value)}
+                                                />
+                                                <button className="sq-btn-add-step" onClick={addDetectionClassStep}>
+                                                    <Plus size={13} /> Add Step
+                                                </button>
+                                            </div>
+                                            {availableClasses.length > 0 && (
+                                                <div className="sq-class-picker">
+                                                    {availableClasses.map(cls => {
+                                                        const active = pendingClass.split(',').map(c => c.trim()).includes(cls);
+                                                        return (
+                                                            <button
+                                                                key={cls}
+                                                                type="button"
+                                                                className={`sq-class-chip ${active ? 'sq-class-chip--active' : ''}`}
+                                                                onClick={() => toggleIntersectionClass(cls)}
+                                                            >{cls}</button>
+                                                        );
+                                                    })}
+                                                </div>
+                                            )}
+                                        </>
                                     )}
                                     <Stage
                                         ref={stageRef}

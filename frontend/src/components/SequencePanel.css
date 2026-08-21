@@ -203,6 +203,15 @@
 }
 .sq-class-input:focus { border-color: #dc143c; }
 
+/* ── Class picker (real project classes, count > 0) ──── */
+.sq-class-picker { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.sq-class-chip {
+  font-size: 11.5px; border: 1px solid #e5e5e5; background: #fafafa; color: #666;
+  border-radius: 100px; padding: 4px 11px; cursor: pointer;
+}
+.sq-class-chip:hover { border-color: #d1d1d1; }
+.sq-class-chip--active { background: #dc143c; border-color: #dc143c; color: #fff; }
+
 .sq-hint--tight { display: flex; align-items: center; gap: 5px; margin: 0 0 6px; }
 
 .sq-stage { border-radius: 6px; overflow: hidden; cursor: crosshair; }
