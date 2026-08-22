@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import axios from 'axios';
 import { Stage, Layer, Rect, Line, Text, Group, Image as KonvaImage, Circle } from 'react-konva';
 import useImage from 'use-image';
-import { Route, X, Trash2, Check, AlertTriangle, Plus, Square, Minus, ChevronLeft, MousePointerClick, Play, Loader2, Download } from 'lucide-react';
+import { Route, X, Trash2, Check, AlertTriangle, Plus, Square, Minus, ChevronLeft, MousePointerClick, Play, Loader2, Download, Pencil } from 'lucide-react';
 import './SequencePanel.css';
 
 import { API_URL } from '../config';
@@ -89,6 +89,7 @@ export default function SequencePanel({ project, onClose }) {
     //   no drawing needed, just pick classes.
     const [regionKind, setRegionKind]   = useState('box');
     const [editRegions, setEditRegions] = useState(false); // true: drag/resize existing regions instead of adding them as a step on click
+    const [editingSequenceId, setEditingSequenceId] = useState(null); // non-null while editing an already-saved sequence (Save = PUT, not POST)
     const [drawing, setDrawing]         = useState(null); // in-progress shape
     const [pendingClass, setPendingClass] = useState('');
     const [pendingLabel, setPendingLabel] = useState('');
@@ -152,10 +153,41 @@ export default function SequencePanel({ project, onClose }) {
     const startNewSequence = () => {
         setSeqName('');
         setSeqMode('strict');
+        setSeqThreshold(0.5);
         setRegions([]);
         setStepOrder([]);
         setPendingClass('');
         setPendingLabel('');
+        setEditingSequenceId(null);
+        setEditing(true);
+    };
+
+    // ── Builder: load an already-saved sequence back in for editing ──
+    // Regions are rebuilt 1:1 from the saved steps (any region that was
+    // originally reused across two steps becomes two separate regions
+    // here — a minor loss, not a correctness issue, since each still
+    // matches the same way). The reference photo itself isn't stored
+    // with the sequence (only its width/height), so pick a reference
+    // frame again as usual to see something to drag the gates against.
+    const startEditSequence = (seq) => {
+        const loaded = [...seq.steps].sort((a, b) => a.order_index - b.order_index).map(step => ({
+            id: nextRegionId(),
+            target_type: step.target_type || 'region',
+            region_type: step.region_type,
+            region_coords: step.region_coords,
+            target_class: step.target_class,
+            required_class: step.required_class,
+            required_classes: step.required_classes,
+            label: step.label,
+            complete_on: step.complete_on,
+            hold_seconds: step.hold_seconds,
+        }));
+        setSeqName(seq.name);
+        setSeqMode(seq.mode);
+        setSeqThreshold(seq.overlap_threshold);
+        setRegions(loaded);
+        setStepOrder(loaded.map(r => r.id));
+        setEditingSequenceId(seq.id);
         setEditing(true);
     };
 
@@ -324,8 +356,8 @@ export default function SequencePanel({ project, onClose }) {
             target_class: r.target_class,
             required_class: r.required_class,
             required_classes: r.required_classes && r.required_classes.length > 1 ? r.required_classes : undefined,
-            complete_on: r.complete_on === 'undetect_hold' ? 'undetect_hold' : undefined,
-            hold_seconds: r.complete_on === 'undetect_hold' ? r.hold_seconds : undefined,
+            complete_on: (r.complete_on === 'undetect_hold' || r.complete_on === 'detect_hold') ? r.complete_on : undefined,
+            hold_seconds: (r.complete_on === 'undetect_hold' || r.complete_on === 'detect_hold') ? r.hold_seconds : undefined,
         };
     });
 
@@ -335,16 +367,22 @@ export default function SequencePanel({ project, onClose }) {
         setError(null);
         try {
             const steps = buildStepsPayload();
-            const res = await axios.post(`${API_URL}/sequences/project/${project.id}`, {
+            const body = {
                 name: seqName.trim(),
                 mode: seqMode,
                 overlap_threshold: seqThreshold,
                 steps,
                 ref_image_width: refImage?.width,
                 ref_image_height: refImage?.height,
-            });
-            setSequences(prev => [res.data, ...prev]);
+            };
+            const res = editingSequenceId
+                ? await axios.put(`${API_URL}/sequences/${editingSequenceId}`, body)
+                : await axios.post(`${API_URL}/sequences/project/${project.id}`, body);
+            setSequences(prev => editingSequenceId
+                ? prev.map(s => s.id === editingSequenceId ? res.data : s)
+                : [res.data, ...prev]);
             setEditing(false);
+            setEditingSequenceId(null);
             showSuccess(`Sequence "${res.data.name}" saved with ${steps.length} step${steps.length !== 1 ? 's' : ''}.`);
         } catch (err) {
             setError(extractErrorMessage(err, 'Failed to save sequence.'));
@@ -445,7 +483,7 @@ export default function SequencePanel({ project, onClose }) {
                 <div className="sq-header">
                     <div className="sq-header-left">
                         {editing && (
-                            <button className="sq-back" onClick={() => setEditing(false)}><ChevronLeft size={18} /></button>
+                            <button className="sq-back" onClick={() => { setEditing(false); setEditingSequenceId(null); }}><ChevronLeft size={18} /></button>
                         )}
                         <span className="sq-header-icon"><Route size={20} /></span>
                         <div>
@@ -505,6 +543,9 @@ export default function SequencePanel({ project, onClose }) {
                                                     ))}
                                                 </div>
                                             </div>
+                                            <button className="sq-btn-edit" onClick={() => startEditSequence(seq)} title="Edit this sequence — reposition/resize gates, add or remove steps">
+                                                <Pencil size={14} />
+                                            </button>
                                             <button className="sq-btn-delete" onClick={() => handleDelete(seq.id)} title="Delete sequence">
                                                 <Trash2 size={14} />
                                             </button>
@@ -965,7 +1006,7 @@ export default function SequencePanel({ project, onClose }) {
                             </div>
 
                             <div className="sq-builder-footer">
-                                <button className="sq-btn-cancel" onClick={() => setEditing(false)}>Cancel</button>
+                                <button className="sq-btn-cancel" onClick={() => { setEditing(false); setEditingSequenceId(null); }}>Cancel</button>
                                 <button className="sq-btn-test" onClick={handleTestOnImage} disabled={testing}>
                                     {testing ? 'Testing…' : 'Test on Image'}
                                 </button>

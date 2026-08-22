@@ -109,12 +109,13 @@
 .sq-step-chip em { color: #999; font-style: normal; }
 .sq-step-arrow { color: #cccccc; font-size: 12px; }
 
-.sq-btn-delete {
+.sq-btn-delete, .sq-btn-edit {
   background: none; border: 1px solid #e5e5e5; color: #999; border-radius: 8px;
   cursor: pointer; padding: 7px; display: flex; align-items: center; flex-shrink: 0;
   transition: color 0.15s, border-color 0.15s;
 }
 .sq-btn-delete:hover { color: #dc2626; border-color: rgba(220,38,38,0.3); }
+.sq-btn-edit:hover { color: #2563eb; border-color: rgba(37,99,235,0.3); }
 
 /* ── Run against video ───────────────────────────────── */
 .sq-run-section {
