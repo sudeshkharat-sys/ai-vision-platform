@@ -12,6 +12,12 @@ it's fully self-contained (just opencv-python, numpy, ultralytics). You
 export a sequence as JSON from the web app, and pass it here alongside
 your .pt model(s) and a video file or webcam.
 
+Understands all the step types the web builder can produce: box/line/
+frozen-polygon regions, "detection_class" live class-vs-class steps, and
+the complete_on modes "detect" (default, instant), "detect_hold" (must
+stay matched for hold_seconds — a real press, not a pass-through), and
+"undetect_hold" (must stay gone for hold_seconds — gesture released).
+
 Setup (once)
 ------------
     pip install opencv-python numpy ultralytics
@@ -108,11 +114,17 @@ def evaluate_step(step: dict, detections: list, threshold_pct: float) -> dict:
             return {"matched": False, "testable": True, "per_class": [],
                     "note": f'Target class "{target_class}" not detected this frame.'}
     else:
-        if step.get("region_type") != "box":
+        region_type = step.get("region_type")
+        if region_type == "box":
+            x1, y1, x2, y2 = step["region_coords"]
+            target_polygon = [[x1, y1], [x2, y1], [x2, y2], [x1, y2]]
+        elif region_type == "polygon":
+            # Frozen class boundary (from "Freeze boundary" in the web app) —
+            # a static shape, so it works even if that class is occluded now.
+            target_polygon = step["region_coords"]
+        else:
             return {"matched": False, "testable": False, "per_class": [],
                     "note": "Line regions use motion-crossing, not evaluated here."}
-        x1, y1, x2, y2 = step["region_coords"]
-        target_polygon = [[x1, y1], [x2, y1], [x2, y2], [x1, y2]]
 
     needed = step.get("required_classes") or [step["required_class"]]
     per_class = []
@@ -163,6 +175,9 @@ class SequenceState:
     current_step: int = 0
     prev_centers: dict = field(default_factory=dict)
     last_reason: str = "watching"
+    # Consecutive frames the current step's match condition has held true
+    # (complete_on="detect_hold") or false (="undetect_hold").
+    hold_counter: int = 0
 
     @property
     def is_complete(self) -> bool:
@@ -171,6 +186,7 @@ class SequenceState:
     def reset(self):
         self.current_step = 0
         self.prev_centers = {}
+        self.hold_counter = 0
         self.last_reason = "watching"
 
     def process_frame(self, detections: list) -> str:
@@ -182,6 +198,12 @@ class SequenceState:
         target = self.steps[self.current_step]
         needed_classes = _step_classes(target)
         threshold_pct = self.overlap_threshold * 100.0
+        complete_on = target.get("complete_on")
+
+        if complete_on == "undetect_hold":
+            return self._check_undetect_hold(target, needed_classes, detections)
+        if complete_on == "detect_hold":
+            return self._check_detect_hold(target, needed_classes, detections, threshold_pct)
 
         if _is_line_region(target):
             matched = self._check_line_region(target, needed_classes, detections)
@@ -243,6 +265,42 @@ class SequenceState:
                 all_crossed = False
         return all_crossed
 
+    def _advance(self) -> str:
+        target = self.steps[self.current_step]
+        for cls in _step_classes(target):
+            self.prev_centers.pop(cls, None)
+        self.current_step += 1
+        self.hold_counter = 0
+        self.last_reason = "matched"
+        return "matched"
+
+    def _check_undetect_hold(self, target, needed_classes, detections) -> str:
+        detected_now = any(det["class_name"] in needed_classes for det in detections)
+        if detected_now:
+            self.hold_counter = 0
+            self.last_reason = "watching"
+            return "watching"
+        self.hold_counter += 1
+        if self.hold_counter < target.get("hold_frames", 1):
+            self.last_reason = "watching"
+            return "watching"
+        return self._advance()
+
+    def _check_detect_hold(self, target, needed_classes, detections, threshold_pct) -> str:
+        if _is_line_region(target):
+            matched_now = self._check_line_region(target, needed_classes, detections)
+        else:
+            matched_now = evaluate_step(target, detections, threshold_pct)["matched"]
+        if not matched_now:
+            self.hold_counter = 0
+            self.last_reason = "watching"
+            return "watching"
+        self.hold_counter += 1
+        if self.hold_counter < target.get("hold_frames", 1):
+            self.last_reason = "watching"
+            return "watching"
+        return self._advance()
+
 
 # ── Drawing (mirrors backend/app/tasks/sequence_run.py's _draw_overlay) ───
 
@@ -292,14 +350,17 @@ def draw_overlay(frame, detections, target, status):
         cv2.putText(img, label, (label_anchor[0], max(14, label_anchor[1] - 6)),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
 
-    if target and target.get("target_type", "region") == "region" and target.get("region_type") == "box":
+    step_color = _STATUS_COLORS.get(status, (255, 255, 255))
+    region_type = target.get("region_type") if target else None
+    if target and target.get("target_type", "region") == "region" and region_type == "box":
         rx1, ry1, rx2, ry2 = target["region_coords"]
-        step_color = _STATUS_COLORS.get(status, (255, 255, 255))
         cv2.rectangle(img, (int(rx1 * w), int(ry1 * h)), (int(rx2 * w), int(ry2 * h)), step_color, 2)
-    elif target and target.get("region_type") == "line":
+    elif target and region_type == "line":
         x1, y1, x2, y2 = target["region_coords"]
-        step_color = _STATUS_COLORS.get(status, (255, 255, 255))
         cv2.line(img, (int(x1 * w), int(y1 * h)), (int(x2 * w), int(y2 * h)), step_color, 3)
+    elif target and region_type == "polygon":
+        pts = np.array([[int(px * w), int(py * h)] for px, py in target["region_coords"]], dtype=np.int32)
+        cv2.polylines(img, [pts], isClosed=True, color=step_color, thickness=3)
 
     step_label = target.get("label", "") if target else "COMPLETE"
     banner_color = _STATUS_COLORS.get(status, (255, 255, 255))
@@ -374,13 +435,23 @@ def main():
 
     sequence = json.loads(Path(args.sequence).read_text())
     steps = sequence["steps"]
-    state = SequenceState(steps=steps, mode=sequence.get("mode", "strict"),
-                           overlap_threshold=sequence.get("overlap_threshold", 0.5))
 
     source = args.webcam if args.webcam is not None else args.video
     cap = cv2.VideoCapture(source)
     if not cap.isOpened():
         sys.exit(f"Could not open video source: {source}")
+
+    # hold_seconds (a step's user-facing config for detect_hold/undetect_hold)
+    # -> hold_frames, using this source's real FPS. This script evaluates
+    # every frame (no FRAME_STRIDE sampling like the backend's Celery task),
+    # so frames-per-second here is just the source's own FPS.
+    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    for step in steps:
+        if step.get("complete_on") in ("undetect_hold", "detect_hold") and "hold_frames" not in step:
+            step["hold_frames"] = max(1, round(step.get("hold_seconds", 1.0) * fps))
+
+    state = SequenceState(steps=steps, mode=sequence.get("mode", "strict"),
+                           overlap_threshold=sequence.get("overlap_threshold", 0.5))
 
     rotate_code = _ROTATE_CODES.get(args.rotate) if args.rotate else None
 
