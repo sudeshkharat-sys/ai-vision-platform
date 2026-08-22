@@ -475,7 +475,7 @@ def main():
     # so frames-per-second here is just the source's own FPS.
     fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
     for step in steps:
-        if step.get("complete_on") in ("undetect_hold", "detect_hold") and "hold_frames" not in step:
+        if step.get("complete_on") in ("undetect_hold", "detect_hold") and step.get("hold_frames") is None:
             step["hold_frames"] = max(1, round(step.get("hold_seconds", 1.0) * fps))
 
     state = SequenceState(steps=steps, mode=sequence.get("mode", "strict"),
@@ -497,9 +497,19 @@ def main():
                 frame = cv2.rotate(frame, rotate_code)
 
             detections = detect_frame(detector, segmenter, frame)
-            target = steps[state.current_step] if not state.is_complete else None
+            step_index = state.current_step
+            target = steps[step_index] if not state.is_complete else None
             status = state.process_frame(detections)
-            display = draw_overlay(frame, detections, target, status)
+            # Draw the RESYNCED position (if this step froze one and it's
+            # been re-synced this run), not the original frozen coords —
+            # otherwise the drawn box stays visually stuck at its first
+            # capture forever even though matching itself already moved on.
+            draw_target = target
+            if target is not None and target.get("region_type") == "polygon" and target.get("target_class"):
+                synced = state.synced_polygons.get(step_index)
+                if synced is not None:
+                    draw_target = {**target, "region_coords": synced}
+            display = draw_overlay(frame, detections, draw_target, status)
 
         cv2.imshow(window, display)
         key = cv2.waitKey(1) & 0xFF

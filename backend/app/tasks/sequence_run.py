@@ -316,7 +316,7 @@ def run_sequence_on_video(self, run_id: str) -> dict:
     video_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
     sampled_fps = video_fps / FRAME_STRIDE
     for step in steps:
-        if step.get("complete_on") in ("undetect_hold", "detect_hold") and "hold_frames" not in step:
+        if step.get("complete_on") in ("undetect_hold", "detect_hold") and step.get("hold_frames") is None:
             hold_seconds = step.get("hold_seconds", 1.0)
             step["hold_frames"] = max(1, round(hold_seconds * sampled_fps))
 
@@ -349,9 +349,20 @@ def run_sequence_on_video(self, run_id: str) -> dict:
             # The step being evaluated THIS frame — captured before
             # process_frame() potentially advances current_step, so the
             # debug snapshot shows the region/step that was actually judged.
-            evaluated_step = steps[state.current_step] if not state.is_complete else None
+            evaluated_step_index = state.current_step
+            evaluated_step = steps[evaluated_step_index] if not state.is_complete else None
 
             event = state.process_frame(frame_number, detections)
+
+            # Draw the RESYNCED position for a frozen-boundary step, not
+            # its original frozen coords — otherwise the drawn region
+            # stays visually stuck at its first capture forever even
+            # though matching itself has already moved on to tracking the
+            # class's live position (see sequence_engine._resolve_target).
+            if evaluated_step is not None and evaluated_step.get("region_type") == "polygon" and evaluated_step.get("target_class"):
+                synced = state.synced_polygons.get(evaluated_step_index)
+                if synced is not None:
+                    evaluated_step = {**evaluated_step, "region_coords": synced}
 
             live_frame_url = _save_live_frame(
                 frame, detections, evaluated_step, sequence["project_id"], run_id,
