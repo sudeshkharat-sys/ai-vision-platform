@@ -167,6 +167,11 @@ def _is_line_region(step: dict) -> bool:
     return step.get("target_type", "region") == "region" and step.get("region_type") == "line"
 
 
+# How many consecutive dropped-match frames a detect_hold step tolerates
+# before treating it as a real release rather than hand jitter.
+MISS_TOLERANCE = 2
+
+
 @dataclass
 class SequenceState:
     steps: list
@@ -181,6 +186,12 @@ class SequenceState:
     # Per-step-index drift-corrected polygon for a frozen "polygon" region
     # step that also carries target_class (see _resolve_target).
     synced_polygons: dict = field(default_factory=dict)
+    # Consecutive dropped-match frames for the current detect_hold step —
+    # see MISS_TOLERANCE.
+    miss_counter: int = 0
+    # Ordered log of {label, status} for every step, refreshed each frame —
+    # drives the on-screen "Step 1: ... complete" checklist.
+    step_status: list = field(default_factory=list)
 
     @property
     def is_complete(self) -> bool:
@@ -190,6 +201,7 @@ class SequenceState:
         self.current_step = 0
         self.prev_centers = {}
         self.hold_counter = 0
+        self.miss_counter = 0
         self.synced_polygons = {}
         self.last_reason = "watching"
 
@@ -260,6 +272,8 @@ class SequenceState:
             self.current_step = 0
             self.prev_centers = {}
             self.synced_polygons = {}
+            self.hold_counter = 0
+            self.miss_counter = 0
             self.last_reason = "wrong_region_reset"
             return "wrong_region_reset"
         if wrong_region_hit:
@@ -298,6 +312,7 @@ class SequenceState:
             self.prev_centers.pop(cls, None)
         self.current_step += 1
         self.hold_counter = 0
+        self.miss_counter = 0
         self.last_reason = "matched"
         return "matched"
 
@@ -320,9 +335,16 @@ class SequenceState:
             resolved = self._resolve_target(target, self.current_step, detections)
             matched_now = evaluate_step(resolved, detections, threshold_pct)["matched"]
         if not matched_now:
-            self.hold_counter = 0
+            # A hand naturally jitters slightly during a long hold — don't
+            # wipe out the whole hold on a single dropped-match frame, only
+            # after MISS_TOLERANCE in a row (a real release, not a blip).
+            self.miss_counter += 1
+            if self.miss_counter >= MISS_TOLERANCE:
+                self.hold_counter = 0
+                self.miss_counter = 0
             self.last_reason = "watching"
             return "watching"
+        self.miss_counter = 0
         self.hold_counter += 1
         if self.hold_counter < target.get("hold_frames", 1):
             self.last_reason = "watching"
@@ -380,14 +402,22 @@ def draw_overlay(frame, detections, target, status):
 
     step_color = _STATUS_COLORS.get(status, (255, 255, 255))
     region_type = target.get("region_type") if target else None
+    # A black ring drawn first, slightly thicker, under the status-colored
+    # outline — keeps the region boundary visible against busy/bright video
+    # backgrounds where a thin colored line alone can get lost.
     if target and target.get("target_type", "region") == "region" and region_type == "box":
         rx1, ry1, rx2, ry2 = target["region_coords"]
-        cv2.rectangle(img, (int(rx1 * w), int(ry1 * h)), (int(rx2 * w), int(ry2 * h)), step_color, 2)
+        p1, p2 = (int(rx1 * w), int(ry1 * h)), (int(rx2 * w), int(ry2 * h))
+        cv2.rectangle(img, p1, p2, (0, 0, 0), 4)
+        cv2.rectangle(img, p1, p2, step_color, 2)
     elif target and region_type == "line":
         x1, y1, x2, y2 = target["region_coords"]
-        cv2.line(img, (int(x1 * w), int(y1 * h)), (int(x2 * w), int(y2 * h)), step_color, 3)
+        p1, p2 = (int(x1 * w), int(y1 * h)), (int(x2 * w), int(y2 * h))
+        cv2.line(img, p1, p2, (0, 0, 0), 5)
+        cv2.line(img, p1, p2, step_color, 3)
     elif target and region_type == "polygon":
         pts = np.array([[int(px * w), int(py * h)] for px, py in target["region_coords"]], dtype=np.int32)
+        cv2.polylines(img, [pts], isClosed=True, color=(0, 0, 0), thickness=5)
         cv2.polylines(img, [pts], isClosed=True, color=step_color, thickness=3)
 
     step_label = target.get("label", "") if target else "COMPLETE"
@@ -395,6 +425,28 @@ def draw_overlay(frame, detections, target, status):
     cv2.rectangle(img, (0, 0), (w, 34), (30, 30, 30), -1)
     cv2.putText(img, f'Step: {step_label}   [{status}]', (10, 23),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, banner_color, 2, cv2.LINE_AA)
+    return img
+
+
+def draw_checklist(img, steps, current_step):
+    """Left-side panel listing every step with its status — 'Step 1: gate1
+    - COMPLETE', 'Step 2: m - CURRENT', 'Step 3: a - pending', etc."""
+    h, w = img.shape[:2]
+    n = len(steps)
+    panel_h = 24 + n * 22
+    overlay = img.copy()
+    cv2.rectangle(overlay, (0, h - panel_h), (260, h), (20, 20, 20), -1)
+    cv2.addWeighted(overlay, 0.75, img, 0.25, 0, img)
+
+    for i, step in enumerate(steps):
+        if i < current_step:
+            text, color = f'Step {i + 1}: {step.get("label", "")} - COMPLETE', (74, 222, 128)
+        elif i == current_step:
+            text, color = f'Step {i + 1}: {step.get("label", "")} - CURRENT', (11, 170, 250)
+        else:
+            text, color = f'Step {i + 1}: {step.get("label", "")} - pending', (140, 140, 140)
+        y = h - panel_h + 22 + i * 22
+        cv2.putText(img, text, (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1, cv2.LINE_AA)
     return img
 
 
@@ -510,6 +562,7 @@ def main():
                 if synced is not None:
                     draw_target = {**target, "region_coords": synced}
             display = draw_overlay(frame, detections, draw_target, status)
+            display = draw_checklist(display, steps, state.current_step)
 
         cv2.imshow(window, display)
         key = cv2.waitKey(1) & 0xFF

@@ -49,6 +49,11 @@ def _is_line_region(step: dict) -> bool:
     return step.get("target_type", "region") == "region" and step.get("region_type") == "line"
 
 
+# How many consecutive dropped-match sampled frames a detect_hold step
+# tolerates before treating it as a real release rather than hand jitter.
+MISS_TOLERANCE = 2
+
+
 @dataclass
 class SequenceRunState:
     steps: list[dict]
@@ -64,6 +69,9 @@ class SequenceRunState:
     # Per-step-index drift-corrected polygon for a frozen "polygon"
     # region step that also carries target_class (see _resolve_target).
     synced_polygons: dict[int, list] = field(default_factory=dict)
+    # Consecutive dropped-match sampled frames for the current detect_hold
+    # step — see MISS_TOLERANCE.
+    miss_counter: int = 0
 
     @property
     def is_complete(self) -> bool:
@@ -159,6 +167,8 @@ class SequenceRunState:
             self.current_step = 0
             self.prev_centers = {}
             self.synced_polygons = {}
+            self.hold_counter = 0
+            self.miss_counter = 0
             return event
 
         if wrong_region_hit:  # lenient
@@ -197,10 +207,13 @@ class SequenceRunState:
     ) -> StepEvent | None:
         """Step passes once the step's normal match condition (region
         overlap / line crossing / class overlap) has held true for
-        hold_frames sampled frames IN A ROW. A single frame where it
-        drops out resets the counter — this is what tells apart a real
-        'press and hold' from the hand just passing over the region on
-        its way somewhere else."""
+        hold_frames sampled frames IN A ROW — with a small tolerance for
+        a hand naturally jittering during a long hold (MISS_TOLERANCE
+        consecutive dropped-match frames are absorbed rather than wiping
+        out the hold), so a real release still resets it but a brief
+        blip doesn't. This is what tells apart a real 'press and hold'
+        from the hand just passing over the region on its way
+        somewhere else."""
         if _is_line_region(target):
             matched_now = self._check_line_region(target, needed_classes, detections)
         else:
@@ -209,9 +222,13 @@ class SequenceRunState:
             matched_now = result["matched"]
 
         if not matched_now:
-            self.hold_counter = 0
+            self.miss_counter += 1
+            if self.miss_counter >= MISS_TOLERANCE:
+                self.hold_counter = 0
+                self.miss_counter = 0
             return None
 
+        self.miss_counter = 0
         self.hold_counter += 1
         hold_frames = target.get("hold_frames", 1)
         if self.hold_counter < hold_frames:
@@ -230,6 +247,7 @@ class SequenceRunState:
         self.events.append(event)
         self.current_step += 1
         self.hold_counter = 0
+        self.miss_counter = 0
         for cls in needed_classes:
             self.prev_centers.pop(cls, None)
         return event
