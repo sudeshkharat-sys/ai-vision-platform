@@ -97,6 +97,7 @@ export default function SequencePanel({ project, onClose }) {
     const [pendingCompleteOn, setPendingCompleteOn] = useState('detect'); // 'detect' | 'detect_hold' | 'undetect_hold'
     const [pendingHoldSeconds, setPendingHoldSeconds] = useState(0.4);
     const [pendingFreezeBoundary, setPendingFreezeBoundary] = useState(true);
+    const [pendingResync, setPendingResync] = useState(false);
     const [freezing, setFreezing] = useState(false);
     const [seqThreshold, setSeqThreshold] = useState(0.5);
 
@@ -176,6 +177,7 @@ export default function SequencePanel({ project, onClose }) {
             region_type: step.region_type,
             region_coords: step.region_coords,
             target_class: step.target_class,
+            resync: step.resync,
             required_class: step.required_class,
             required_classes: step.required_classes,
             label: step.label,
@@ -292,13 +294,14 @@ export default function SequencePanel({ project, onClose }) {
                     target_type: 'region',
                     region_type: 'polygon',
                     region_coords: res.data.polygon,
-                    // Kept alongside the frozen shape so the run engine can
-                    // re-sync this region to the class's live position
-                    // whenever it's actually visible (corrects for camera
-                    // shake/drift instead of staying stuck at the exact
-                    // frozen spot forever) — falls back to the frozen
-                    // boundary whenever the class is occluded.
                     target_class: targetClass,
+                    // Off by default: the frozen shape just stays put,
+                    // which is the safe, predictable choice on a real
+                    // keyboard with small adjacent keys (the model can
+                    // confidently detect the WRONG neighboring key and
+                    // corrupt a good frozen position). Only turn this on
+                    // for a genuinely shaky/moving camera.
+                    resync: pendingResync,
                 }]);
                 setStepOrder(prev => [...prev, id]);
                 setPendingLabel('');
@@ -361,6 +364,7 @@ export default function SequencePanel({ project, onClose }) {
             region_type: r.region_type,
             region_coords: r.region_coords,
             target_class: r.target_class,
+            resync: r.resync || undefined,
             required_class: r.required_class,
             required_classes: r.required_classes && r.required_classes.length > 1 ? r.required_classes : undefined,
             complete_on: (r.complete_on === 'undetect_hold' || r.complete_on === 'detect_hold') ? r.complete_on : undefined,
@@ -750,6 +754,17 @@ export default function SequencePanel({ project, onClose }) {
                                                     />
                                                     Freeze boundary (survives occlusion)
                                                 </label>
+                                                {pendingFreezeBoundary && (
+                                                    <label className="sq-class-input" style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}
+                                                        title="Off by default — the frozen boundary stays put. Only turn this on for a genuinely shaky/moving camera; on a real keyboard with small adjacent keys it can pick up a confident-but-wrong neighboring key and corrupt a good position.">
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={pendingResync}
+                                                            onChange={e => setPendingResync(e.target.checked)}
+                                                        />
+                                                        Live-track (camera shake only)
+                                                    </label>
+                                                )}
                                                 <select
                                                     className="sq-class-input"
                                                     value={pendingCompleteOn}

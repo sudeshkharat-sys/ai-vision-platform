@@ -87,30 +87,28 @@ class SequenceRunState:
         return self.steps[self.current_step]
 
     def _resolve_target(self, step: dict, step_index: int, detections: list[dict], allow_resync: bool = True) -> dict:
-        """A frozen "polygon" region step that also has target_class set
-        (e.g. from "Freeze boundary") gets re-synced to that class's own
-        live-detected mask whenever it's actually visible this frame —
-        self-correcting for camera shake/drift instead of staying stuck
-        at the exact spot it was frozen at. Falls back to the last
-        known-good polygon (or the original frozen one) whenever the
-        class is occluded/not detected this frame, same as before.
+        """A frozen "polygon" region step normally just stays exactly
+        where it was captured — the safe, predictable default. Only if
+        the step explicitly opts in with resync=True does it re-sync to
+        target_class's own live-detected mask whenever visible, to
+        self-correct camera shake/drift. That's opt-in, not automatic,
+        because on a real keyboard with small adjacent keys the model
+        can emit a CONFIDENT but wrong detection (e.g. seeing "I" while
+        actually looking at "N" right below it) — a plain confidence
+        check can't tell that apart from a genuinely correct one, so
+        trusting live detections by default was actively corrupting
+        good frozen positions rather than protecting them. Falls back
+        to the last known-good polygon (or the original frozen one)
+        whenever the class is occluded/not detected this frame.
 
-        Only resyncs on a detection with at least MIN_RESYNC_CONFIDENCE
-        confidence — two adjacent keys (e.g. N sitting right under I) can
-        make the model emit a shaky, low-confidence, wrongly-placed guess
-        when a hand overlaps both; trusting that would corrupt an
-        otherwise-good synced position instead of protecting it.
-
-        allow_resync=False keeps using whatever position is already
-        recorded (frozen or last-synced) WITHOUT updating it this frame —
-        used by detect_hold mid-hold (hold_counter > 0) so the target
-        can't wobble frame-to-frame from live-detection jitter while a
-        press is already in progress, which would otherwise break a
-        genuinely still hand out of a hold it should be completing."""
+        allow_resync=False additionally keeps using whatever position is
+        already recorded WITHOUT updating it this frame — used by
+        detect_hold mid-hold (hold_counter > 0) so the target can't
+        wobble frame-to-frame while a press is already in progress."""
         if step.get("target_type", "region") != "region" or step.get("region_type") != "polygon":
             return step
         target_class = step.get("target_class")
-        if not target_class:
+        if not target_class or not step.get("resync"):
             return step
 
         if allow_resync:

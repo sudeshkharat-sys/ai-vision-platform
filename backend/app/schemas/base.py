@@ -139,6 +139,12 @@ class SequenceStep(BaseModel):
     # Required when target_type == "detection_class" — the class whose
     # own detected mask becomes this step's target area.
     target_class: Optional[str] = None
+    # For a frozen "polygon" region step: opt-in re-sync to target_class's
+    # live-detected position whenever visible (corrects camera shake/
+    # drift). Off by default — a real keyboard's small adjacent keys can
+    # make the model confidently detect the WRONG neighboring key, which
+    # would corrupt a good frozen position rather than protect it.
+    resync: Optional[bool] = None
 
     # Kept for backward compatibility with sequences saved before
     # required_classes existed — treated as required_classes[0] if that
