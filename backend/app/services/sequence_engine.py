@@ -86,7 +86,7 @@ class SequenceRunState:
             return None
         return self.steps[self.current_step]
 
-    def _resolve_target(self, step: dict, step_index: int, detections: list[dict]) -> dict:
+    def _resolve_target(self, step: dict, step_index: int, detections: list[dict], allow_resync: bool = True) -> dict:
         """A frozen "polygon" region step that also has target_class set
         (e.g. from "Freeze boundary") gets re-synced to that class's own
         live-detected mask whenever it's actually visible this frame —
@@ -99,21 +99,29 @@ class SequenceRunState:
         confidence — two adjacent keys (e.g. N sitting right under I) can
         make the model emit a shaky, low-confidence, wrongly-placed guess
         when a hand overlaps both; trusting that would corrupt an
-        otherwise-good synced position instead of protecting it."""
+        otherwise-good synced position instead of protecting it.
+
+        allow_resync=False keeps using whatever position is already
+        recorded (frozen or last-synced) WITHOUT updating it this frame —
+        used by detect_hold mid-hold (hold_counter > 0) so the target
+        can't wobble frame-to-frame from live-detection jitter while a
+        press is already in progress, which would otherwise break a
+        genuinely still hand out of a hold it should be completing."""
         if step.get("target_type", "region") != "region" or step.get("region_type") != "polygon":
             return step
         target_class = step.get("target_class")
         if not target_class:
             return step
 
-        best_conf = max(
-            (det.get("conf", 0.0) for det in detections if det["class_name"] == target_class),
-            default=-1.0,
-        )
-        if best_conf >= MIN_RESYNC_CONFIDENCE:
-            live_polygon = best_polygon_for_class(detections, target_class)
-            if live_polygon is not None:
-                self.synced_polygons[step_index] = live_polygon
+        if allow_resync:
+            best_conf = max(
+                (det.get("conf", 0.0) for det in detections if det["class_name"] == target_class),
+                default=-1.0,
+            )
+            if best_conf >= MIN_RESYNC_CONFIDENCE:
+                live_polygon = best_polygon_for_class(detections, target_class)
+                if live_polygon is not None:
+                    self.synced_polygons[step_index] = live_polygon
 
         effective_coords = self.synced_polygons.get(step_index, step["region_coords"])
         if effective_coords is step["region_coords"]:
@@ -232,7 +240,7 @@ class SequenceRunState:
         if _is_line_region(target):
             matched_now = self._check_line_region(target, needed_classes, detections)
         else:
-            resolved = self._resolve_target(target, self.current_step, detections)
+            resolved = self._resolve_target(target, self.current_step, detections, allow_resync=(self.hold_counter == 0))
             result = evaluate_step(resolved, detections, threshold_pct)
             matched_now = result["matched"]
 
