@@ -15,6 +15,20 @@ const STEP_COLORS = ['#dc143c', '#d97706', '#059669', '#2563eb', '#7c3aed', '#db
 let _regionSeq = 0;
 const nextRegionId = () => `r${Date.now()}_${_regionSeq++}`;
 
+// FastAPI validation errors come back as `detail: [{type, loc, msg, input}, ...]`,
+// not a plain string — rendering that array directly as JSX crashes React
+// ("Objects are not valid as a React child"). Always route error text through
+// this so a validation failure shows readable text instead of crashing the page.
+const extractErrorMessage = (err, fallback) => {
+    const detail = err?.response?.data?.detail;
+    if (typeof detail === 'string') return detail;
+    if (Array.isArray(detail)) {
+        return detail.map(d => (d && typeof d === 'object') ? (d.msg || JSON.stringify(d)) : String(d)).join('; ');
+    }
+    if (detail && typeof detail === 'object') return detail.msg || JSON.stringify(detail);
+    return fallback;
+};
+
 // Where the reference photo actually sits inside the fixed 640x420 canvas —
 // scaled to fit and centered, so a landscape or portrait photo doesn't fill
 // the whole canvas. Everything that turns a canvas click into a stored
@@ -248,7 +262,7 @@ export default function SequencePanel({ project, onClose }) {
                 setStepOrder(prev => [...prev, id]);
                 setPendingLabel('');
             } catch (err) {
-                setError(err.response?.data?.detail || `Could not freeze "${targetClass}"'s boundary — make sure it's visible (unoccluded) on the reference frame.`);
+                setError(extractErrorMessage(err, `Could not freeze "${targetClass}"'s boundary — make sure it's visible (unoccluded) on the reference frame.`));
             } finally {
                 setFreezing(false);
             }
@@ -326,7 +340,7 @@ export default function SequencePanel({ project, onClose }) {
             setEditing(false);
             showSuccess(`Sequence "${res.data.name}" saved with ${steps.length} step${steps.length !== 1 ? 's' : ''}.`);
         } catch (err) {
-            setError(err.response?.data?.detail || 'Failed to save sequence.');
+            setError(extractErrorMessage(err, 'Failed to save sequence.'));
         }
     };
 
@@ -357,7 +371,7 @@ export default function SequencePanel({ project, onClose }) {
             });
             setTestResults(res.data);
         } catch (err) {
-            setTestResults({ error: err.response?.data?.detail || 'Test failed.' });
+            setTestResults({ error: extractErrorMessage(err, 'Test failed.') });
         } finally {
             setTesting(false);
         }
@@ -411,7 +425,7 @@ export default function SequencePanel({ project, onClose }) {
             setRunByCard(prev => ({ ...prev, [seq.id]: { videoId, run: res.data } }));
             pollRun(seq.id, res.data.id);
         } catch (err) {
-            setError(err.response?.data?.detail || 'Failed to start the run.');
+            setError(extractErrorMessage(err, 'Failed to start the run.'));
         }
     };
 

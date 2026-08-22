@@ -1,5 +1,5 @@
 from pydantic import BaseModel, EmailStr, Field
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Union
 from datetime import datetime
 
 
@@ -130,8 +130,11 @@ class SequenceStep(BaseModel):
     target_type: str = "region"
 
     # Required when target_type == "region".
-    region_type: Optional[str] = None  # "box" | "line"
-    region_coords: Optional[List[float]] = None  # normalized [x1, y1, x2, y2]
+    # "box"/"line": a flat [x1, y1, x2, y2]. "polygon" (a class boundary
+    # frozen once via /sequences/freeze-class): a list of [x, y] points —
+    # so this accepts either shape.
+    region_type: Optional[str] = None  # "box" | "line" | "polygon"
+    region_coords: Optional[Union[List[float], List[List[float]]]] = None
 
     # Required when target_type == "detection_class" — the class whose
     # own detected mask becomes this step's target area.
@@ -147,6 +150,18 @@ class SequenceStep(BaseModel):
     # present at once. A single-entry list behaves the same as the old
     # required_class-only steps.
     required_classes: Optional[List[str]] = None
+
+    # How this step decides it's done. "detect" (default): passes the
+    # instant the match condition is true. "detect_hold": must stay true
+    # for hold_seconds in a row (a real press, not a pass-through).
+    # "undetect_hold": must stay ABSENT for hold_seconds in a row (the
+    # gesture/finger has been withdrawn).
+    complete_on: Optional[str] = None
+    hold_seconds: Optional[float] = None
+    # Sampled-frame count sequence_run.py converts hold_seconds into at
+    # run time — not user-set, but round-tripped so an already-converted
+    # step (e.g. re-saved from an export) isn't silently reset.
+    hold_frames: Optional[int] = None
 
 
 class RegionSequenceCreate(BaseModel):
