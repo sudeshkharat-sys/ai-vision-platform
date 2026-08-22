@@ -78,8 +78,8 @@ export default function SequencePanel({ project, onClose }) {
     const [pendingClass, setPendingClass] = useState('');
     const [pendingLabel, setPendingLabel] = useState('');
     const [pendingTargetClass, setPendingTargetClass] = useState('');
-    const [pendingUndetectHold, setPendingUndetectHold] = useState(false);
-    const [pendingHoldSeconds, setPendingHoldSeconds] = useState(1.0);
+    const [pendingCompleteOn, setPendingCompleteOn] = useState('detect'); // 'detect' | 'detect_hold' | 'undetect_hold'
+    const [pendingHoldSeconds, setPendingHoldSeconds] = useState(0.4);
     const [seqThreshold, setSeqThreshold] = useState(0.5);
 
     // Quick single-image test — no save, no video, instant per-step check
@@ -222,8 +222,8 @@ export default function SequencePanel({ project, onClose }) {
             required_class: classes[0],
             required_classes: classes,
             label,
-            complete_on: pendingUndetectHold ? 'undetect_hold' : 'detect',
-            hold_seconds: pendingUndetectHold ? Number(pendingHoldSeconds) || 1.0 : undefined,
+            complete_on: pendingCompleteOn,
+            hold_seconds: pendingCompleteOn !== 'detect' ? Number(pendingHoldSeconds) || 0.4 : undefined,
         }]);
         setStepOrder(prev => [...prev, id]);
         setError(null);
@@ -443,6 +443,7 @@ export default function SequencePanel({ project, onClose }) {
                                                             <span className="sq-step-chip" style={{ borderColor: STEP_COLORS[i % STEP_COLORS.length] }}>
                                                                 {s.label} <em>({(s.required_classes && s.required_classes.length > 1) ? s.required_classes.join(' + ') : s.required_class})</em>
                                                                 {s.complete_on === 'undetect_hold' && <em> · gone {s.hold_seconds || 1}s</em>}
+                                                                {s.complete_on === 'detect_hold' && <em> · hold {s.hold_seconds || 1}s</em>}
                                                             </span>
                                                         </React.Fragment>
                                                     ))}
@@ -632,22 +633,26 @@ export default function SequencePanel({ project, onClose }) {
                                         />
                                         {regionKind === 'class' && (
                                             <>
-                                                <label className="sq-class-input" style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
-                                                    <input
-                                                        type="checkbox"
-                                                        checked={pendingUndetectHold}
-                                                        onChange={e => setPendingUndetectHold(e.target.checked)}
-                                                    />
-                                                    Complete when gesture disappears
-                                                </label>
-                                                {pendingUndetectHold && (
+                                                <select
+                                                    className="sq-class-input"
+                                                    value={pendingCompleteOn}
+                                                    onChange={e => setPendingCompleteOn(e.target.value)}
+                                                    title="How this step decides it's done"
+                                                >
+                                                    <option value="detect">Pass instantly on touch (gate-style)</option>
+                                                    <option value="detect_hold">Press & hold — must stay on for N seconds (real key press, ignores pass-through)</option>
+                                                    <option value="undetect_hold">Gone for N seconds (gesture released/removed)</option>
+                                                </select>
+                                                {pendingCompleteOn !== 'detect' && (
                                                     <input
                                                         className="sq-class-input"
                                                         type="number"
                                                         min="0.1"
                                                         step="0.1"
                                                         style={{ width: 70 }}
-                                                        title="How many seconds the class(es) must stay undetected before this step passes"
+                                                        title={pendingCompleteOn === 'detect_hold'
+                                                            ? 'Seconds the class(es) must stay continuously matched before this step passes'
+                                                            : 'Seconds the class(es) must stay undetected before this step passes'}
                                                         value={pendingHoldSeconds}
                                                         onChange={e => setPendingHoldSeconds(e.target.value)}
                                                     />

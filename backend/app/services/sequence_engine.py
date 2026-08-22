@@ -58,9 +58,9 @@ class SequenceRunState:
     # Per-class last-seen center point, for line-region crossing checks.
     prev_centers: dict[str, tuple[float, float]] = field(default_factory=dict)
     events: list[StepEvent] = field(default_factory=list)
-    # Consecutive sampled frames the current step's classes have been
-    # absent, for complete_on="undetect_hold" steps.
-    undetect_counter: int = 0
+    # Consecutive sampled frames the current step's match condition has
+    # held true (complete_on="detect_hold") or false (="undetect_hold").
+    hold_counter: int = 0
 
     @property
     def is_complete(self) -> bool:
@@ -85,8 +85,11 @@ class SequenceRunState:
         needed_classes = _step_classes(target)
         threshold_pct = self.overlap_threshold * 100.0
 
-        if target.get("complete_on") == "undetect_hold":
+        complete_on = target.get("complete_on")
+        if complete_on == "undetect_hold":
             return self._check_undetect_hold(target, needed_classes, frame_number, detections)
+        if complete_on == "detect_hold":
+            return self._check_detect_hold(target, needed_classes, frame_number, detections, threshold_pct)
 
         if _is_line_region(target):
             matched = self._check_line_region(target, needed_classes, detections)
@@ -95,18 +98,7 @@ class SequenceRunState:
             matched = result["matched"]
 
         if matched:
-            event = StepEvent(
-                step_index=self.current_step,
-                label=target["label"],
-                frame_number=frame_number,
-                matched=True,
-                reason="matched",
-            )
-            self.events.append(event)
-            self.current_step += 1
-            for cls in needed_classes:
-                self.prev_centers.pop(cls, None)
-            return event
+            return self._advance(target, needed_classes, frame_number)
 
         # Wrong-region hit: any of this step's required classes has a
         # detection landing in a DIFFERENT step's box/detection_class
@@ -160,14 +152,44 @@ class SequenceRunState:
         detected_now = any(det["class_name"] in needed_classes for det in detections)
 
         if detected_now:
-            self.undetect_counter = 0
+            self.hold_counter = 0
             return None
 
-        self.undetect_counter += 1
+        self.hold_counter += 1
         hold_frames = target.get("hold_frames", 1)
-        if self.undetect_counter < hold_frames:
+        if self.hold_counter < hold_frames:
             return None
 
+        return self._advance(target, needed_classes, frame_number)
+
+    def _check_detect_hold(
+        self, target: dict, needed_classes: list[str], frame_number: int,
+        detections: list[dict], threshold_pct: float,
+    ) -> StepEvent | None:
+        """Step passes once the step's normal match condition (region
+        overlap / line crossing / class overlap) has held true for
+        hold_frames sampled frames IN A ROW. A single frame where it
+        drops out resets the counter — this is what tells apart a real
+        'press and hold' from the hand just passing over the region on
+        its way somewhere else."""
+        if _is_line_region(target):
+            matched_now = self._check_line_region(target, needed_classes, detections)
+        else:
+            result = evaluate_step(target, detections, threshold_pct)
+            matched_now = result["matched"]
+
+        if not matched_now:
+            self.hold_counter = 0
+            return None
+
+        self.hold_counter += 1
+        hold_frames = target.get("hold_frames", 1)
+        if self.hold_counter < hold_frames:
+            return None
+
+        return self._advance(target, needed_classes, frame_number)
+
+    def _advance(self, target: dict, needed_classes: list[str], frame_number: int) -> StepEvent:
         event = StepEvent(
             step_index=self.current_step,
             label=target["label"],
@@ -177,7 +199,7 @@ class SequenceRunState:
         )
         self.events.append(event)
         self.current_step += 1
-        self.undetect_counter = 0
+        self.hold_counter = 0
         for cls in needed_classes:
             self.prev_centers.pop(cls, None)
         return event
