@@ -292,6 +292,13 @@ export default function SequencePanel({ project, onClose }) {
                     target_type: 'region',
                     region_type: 'polygon',
                     region_coords: res.data.polygon,
+                    // Kept alongside the frozen shape so the run engine can
+                    // re-sync this region to the class's live position
+                    // whenever it's actually visible (corrects for camera
+                    // shake/drift instead of staying stuck at the exact
+                    // frozen spot forever) — falls back to the frozen
+                    // boundary whenever the class is occluded.
+                    target_class: targetClass,
                 }]);
                 setStepOrder(prev => [...prev, id]);
                 setPendingLabel('');

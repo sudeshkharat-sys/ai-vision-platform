@@ -24,7 +24,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from .sequence_geometry import segments_intersect
-from .sequence_match import evaluate_step
+from .sequence_match import evaluate_step, best_polygon_for_class
 
 
 @dataclass
@@ -61,6 +61,9 @@ class SequenceRunState:
     # Consecutive sampled frames the current step's match condition has
     # held true (complete_on="detect_hold") or false (="undetect_hold").
     hold_counter: int = 0
+    # Per-step-index drift-corrected polygon for a frozen "polygon"
+    # region step that also carries target_class (see _resolve_target).
+    synced_polygons: dict[int, list] = field(default_factory=dict)
 
     @property
     def is_complete(self) -> bool:
@@ -70,6 +73,29 @@ class SequenceRunState:
         if self.is_complete:
             return None
         return self.steps[self.current_step]
+
+    def _resolve_target(self, step: dict, step_index: int, detections: list[dict]) -> dict:
+        """A frozen "polygon" region step that also has target_class set
+        (e.g. from "Freeze boundary") gets re-synced to that class's own
+        live-detected mask whenever it's actually visible this frame —
+        self-correcting for camera shake/drift instead of staying stuck
+        at the exact spot it was frozen at. Falls back to the last
+        known-good polygon (or the original frozen one) whenever the
+        class is occluded/not detected this frame, same as before."""
+        if step.get("target_type", "region") != "region" or step.get("region_type") != "polygon":
+            return step
+        target_class = step.get("target_class")
+        if not target_class:
+            return step
+
+        live_polygon = best_polygon_for_class(detections, target_class)
+        if live_polygon is not None:
+            self.synced_polygons[step_index] = live_polygon
+
+        effective_coords = self.synced_polygons.get(step_index, step["region_coords"])
+        if effective_coords is step["region_coords"]:
+            return step
+        return {**step, "region_coords": effective_coords}
 
     def process_frame(self, frame_number: int, detections: list[dict]) -> StepEvent | None:
         """detections: [{"class_name": str, "xyxy": (x1,y1,x2,y2),
@@ -94,7 +120,8 @@ class SequenceRunState:
         if _is_line_region(target):
             matched = self._check_line_region(target, needed_classes, detections)
         else:
-            result = evaluate_step(target, detections, threshold_pct)
+            resolved = self._resolve_target(target, self.current_step, detections)
+            result = evaluate_step(resolved, detections, threshold_pct)
             matched = result["matched"]
 
         if matched:
@@ -112,7 +139,8 @@ class SequenceRunState:
                 other_needed = _step_classes(step)
                 if cls not in other_needed:
                     continue
-                other_result = evaluate_step(step, detections, threshold_pct)
+                other_resolved = self._resolve_target(step, idx, detections)
+                other_result = evaluate_step(other_resolved, detections, threshold_pct)
                 if other_result["matched"]:
                     wrong_region_hit = True
                     break
@@ -130,6 +158,7 @@ class SequenceRunState:
             self.events.append(event)
             self.current_step = 0
             self.prev_centers = {}
+            self.synced_polygons = {}
             return event
 
         if wrong_region_hit:  # lenient
@@ -175,7 +204,8 @@ class SequenceRunState:
         if _is_line_region(target):
             matched_now = self._check_line_region(target, needed_classes, detections)
         else:
-            result = evaluate_step(target, detections, threshold_pct)
+            resolved = self._resolve_target(target, self.current_step, detections)
+            result = evaluate_step(resolved, detections, threshold_pct)
             matched_now = result["matched"]
 
         if not matched_now:
