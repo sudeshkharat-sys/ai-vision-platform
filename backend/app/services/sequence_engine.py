@@ -58,6 +58,9 @@ class SequenceRunState:
     # Per-class last-seen center point, for line-region crossing checks.
     prev_centers: dict[str, tuple[float, float]] = field(default_factory=dict)
     events: list[StepEvent] = field(default_factory=list)
+    # Consecutive sampled frames the current step's classes have been
+    # absent, for complete_on="undetect_hold" steps.
+    undetect_counter: int = 0
 
     @property
     def is_complete(self) -> bool:
@@ -81,6 +84,9 @@ class SequenceRunState:
         target = self.current_target()
         needed_classes = _step_classes(target)
         threshold_pct = self.overlap_threshold * 100.0
+
+        if target.get("complete_on") == "undetect_hold":
+            return self._check_undetect_hold(target, needed_classes, frame_number, detections)
 
         if _is_line_region(target):
             matched = self._check_line_region(target, needed_classes, detections)
@@ -144,6 +150,37 @@ class SequenceRunState:
             )
 
         return None
+
+    def _check_undetect_hold(
+        self, target: dict, needed_classes: list[str], frame_number: int, detections: list[dict]
+    ) -> StepEvent | None:
+        """Step passes once ALL of needed_classes have been absent from
+        the detections for hold_frames sampled frames in a row. Any frame
+        where one reappears resets the counter to zero."""
+        detected_now = any(det["class_name"] in needed_classes for det in detections)
+
+        if detected_now:
+            self.undetect_counter = 0
+            return None
+
+        self.undetect_counter += 1
+        hold_frames = target.get("hold_frames", 1)
+        if self.undetect_counter < hold_frames:
+            return None
+
+        event = StepEvent(
+            step_index=self.current_step,
+            label=target["label"],
+            frame_number=frame_number,
+            matched=True,
+            reason="matched",
+        )
+        self.events.append(event)
+        self.current_step += 1
+        self.undetect_counter = 0
+        for cls in needed_classes:
+            self.prev_centers.pop(cls, None)
+        return event
 
     def _check_line_region(self, target: dict, needed_classes: list[str], detections: list[dict]) -> bool:
         """All required classes must have crossed the line THIS frame

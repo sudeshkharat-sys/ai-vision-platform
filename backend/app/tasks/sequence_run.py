@@ -307,6 +307,18 @@ def run_sequence_on_video(self, run_id: str) -> dict:
                 "portrait" if video_is_portrait else "landscape",
             )
 
+    # "hold_seconds" is the user-facing config on an undetect_hold step
+    # (e.g. "gesture must be gone for 1.5s"). Convert it here to
+    # hold_frames — a count of *sampled* frames — since that's the unit
+    # SequenceRunState.process_frame() is actually called at (every
+    # FRAME_STRIDE'th real frame).
+    video_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    sampled_fps = video_fps / FRAME_STRIDE
+    for step in steps:
+        if step.get("complete_on") == "undetect_hold" and "hold_frames" not in step:
+            hold_seconds = step.get("hold_seconds", 1.0)
+            step["hold_frames"] = max(1, round(hold_seconds * sampled_fps))
+
     state = SequenceRunState(
         steps=steps,
         mode=sequence["mode"],
