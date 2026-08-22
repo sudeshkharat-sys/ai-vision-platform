@@ -270,10 +270,15 @@ class SequenceState:
             self.last_reason = "matched"
             return "matched"
 
+        # Only steps still AHEAD (idx > current_step) count as a "wrong
+        # region hit" — a step already passed is skipped, since the hand
+        # naturally lingers over the region it just completed for a
+        # frame or two while moving toward the next one; that's not a
+        # mistake, just physics.
         wrong_region_hit = False
         for cls in needed_classes:
             for idx, step in enumerate(self.steps):
-                if idx == self.current_step or _is_line_region(step):
+                if idx <= self.current_step or _is_line_region(step):
                     continue
                 if cls not in _step_classes(step):
                     continue

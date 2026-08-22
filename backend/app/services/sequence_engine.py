@@ -159,13 +159,19 @@ class SequenceRunState:
             return self._advance(target, needed_classes, frame_number)
 
         # Wrong-region hit: any of this step's required classes has a
-        # detection landing in a DIFFERENT step's box/detection_class
-        # target instead. (Only checked for non-line steps — a line
-        # region's "hit" is a crossing event, not a static landing.)
+        # detection landing in a step further AHEAD in the sequence
+        # instead — a genuine mistake (touching a not-yet-reached
+        # target early). Steps already PASSED (idx < current_step) are
+        # never checked: the hand naturally lingers over the region it
+        # just completed for a frame or two while moving toward the
+        # next one, and that's not a mistake, just physics — flagging it
+        # anyway sent progress back to step 1 the instant a step passed.
+        # (Only checked for non-line steps — a line region's "hit" is a
+        # crossing event, not a static landing.)
         wrong_region_hit = False
         for cls in needed_classes:
             for idx, step in enumerate(self.steps):
-                if idx == self.current_step or _is_line_region(step):
+                if idx <= self.current_step or _is_line_region(step):
                     continue
                 other_needed = _step_classes(step)
                 if cls not in other_needed:
