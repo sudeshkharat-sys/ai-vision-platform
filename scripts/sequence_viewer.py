@@ -212,22 +212,20 @@ class SequenceState:
         self.last_reason = "watching"
 
     def _resolve_target(self, step: dict, step_index: int, detections: list, allow_resync: bool = True) -> dict:
-        """A frozen "polygon" region step normally just stays exactly
-        where it was captured. Only if the step explicitly opts in with
-        resync=True does it re-sync to target_class's own live-detected
-        mask whenever visible — off by default because on a real
-        keyboard with small adjacent keys the model can emit a
-        CONFIDENT but wrong detection (seeing "I" while actually looking
-        at "N" right below it), which would otherwise corrupt a good
-        frozen position instead of protecting it.
+        """A frozen "polygon" region step with target_class set gets
+        re-synced to that class's own live-detected mask whenever it's
+        actually visible this frame — self-corrects for camera shake/
+        drift instead of staying stuck at the exact spot it was frozen
+        at. Falls back to the last known-good (or original frozen)
+        polygon when the class is occluded/not detected this frame.
 
-        allow_resync=False additionally keeps the current position
-        WITHOUT updating it — used mid-hold so the target can't wobble
-        frame-to-frame while a press is already in progress."""
+        allow_resync=False keeps the current position WITHOUT updating
+        it — used mid-hold so the target can't wobble frame-to-frame
+        from live-detection jitter while a press is already in progress."""
         if step.get("target_type", "region") != "region" or step.get("region_type") != "polygon":
             return step
         target_class = step.get("target_class")
-        if not target_class or not step.get("resync"):
+        if not target_class:
             return step
         if allow_resync:
             best_conf = max(
