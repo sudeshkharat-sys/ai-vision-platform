@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import axios from 'axios';
-import { Stage, Layer, Rect, Line, Text, Group, Image as KonvaImage } from 'react-konva';
+import { Stage, Layer, Rect, Line, Text, Group, Image as KonvaImage, Circle } from 'react-konva';
 import useImage from 'use-image';
 import { Route, X, Trash2, Check, AlertTriangle, Plus, Square, Minus, ChevronLeft, MousePointerClick, Play, Loader2, Download } from 'lucide-react';
 import './SequencePanel.css';
@@ -88,6 +88,7 @@ export default function SequencePanel({ project, onClose }) {
     // "class" — target = another detected class's own mask (e.g. "M"),
     //   no drawing needed, just pick classes.
     const [regionKind, setRegionKind]   = useState('box');
+    const [editRegions, setEditRegions] = useState(false); // true: drag/resize existing regions instead of adding them as a step on click
     const [drawing, setDrawing]         = useState(null); // in-progress shape
     const [pendingClass, setPendingClass] = useState('');
     const [pendingLabel, setPendingLabel] = useState('');
@@ -160,6 +161,7 @@ export default function SequencePanel({ project, onClose }) {
 
     // ── Drawing a NEW region on canvas ───────────────────────────────
     const handleMouseDown = (e) => {
+        if (editRegions) return; // editing existing regions — don't start drawing a new one
         if (regionKind === 'class') return; // "Class" steps aren't drawn
         // Only start a fresh draw when clicking empty canvas, not an existing region
         if (e.target !== e.target.getStage()) return;
@@ -299,6 +301,11 @@ export default function SequencePanel({ project, onClose }) {
 
     const updateRegionLabel = (regionId, label) =>
         setRegions(prev => prev.map(r => r.id === regionId ? { ...r, label } : r));
+
+    const updateRegionCoords = (regionId, coords) =>
+        setRegions(prev => prev.map(r => r.id === regionId ? { ...r, region_coords: coords } : r));
+
+    const clamp01 = v => Math.min(1, Math.max(0, v));
 
     const deleteRegion = (regionId) => {
         setRegions(prev => prev.filter(r => r.id !== regionId));
@@ -640,6 +647,11 @@ export default function SequencePanel({ project, onClose }) {
                                 <div className="sq-canvas-wrap">
                                     <div className="sq-toolbar">
                                         <button
+                                            className={`sq-tool-btn ${editRegions ? 'sq-tool-btn--active' : ''}`}
+                                            onClick={() => setEditRegions(v => !v)}
+                                            title="Drag existing regions to move them, or drag their corner/end handles to resize — instead of clicking them to add as the next step"
+                                        ><MousePointerClick size={13} /> {editRegions ? 'Editing gates' : 'Edit gates'}</button>
+                                        <button
                                             className={`sq-tool-btn ${regionKind === 'box' ? 'sq-tool-btn--active' : ''}`}
                                             onClick={() => setRegionKind('box')}
                                             title="Draw a box region on the reference frame"
@@ -737,9 +749,11 @@ export default function SequencePanel({ project, onClose }) {
                                     )}
                                     <p className="sq-hint sq-hint--tight">
                                         <MousePointerClick size={12} />
-                                        {regionKind === 'class'
+                                        {editRegions
+                                            ? ' Editing gates: drag a region to move it, or drag its white corner/end handles to resize. Click "Editing gates" again to go back to adding steps.'
+                                            : regionKind === 'class'
                                             ? ' Pick a target class + intersect class(es), then click "Add Step" — nothing to draw.'
-                                            : ' Draw a new region on empty canvas. Click an already-drawn region to reuse it as the next step. Pick two or more classes to require ALL of them at once.'}
+                                            : ' Draw a new region on empty canvas. Click an already-drawn region to reuse it as the next step, or click "Edit gates" to reposition/resize existing ones. Pick two or more classes to require ALL of them at once.'}
                                     </p>
                                     <Stage
                                         ref={stageRef}
@@ -761,38 +775,69 @@ export default function SequencePanel({ project, onClose }) {
                                                 const color = STEP_COLORS[i % STEP_COLORS.length];
                                                 const timesUsed = stepOrder.filter(id => id === r.id).length;
                                                 // Region coords are stored relative to the PHOTO (0-1) — convert
-                                                // back to canvas pixels via the same imgLayout used to draw it.
+                                                // back to canvas pixels via the same imgLayout used to draw it,
+                                                // and back again for drag/resize handles.
                                                 const toPx  = fx => imgLayout.x + fx * imgLayout.width;
                                                 const toPy  = fy => imgLayout.y + fy * imgLayout.height;
+                                                const fromPx = px => clamp01((px - imgLayout.x) / imgLayout.width);
+                                                const fromPy = py => clamp01((py - imgLayout.y) / imgLayout.height);
+                                                const handleProps = {
+                                                    radius: 6, fill: '#ffffff', stroke: color, strokeWidth: 2,
+                                                    draggable: true,
+                                                };
                                                 if (r.region_type === 'box') {
                                                     const [x1, y1, x2, y2] = r.region_coords;
                                                     return (
                                                         <Group
                                                             key={r.id}
-                                                            onClick={() => appendExistingRegion(r.id)}
-                                                            onTap={() => appendExistingRegion(r.id)}
+                                                            onClick={() => !editRegions && appendExistingRegion(r.id)}
+                                                            onTap={() => !editRegions && appendExistingRegion(r.id)}
                                                         >
                                                             <Rect
                                                                 x={toPx(x1)} y={toPy(y1)}
                                                                 width={toPx(x2) - toPx(x1)} height={toPy(y2) - toPy(y1)}
                                                                 stroke={color} strokeWidth={2} fill={`${color}22`}
+                                                                draggable={editRegions}
+                                                                onDragEnd={e => {
+                                                                    const newX1 = fromPx(e.target.x()), newY1 = fromPy(e.target.y());
+                                                                    updateRegionCoords(r.id, [newX1, newY1, newX1 + (x2 - x1), newY1 + (y2 - y1)]);
+                                                                }}
                                                             />
                                                             <Text x={toPx(x1) + 4} y={toPy(y1) + 4} text={`${r.label}${timesUsed > 1 ? ` ×${timesUsed}` : ''}`} fill={color} fontStyle="bold" fontSize={12} />
+                                                            {editRegions && (
+                                                                <>
+                                                                    <Circle {...handleProps} x={toPx(x1)} y={toPy(y1)}
+                                                                        onDragEnd={e => updateRegionCoords(r.id, [fromPx(e.target.x()), fromPy(e.target.y()), x2, y2])} />
+                                                                    <Circle {...handleProps} x={toPx(x2)} y={toPy(y2)}
+                                                                        onDragEnd={e => updateRegionCoords(r.id, [x1, y1, fromPx(e.target.x()), fromPy(e.target.y())])} />
+                                                                </>
+                                                            )}
                                                         </Group>
                                                     );
                                                 }
                                                 if (r.region_type === 'polygon') {
                                                     // Frozen class boundary — region_coords is a list of [x,y]
                                                     // points (the class's own mask), not a fixed-length tuple.
+                                                    // Only whole-shape reposition is supported (not reshaping the
+                                                    // captured boundary itself).
                                                     const pts = r.region_coords.flatMap(([px, py]) => [toPx(px), toPy(py)]);
                                                     const [fx0, fy0] = r.region_coords[0];
                                                     return (
                                                         <Group
                                                             key={r.id}
-                                                            onClick={() => appendExistingRegion(r.id)}
-                                                            onTap={() => appendExistingRegion(r.id)}
+                                                            onClick={() => !editRegions && appendExistingRegion(r.id)}
+                                                            onTap={() => !editRegions && appendExistingRegion(r.id)}
                                                         >
-                                                            <Line points={pts} closed stroke={color} strokeWidth={2} fill={`${color}22`} />
+                                                            <Line
+                                                                points={pts} closed stroke={color} strokeWidth={2} fill={`${color}22`}
+                                                                draggable={editRegions}
+                                                                onDragEnd={e => {
+                                                                    const dx = (e.target.x()) / imgLayout.width;
+                                                                    const dy = (e.target.y()) / imgLayout.height;
+                                                                    updateRegionCoords(r.id, r.region_coords.map(([px, py]) => [clamp01(px + dx), clamp01(py + dy)]));
+                                                                    e.target.position({ x: 0, y: 0 });
+                                                                }}
+                                                            />
                                                             <Text x={toPx(fx0) + 4} y={toPy(fy0) + 4} text={`${r.label}${timesUsed > 1 ? ` ×${timesUsed}` : ''} 🔒`} fill={color} fontStyle="bold" fontSize={12} />
                                                         </Group>
                                                     );
@@ -801,11 +846,28 @@ export default function SequencePanel({ project, onClose }) {
                                                 return (
                                                     <Group
                                                         key={r.id}
-                                                        onClick={() => appendExistingRegion(r.id)}
-                                                        onTap={() => appendExistingRegion(r.id)}
+                                                        onClick={() => !editRegions && appendExistingRegion(r.id)}
+                                                        onTap={() => !editRegions && appendExistingRegion(r.id)}
                                                     >
-                                                        <Line points={[toPx(x1), toPy(y1), toPx(x2), toPy(y2)]} stroke={color} strokeWidth={3} hitStrokeWidth={16} />
+                                                        <Line
+                                                            points={[toPx(x1), toPy(y1), toPx(x2), toPy(y2)]} stroke={color} strokeWidth={3} hitStrokeWidth={16}
+                                                            draggable={editRegions}
+                                                            onDragEnd={e => {
+                                                                const dx = (e.target.x()) / imgLayout.width;
+                                                                const dy = (e.target.y()) / imgLayout.height;
+                                                                updateRegionCoords(r.id, [clamp01(x1 + dx), clamp01(y1 + dy), clamp01(x2 + dx), clamp01(y2 + dy)]);
+                                                                e.target.position({ x: 0, y: 0 });
+                                                            }}
+                                                        />
                                                         <Text x={toPx(x1) + 4} y={toPy(y1) - 16} text={`${r.label}${timesUsed > 1 ? ` ×${timesUsed}` : ''}`} fill={color} fontStyle="bold" fontSize={12} />
+                                                        {editRegions && (
+                                                            <>
+                                                                <Circle {...handleProps} x={toPx(x1)} y={toPy(y1)}
+                                                                    onDragEnd={e => updateRegionCoords(r.id, [fromPx(e.target.x()), fromPy(e.target.y()), x2, y2])} />
+                                                                <Circle {...handleProps} x={toPx(x2)} y={toPy(y2)}
+                                                                    onDragEnd={e => updateRegionCoords(r.id, [x1, y1, fromPx(e.target.x()), fromPy(e.target.y())])} />
+                                                            </>
+                                                        )}
                                                     </Group>
                                                 );
                                             })}
