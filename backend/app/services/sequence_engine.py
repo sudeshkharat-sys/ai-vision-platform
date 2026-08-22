@@ -53,6 +53,10 @@ def _is_line_region(step: dict) -> bool:
 # tolerates before treating it as a real release rather than hand jitter.
 MISS_TOLERANCE = 2
 
+# Minimum detection confidence required before a live class detection is
+# trusted to re-sync a frozen region's position (see _resolve_target).
+MIN_RESYNC_CONFIDENCE = 0.4
+
 
 @dataclass
 class SequenceRunState:
@@ -89,16 +93,27 @@ class SequenceRunState:
         self-correcting for camera shake/drift instead of staying stuck
         at the exact spot it was frozen at. Falls back to the last
         known-good polygon (or the original frozen one) whenever the
-        class is occluded/not detected this frame, same as before."""
+        class is occluded/not detected this frame, same as before.
+
+        Only resyncs on a detection with at least MIN_RESYNC_CONFIDENCE
+        confidence — two adjacent keys (e.g. N sitting right under I) can
+        make the model emit a shaky, low-confidence, wrongly-placed guess
+        when a hand overlaps both; trusting that would corrupt an
+        otherwise-good synced position instead of protecting it."""
         if step.get("target_type", "region") != "region" or step.get("region_type") != "polygon":
             return step
         target_class = step.get("target_class")
         if not target_class:
             return step
 
-        live_polygon = best_polygon_for_class(detections, target_class)
-        if live_polygon is not None:
-            self.synced_polygons[step_index] = live_polygon
+        best_conf = max(
+            (det.get("conf", 0.0) for det in detections if det["class_name"] == target_class),
+            default=-1.0,
+        )
+        if best_conf >= MIN_RESYNC_CONFIDENCE:
+            live_polygon = best_polygon_for_class(detections, target_class)
+            if live_polygon is not None:
+                self.synced_polygons[step_index] = live_polygon
 
         effective_coords = self.synced_polygons.get(step_index, step["region_coords"])
         if effective_coords is step["region_coords"]:

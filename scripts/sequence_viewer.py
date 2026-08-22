@@ -171,6 +171,12 @@ def _is_line_region(step: dict) -> bool:
 # before treating it as a real release rather than hand jitter.
 MISS_TOLERANCE = 2
 
+# Minimum detection confidence required before a live class detection is
+# trusted to re-sync a frozen region's position (see _resolve_target) —
+# protects against a shaky/wrong guess (e.g. two adjacent keys like N
+# under I both under the hand at once) corrupting a good synced position.
+MIN_RESYNC_CONFIDENCE = 0.4
+
 
 @dataclass
 class SequenceState:
@@ -217,9 +223,14 @@ class SequenceState:
         target_class = step.get("target_class")
         if not target_class:
             return step
-        live_polygon = best_polygon_for_class(detections, target_class)
-        if live_polygon is not None:
-            self.synced_polygons[step_index] = live_polygon
+        best_conf = max(
+            (det.get("conf", 0.0) for det in detections if det["class_name"] == target_class),
+            default=-1.0,
+        )
+        if best_conf >= MIN_RESYNC_CONFIDENCE:
+            live_polygon = best_polygon_for_class(detections, target_class)
+            if live_polygon is not None:
+                self.synced_polygons[step_index] = live_polygon
         effective_coords = self.synced_polygons.get(step_index, step["region_coords"])
         if effective_coords is step["region_coords"]:
             return step
@@ -402,20 +413,20 @@ def draw_overlay(frame, detections, target, status):
 
     step_color = _STATUS_COLORS.get(status, (255, 255, 255))
     region_type = target.get("region_type") if target else None
-    # A black ring drawn first, slightly thicker, under the status-colored
-    # outline — keeps the region boundary visible against busy/bright video
-    # backgrounds where a thin colored line alone can get lost.
     if target and target.get("target_type", "region") == "region" and region_type == "box":
         rx1, ry1, rx2, ry2 = target["region_coords"]
-        p1, p2 = (int(rx1 * w), int(ry1 * h)), (int(rx2 * w), int(ry2 * h))
-        cv2.rectangle(img, p1, p2, (0, 0, 0), 4)
-        cv2.rectangle(img, p1, p2, step_color, 2)
+        cv2.rectangle(img, (int(rx1 * w), int(ry1 * h)), (int(rx2 * w), int(ry2 * h)), step_color, 2)
     elif target and region_type == "line":
         x1, y1, x2, y2 = target["region_coords"]
-        p1, p2 = (int(x1 * w), int(y1 * h)), (int(x2 * w), int(y2 * h))
-        cv2.line(img, p1, p2, (0, 0, 0), 5)
-        cv2.line(img, p1, p2, step_color, 3)
+        cv2.line(img, (int(x1 * w), int(y1 * h)), (int(x2 * w), int(y2 * h)), step_color, 3)
     elif target and region_type == "polygon":
+        # Class-target (frozen letter) regions specifically get a black
+        # ring drawn UNDER the status-colored outline — none of your
+        # trained classes' own segmentation masks use black/gray, so this
+        # boundary always stays visible even against a screen full of
+        # jumbled, similarly-colored mask fills from every other detected
+        # class. Gate (box/line) regions don't need this — they aren't
+        # drawn over other classes' masks the same way.
         pts = np.array([[int(px * w), int(py * h)] for px, py in target["region_coords"]], dtype=np.int32)
         cv2.polylines(img, [pts], isClosed=True, color=(0, 0, 0), thickness=5)
         cv2.polylines(img, [pts], isClosed=True, color=step_color, thickness=3)

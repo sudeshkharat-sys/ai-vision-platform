@@ -188,10 +188,24 @@ def _draw_overlay(frame, detections: list[dict], target: dict | None, reason: st
         cv2.putText(img, label, (label_anchor[0], max(14, label_anchor[1] - 6)),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
 
-    if target and target.get("target_type", "region") == "region" and target.get("region_type") == "box":
+    region_type = target.get("region_type") if target else None
+    if target and target.get("target_type", "region") == "region" and region_type == "box":
         rx1, ry1, rx2, ry2 = target["region_coords"]
         color = _DEBUG_COLORS.get(reason, (0, 165, 255))
         cv2.rectangle(img, (int(rx1 * w), int(ry1 * h)), (int(rx2 * w), int(ry2 * h)), color, 2)
+    elif target and region_type == "line":
+        x1, y1, x2, y2 = target["region_coords"]
+        color = _DEBUG_COLORS.get(reason, (0, 165, 255))
+        cv2.line(img, (int(x1 * w), int(y1 * h)), (int(x2 * w), int(y2 * h)), color, 3)
+    elif target and region_type == "polygon":
+        # Class-target (frozen letter) regions get a black ring under the
+        # status color — none of your trained classes' own masks use
+        # black/gray, so this boundary stays visible against a screen
+        # full of similarly-colored mask fills from every other detection.
+        color = _DEBUG_COLORS.get(reason, (0, 165, 255))
+        pts = np.array([[int(px * w), int(py * h)] for px, py in target["region_coords"]], dtype=np.int32)
+        cv2.polylines(img, [pts], isClosed=True, color=(0, 0, 0), thickness=5)
+        cv2.polylines(img, [pts], isClosed=True, color=color, thickness=3)
 
     step_label = target.get("label", "") if target else ""
     cv2.putText(img, f'Step: {step_label}  ({reason})', (10, h - 12),
