@@ -219,3 +219,44 @@ async def test_sequence_on_image(
         for step in body.steps
     ]
     return {"image_id": body.image_id, "results": results}
+
+
+@router.get("/freeze-class/{project_id}")
+async def freeze_class_boundary(
+    project_id: str,
+    image_id: str,
+    class_name: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Run the project's model once on a reference image and return one
+    class's own detected boundary (real segmentation mask if available,
+    else its bbox) as a fixed polygon — for turning a "Class" step into a
+    frozen region region_type: "polygon" so the step no longer needs that
+    class detected live every frame (which fails once something, like a
+    finger, fully covers/occludes it)."""
+    await get_owned_project(project_id, current_user, db)
+    image = await get_owned_image(image_id, current_user, db)
+
+    import cv2
+    from ..tasks.auto_annotate import _resolve_image_path
+    from ..services.sequence_test import collect_detections
+    from ..services.sequence_match import best_polygon_for_class
+
+    real_path = _resolve_image_path(image.filepath)
+    if real_path is None:
+        raise HTTPException(status_code=404, detail="Image file not found on disk")
+
+    img_bgr = cv2.imread(str(real_path))
+    if img_bgr is None:
+        raise HTTPException(status_code=422, detail="Could not decode image")
+
+    detections = collect_detections(project_id, img_bgr)
+    polygon = best_polygon_for_class(detections, class_name)
+    if polygon is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f'Class "{class_name}" was not detected on this reference image — '
+                   f'move it into view (unoccluded) and try again.',
+        )
+    return {"class_name": class_name, "polygon": polygon}

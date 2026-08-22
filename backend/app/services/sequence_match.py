@@ -103,7 +103,17 @@ def evaluate_step(step: dict, detections: list[dict], threshold_pct: float) -> d
                 "note": f'Target class "{target_class}" was not detected in this frame.',
             }
     else:
-        if step.get("region_type") != "box":
+        region_type = step.get("region_type")
+        if region_type == "box":
+            x1, y1, x2, y2 = step["region_coords"]
+            target_polygon = [[x1, y1], [x2, y1], [x2, y2], [x1, y2]]
+        elif region_type == "polygon":
+            # A boundary frozen once from a class's own detected mask (see
+            # /sequences/freeze-class), so the step never needs that class
+            # detected live again — sidesteps a finger fully occluding the
+            # key it's pressing, which would otherwise erase its mask.
+            target_polygon = step["region_coords"]
+        else:
             return {
                 "matched": False,
                 "target_type": target_type,
@@ -111,8 +121,6 @@ def evaluate_step(step: dict, detections: list[dict], threshold_pct: float) -> d
                 "per_class": [],
                 "note": "Line regions need motion between frames — not evaluated here.",
             }
-        x1, y1, x2, y2 = step["region_coords"]
-        target_polygon = [[x1, y1], [x2, y1], [x2, y2], [x1, y2]]
 
     needed = step.get("required_classes") or [step["required_class"]]
     per_class = []

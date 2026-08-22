@@ -80,6 +80,8 @@ export default function SequencePanel({ project, onClose }) {
     const [pendingTargetClass, setPendingTargetClass] = useState('');
     const [pendingCompleteOn, setPendingCompleteOn] = useState('detect'); // 'detect' | 'detect_hold' | 'undetect_hold'
     const [pendingHoldSeconds, setPendingHoldSeconds] = useState(0.4);
+    const [pendingFreezeBoundary, setPendingFreezeBoundary] = useState(true);
+    const [freezing, setFreezing] = useState(false);
     const [seqThreshold, setSeqThreshold] = useState(0.5);
 
     // Quick single-image test — no save, no video, instant per-step check
@@ -206,8 +208,13 @@ export default function SequencePanel({ project, onClose }) {
     };
 
     // ── Add a "Detection Class" step — target = another class's own
-    // detected mask (e.g. "M"), no region drawn on canvas ─────────────
-    const addDetectionClassStep = () => {
+    // detected mask (e.g. "M"), no region drawn on canvas. By default the
+    // boundary is frozen once (from the reference image) into a fixed
+    // polygon region, so the step keeps working even when something (a
+    // finger) fully covers/occludes that class later and it can't be
+    // live-detected anymore. Uncheck "freeze" to keep the old live-match
+    // behavior (target_type: detection_class, re-detected every frame). ─
+    const addDetectionClassStep = async () => {
         const targetClass = pendingTargetClass.trim();
         const classes = pendingClass.split(',').map(c => c.trim()).filter(Boolean);
         if (!targetClass) { setError('Select a target class first.'); return; }
@@ -215,15 +222,43 @@ export default function SequencePanel({ project, onClose }) {
 
         const id = nextRegionId();
         const label = pendingLabel.trim() || `${targetClass} x ${classes.join('+')}`;
-        setRegions(prev => [...prev, {
+        const base = {
             id,
-            target_type: 'detection_class',
-            target_class: targetClass,
             required_class: classes[0],
             required_classes: classes,
             label,
             complete_on: pendingCompleteOn,
             hold_seconds: pendingCompleteOn !== 'detect' ? Number(pendingHoldSeconds) || 0.4 : undefined,
+        };
+
+        if (pendingFreezeBoundary) {
+            if (!refImage) { setError('Pick a reference frame first — freezing needs it to read the class boundary from.'); return; }
+            setFreezing(true);
+            setError(null);
+            try {
+                const res = await axios.get(`${API_URL}/sequences/freeze-class/${project.id}`, {
+                    params: { image_id: refImage.id, class_name: targetClass },
+                });
+                setRegions(prev => [...prev, {
+                    ...base,
+                    target_type: 'region',
+                    region_type: 'polygon',
+                    region_coords: res.data.polygon,
+                }]);
+                setStepOrder(prev => [...prev, id]);
+                setPendingLabel('');
+            } catch (err) {
+                setError(err.response?.data?.detail || `Could not freeze "${targetClass}"'s boundary — make sure it's visible (unoccluded) on the reference frame.`);
+            } finally {
+                setFreezing(false);
+            }
+            return;
+        }
+
+        setRegions(prev => [...prev, {
+            ...base,
+            target_type: 'detection_class',
+            target_class: targetClass,
         }]);
         setStepOrder(prev => [...prev, id]);
         setError(null);
@@ -633,6 +668,14 @@ export default function SequencePanel({ project, onClose }) {
                                         />
                                         {regionKind === 'class' && (
                                             <>
+                                                <label className="sq-class-input" style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={pendingFreezeBoundary}
+                                                        onChange={e => setPendingFreezeBoundary(e.target.checked)}
+                                                    />
+                                                    Freeze boundary (survives occlusion)
+                                                </label>
                                                 <select
                                                     className="sq-class-input"
                                                     value={pendingCompleteOn}
@@ -657,8 +700,8 @@ export default function SequencePanel({ project, onClose }) {
                                                         onChange={e => setPendingHoldSeconds(e.target.value)}
                                                     />
                                                 )}
-                                                <button className="sq-btn-add-step" onClick={addDetectionClassStep}>
-                                                    <Plus size={13} /> Add Step
+                                                <button className="sq-btn-add-step" onClick={addDetectionClassStep} disabled={freezing}>
+                                                    <Plus size={13} /> {freezing ? 'Freezing…' : 'Add Step'}
                                                 </button>
                                             </>
                                         )}
@@ -721,6 +764,22 @@ export default function SequencePanel({ project, onClose }) {
                                                                 stroke={color} strokeWidth={2} fill={`${color}22`}
                                                             />
                                                             <Text x={toPx(x1) + 4} y={toPy(y1) + 4} text={`${r.label}${timesUsed > 1 ? ` ×${timesUsed}` : ''}`} fill={color} fontStyle="bold" fontSize={12} />
+                                                        </Group>
+                                                    );
+                                                }
+                                                if (r.region_type === 'polygon') {
+                                                    // Frozen class boundary — region_coords is a list of [x,y]
+                                                    // points (the class's own mask), not a fixed-length tuple.
+                                                    const pts = r.region_coords.flatMap(([px, py]) => [toPx(px), toPy(py)]);
+                                                    const [fx0, fy0] = r.region_coords[0];
+                                                    return (
+                                                        <Group
+                                                            key={r.id}
+                                                            onClick={() => appendExistingRegion(r.id)}
+                                                            onTap={() => appendExistingRegion(r.id)}
+                                                        >
+                                                            <Line points={pts} closed stroke={color} strokeWidth={2} fill={`${color}22`} />
+                                                            <Text x={toPx(fx0) + 4} y={toPy(fy0) + 4} text={`${r.label}${timesUsed > 1 ? ` ×${timesUsed}` : ''} 🔒`} fill={color} fontStyle="bold" fontSize={12} />
                                                         </Group>
                                                     );
                                                 }
