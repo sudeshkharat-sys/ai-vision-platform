@@ -165,6 +165,16 @@ class SequenceStep(BaseModel):
     # the sequence's shared overlap_threshold, no motion needed.
     trigger_mode: Optional[str] = None
 
+    # What overlap_threshold is measured as a fraction OF.
+    # "region" (default): Intersection / DRAWN REGION area — "how much of
+    # the region is covered". A region drawn much bigger than the object
+    # can never score high on this, however squarely the object sits in it.
+    # "object": Intersection / DETECTED OBJECT area — "how much of the
+    # object is inside the region", which is what "my hand is in the box"
+    # intuitively means; an object fully inside scores 100% regardless of
+    # how much empty space the region has around it.
+    overlap_basis: Optional[str] = None
+
     # Required when target_type == "detection_class" — the class whose
     # own detected mask becomes this step's target area.
     target_class: Optional[str] = None

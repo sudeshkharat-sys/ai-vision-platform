@@ -75,7 +75,18 @@ def bbox_to_polygon(xyxy):
     return [[x1, y1], [x2, y1], [x2, y2], [x1, y2]]
 
 
-def mask_intersection_percent(target_polygon, other_polygon, resolution: int = 256) -> float:
+def mask_intersection_percent(target_polygon, other_polygon, resolution: int = 256,
+                               basis: str = "region") -> float:
+    """basis picks WHAT the intersection is measured as a fraction OF:
+
+    * "region" (default): Intersection / DRAWN REGION area — "how much of
+      the region is covered by the object". A region drawn much larger
+      than the object can never score high on this no matter how squarely
+      the object sits inside it.
+    * "object": Intersection / DETECTED OBJECT area — "how much of the
+      object is inside the region", which is what "my hand is in the box"
+      intuitively means; fully inside scores 100%.
+    """
     def to_px(poly):
         return np.array(
             [[int(round(x * resolution)), int(round(y * resolution))] for x, y in poly],
@@ -87,11 +98,11 @@ def mask_intersection_percent(target_polygon, other_polygon, resolution: int = 2
     cv2.fillPoly(target_mask, [to_px(target_polygon)], 1)
     cv2.fillPoly(other_mask, [to_px(other_polygon)], 1)
 
-    target_area = int(target_mask.sum())
-    if target_area == 0:
+    denominator = int(other_mask.sum()) if basis == "object" else int(target_mask.sum())
+    if denominator == 0:
         return 0.0
     intersection_area = int(np.logical_and(target_mask, other_mask).sum())
-    return (intersection_area / target_area) * 100.0
+    return (intersection_area / denominator) * 100.0
 
 
 def best_polygon_for_class(detections, class_name):
@@ -124,7 +135,8 @@ def line_to_polygon(x1, y1, x2, y2, half_width=LINE_OVERLAP_HALF_WIDTH):
     return [[x1 + nx, y1 + ny], [x2 + nx, y2 + ny], [x2 - nx, y2 - ny], [x1 - nx, y1 - ny]]
 
 
-def _match_single(step: dict, detections: list, threshold_pct: float) -> dict:
+def _match_single(step: dict, detections: list, threshold_pct: float,
+                  basis: str = "region") -> dict:
     target_type = step.get("target_type", "region")
 
     if target_type == "detection_class":
@@ -153,7 +165,7 @@ def _match_single(step: dict, detections: list, threshold_pct: float) -> dict:
     per_class = []
     for cls in needed:
         other_polygon = best_polygon_for_class(detections, cls)
-        pct = mask_intersection_percent(target_polygon, other_polygon) if other_polygon else 0.0
+        pct = mask_intersection_percent(target_polygon, other_polygon, basis=basis) if other_polygon else 0.0
         per_class.append({"class_name": cls, "matched": pct >= threshold_pct, "percent": round(pct, 1)})
 
     return {"matched": bool(needed) and all(c["matched"] for c in per_class),
@@ -172,13 +184,16 @@ def evaluate_step(step: dict, detections: list, threshold_pct: float) -> dict:
         if not sub_targets:
             return {"matched": False, "testable": True, "per_class": [],
                     "note": "Combo step has no sub-regions defined."}
-        results = [_match_single(sub, detections, threshold_pct) for sub in sub_targets]
+        # A combo step's own overlap_basis applies to every sub-region —
+        # sub-targets carry only geometry + classes, not match semantics.
+        basis = step.get("overlap_basis") or "region"
+        results = [_match_single(sub, detections, threshold_pct, basis) for sub in sub_targets]
         testable = all(r["testable"] for r in results)
         return {"matched": testable and all(r["matched"] for r in results),
                 "testable": testable,
                 "per_class": [c for r in results for c in r["per_class"]],
                 "note": "; ".join(r["note"] for r in results if r["note"]) or None}
-    return _match_single(step, detections, threshold_pct)
+    return _match_single(step, detections, threshold_pct, step.get("overlap_basis") or "region")
 
 
 def segments_intersect(p1, p2, p3, p4) -> bool:
@@ -462,7 +477,7 @@ def _color_for_class(class_name: str):
     return _class_color_cache[class_name]
 
 
-def draw_overlay(frame, detections, target, status, detail=None, threshold_pct=0.0):
+def draw_overlay(frame, detections, target, status, detail=None, threshold_pct=0.0, basis="region"):
     img = frame.copy()
     h, w = img.shape[:2]
 
@@ -532,7 +547,7 @@ def draw_overlay(frame, detections, target, status, detail=None, threshold_pct=0
         for c in detail:
             mark = "OK" if c["matched"] else "X"
             parts.append(f'{c["class_name"]}:{c["percent"]:.0f}%{mark}')
-        detail_text = f'  need >= {threshold_pct:.0f}%   ' + '   '.join(parts)
+        detail_text = f'  [{basis}] need >= {threshold_pct:.0f}%   ' + '   '.join(parts)
         banner_h = 56
         cv2.rectangle(img, (0, 34), (w, banner_h), (30, 30, 30), -1)
         cv2.putText(img, detail_text, (10, 50),
@@ -618,6 +633,15 @@ def main():
     parser.add_argument("--webcam", type=int, help="Webcam index (e.g. 0) instead of --video")
     parser.add_argument("--sequence", required=True, help="Path to a sequence.json exported from the web app")
     parser.add_argument("--rotate", choices=["cw", "ccw", "180"], help="Rotate incoming frames to match the reference orientation")
+    parser.add_argument("--overlap-basis", choices=["region", "object"],
+                        help="What the overlap %% is measured as a fraction OF. "
+                             "'region' (the saved default): how much of the DRAWN REGION the object covers — "
+                             "a region drawn bigger than the object can never score high. "
+                             "'object': how much of the DETECTED OBJECT is inside the region — "
+                             "'my hand is in the box' in the intuitive sense (fully inside = 100%%). "
+                             "Overrides whatever the sequence.json says, for all steps.")
+    parser.add_argument("--overlap-threshold", type=float,
+                        help="Override the sequence's overlap_threshold (0-1) without editing the JSON.")
     args = parser.parse_args()
 
     if not args.model and not args.seg_model:
@@ -645,9 +669,16 @@ def main():
     for step in steps:
         if step.get("complete_on") in ("undetect_hold", "detect_hold") and step.get("hold_frames") is None:
             step["hold_frames"] = max(1, round(step.get("hold_seconds", 1.0) * fps))
+        if args.overlap_basis:
+            step["overlap_basis"] = args.overlap_basis
 
+    threshold = args.overlap_threshold if args.overlap_threshold is not None \
+        else sequence.get("overlap_threshold", 0.5)
     state = SequenceState(steps=steps, mode=sequence.get("mode", "strict"),
-                           overlap_threshold=sequence.get("overlap_threshold", 0.5))
+                           overlap_threshold=threshold)
+    basis_label = args.overlap_basis or (steps[0].get("overlap_basis") if steps else None) or "region"
+    print(f'[sequence_viewer] overlap basis = "{basis_label}", threshold = {threshold:.2f} '
+          f'({threshold * 100:.0f}%)')
 
     rotate_code = _ROTATE_CODES.get(args.rotate) if args.rotate else None
 
@@ -678,7 +709,8 @@ def main():
                 if synced is not None:
                     draw_target = {**target, "region_coords": synced}
             display = draw_overlay(frame, detections, draw_target, status,
-                                    detail=state.last_detail, threshold_pct=state.overlap_threshold * 100.0)
+                                    detail=state.last_detail, threshold_pct=state.overlap_threshold * 100.0,
+                                    basis=basis_label)
             display = draw_checklist(display, steps, state.current_step)
 
         cv2.imshow(window, display)

@@ -134,6 +134,12 @@ export default function SequencePanel({ project, onClose }) {
     const [pendingFreezeBoundary, setPendingFreezeBoundary] = useState(true);
     const [freezing, setFreezing] = useState(false);
     const [seqThreshold, setSeqThreshold] = useState(0.5);
+    // What the overlap % is measured as a fraction OF. "region": how much
+    // of the DRAWN REGION the object covers (a region drawn bigger than the
+    // object can never score high). "object": how much of the DETECTED
+    // OBJECT is inside the region — "my hand is in the box" in the
+    // intuitive sense, 100% when fully inside however large the region is.
+    const [seqOverlapBasis, setSeqOverlapBasis] = useState('object');
 
     // Quick single-image test — no save, no video, instant per-step check
     const [testing, setTesting]         = useState(false);
@@ -257,6 +263,7 @@ export default function SequencePanel({ project, onClose }) {
         setSeqName('');
         setSeqMode('strict');
         setSeqThreshold(0.5);
+        setSeqOverlapBasis('object');
         setRegions([]);
         setStepOrder([]);
         setPendingClass('');
@@ -290,6 +297,10 @@ export default function SequencePanel({ project, onClose }) {
         setSeqName(seq.name);
         setSeqMode(seq.mode);
         setSeqThreshold(seq.overlap_threshold);
+        // Stored per-step (steps is a JSON column); every step carries the
+        // same value, so read it off the first one. Sequences saved before
+        // overlap_basis existed have none — they matched against the region.
+        setSeqOverlapBasis(seq.steps?.[0]?.overlap_basis || 'region');
         setRegions(loaded);
         setStepOrder(loaded.map(r => r.id));
         setEditingSequenceId(seq.id);
@@ -522,6 +533,9 @@ export default function SequencePanel({ project, onClose }) {
             region_type: r.region_type,
             region_coords: r.region_coords,
             trigger_mode: r.region_type === 'line' ? r.trigger_mode : undefined,
+            // Sequence-wide matching semantic, stamped onto every step —
+            // steps live in a JSON column, so this needs no DB migration.
+            overlap_basis: seqOverlapBasis,
             target_class: r.target_class,
             sub_targets: r.target_type === 'multi_region' ? r.sub_targets : undefined,
             required_class: r.required_class,
@@ -828,7 +842,24 @@ export default function SequencePanel({ project, onClose }) {
                                         onChange={e => setSeqThreshold(Math.min(1, Math.max(0.1, parseFloat(e.target.value) || 0.5)))}
                                     />
                                 </label>
+                                <select
+                                    className="sq-select"
+                                    value={seqOverlapBasis}
+                                    onChange={e => setSeqOverlapBasis(e.target.value)}
+                                    title="What that overlap % is measured as a fraction OF"
+                                >
+                                    <option value="object">…of the object — how much of the hand/part is inside the region (fully inside = 100%)</option>
+                                    <option value="region">…of the region — how much of the drawn region the object covers (needs a tight region)</option>
+                                </select>
                             </div>
+                            {seqOverlapBasis === 'region' && (
+                                <p className="sq-hint sq-hint--tight">
+                                    <AlertTriangle size={12} />
+                                    &nbsp;Measuring against the <strong>region</strong>: a region drawn much bigger than the
+                                    object can never reach a high %, however squarely the object sits inside it. Draw regions
+                                    close to the object&apos;s real size, or switch to &ldquo;of the object&rdquo;.
+                                </p>
+                            )}
 
                             {images.length > 1 && (
                                 <div className="sq-ref-picker">

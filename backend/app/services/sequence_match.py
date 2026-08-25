@@ -63,13 +63,27 @@ def line_to_polygon(x1: float, y1: float, x2: float, y2: float,
 
 def mask_intersection_percent(target_polygon: list[list[float]],
                                other_polygon: list[list[float]],
-                               resolution: int = 256) -> float:
-    """Real pixel-level intersection between two normalized (0-1) polygons.
+                               resolution: int = 256,
+                               basis: str = "region") -> float:
+    """Real pixel-level intersection between two normalized (0-1) polygons,
+    rasterized on a resolution x resolution canvas so arbitrary — including
+    concave — mask shapes are handled correctly, not just axis-aligned boxes.
 
-    Returns Intersection Area / Target Area x 100 (the spec's formula),
-    rasterized on a resolution x resolution canvas so arbitrary —
-    including concave — mask shapes are handled correctly, not just
-    axis-aligned boxes.
+    basis picks WHAT the intersection is measured as a fraction OF:
+
+    * "region" (default, the original spec formula):
+          Intersection Area / TARGET REGION Area x 100
+      i.e. "how much of the drawn region is covered by the object". A
+      region drawn much larger than the object can never score high on
+      this no matter how squarely the object sits inside it — a hand
+      fully inside an oversized box might only cover 30% of that box.
+
+    * "object":
+          Intersection Area / OBJECT Area x 100
+      i.e. "how much of the detected object is inside the drawn region",
+      which is what "my hand is in the box" intuitively means. A hand
+      entirely inside the region scores 100% regardless of how much
+      empty space the region has around it.
     """
     import cv2
     import numpy as np
@@ -85,11 +99,11 @@ def mask_intersection_percent(target_polygon: list[list[float]],
     cv2.fillPoly(target_mask, [to_px(target_polygon)], 1)
     cv2.fillPoly(other_mask, [to_px(other_polygon)], 1)
 
-    target_area = int(target_mask.sum())
-    if target_area == 0:
+    denominator = int(other_mask.sum()) if basis == "object" else int(target_mask.sum())
+    if denominator == 0:
         return 0.0
     intersection_area = int(np.logical_and(target_mask, other_mask).sum())
-    return (intersection_area / target_area) * 100.0
+    return (intersection_area / denominator) * 100.0
 
 
 def best_polygon_for_class(detections: list[dict], class_name: str) -> list[list[float]] | None:
@@ -127,7 +141,10 @@ def evaluate_step(step: dict, detections: list[dict], threshold_pct: float) -> d
                 "matched": False, "target_type": "multi_region", "testable": True,
                 "per_class": [], "note": "Combo step has no sub-regions defined.",
             }
-        results = [_match_single(sub, detections, threshold_pct) for sub in sub_targets]
+        # A combo step's own overlap_basis applies to every sub-region —
+        # sub-targets carry only geometry + classes, not match semantics.
+        basis = step.get("overlap_basis") or "region"
+        results = [_match_single(sub, detections, threshold_pct, basis) for sub in sub_targets]
         testable = all(r["testable"] for r in results)
         notes = [r["note"] for r in results if r["note"]]
         return {
@@ -137,10 +154,11 @@ def evaluate_step(step: dict, detections: list[dict], threshold_pct: float) -> d
             "per_class": [c for r in results for c in r["per_class"]],
             "note": "; ".join(notes) if notes else None,
         }
-    return _match_single(step, detections, threshold_pct)
+    return _match_single(step, detections, threshold_pct, step.get("overlap_basis") or "region")
 
 
-def _match_single(step: dict, detections: list[dict], threshold_pct: float) -> dict:
+def _match_single(step: dict, detections: list[dict], threshold_pct: float,
+                  basis: str = "region") -> dict:
     """Evaluate one region/detection_class target (never multi_region —
     that's unwrapped into these by evaluate_step above) against one
     frame's or image's detections.
@@ -193,7 +211,7 @@ def _match_single(step: dict, detections: list[dict], threshold_pct: float) -> d
     per_class = []
     for cls in needed:
         other_polygon = best_polygon_for_class(detections, cls)
-        pct = mask_intersection_percent(target_polygon, other_polygon) if other_polygon else 0.0
+        pct = mask_intersection_percent(target_polygon, other_polygon, basis=basis) if other_polygon else 0.0
         per_class.append({
             "class_name": cls,
             "matched": pct >= threshold_pct,
