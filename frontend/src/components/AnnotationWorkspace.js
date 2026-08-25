@@ -1345,6 +1345,16 @@ Do you want to proceed?`;
             if ((e.key === 'Delete' || e.key === 'Backspace') && selectedAnnId) {
                 handleRejectAnnotation(selectedAnnId);
             }
+            // Jump between images — skip while mid-draw or a class picker is open,
+            // same guard ReviewPanel uses so arrows don't fight the drawing tools.
+            if (
+                (e.key === 'ArrowRight' || e.key === 'ArrowLeft') &&
+                !inTextField && !pendingAnnotation && !pendingPolyline &&
+                newPolylinePoints.length === 0
+            ) {
+                e.preventDefault();
+                handleNavigateImage(e.key === 'ArrowRight' ? 'next' : 'prev');
+            }
         };
         const onKeyUp = (e) => {
             if (e.key === ' ') setIsPanning(false);
@@ -1356,7 +1366,7 @@ Do you want to proceed?`;
             window.removeEventListener('keyup', onKeyUp);
         };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [handleUndo, handleRedo, selectedAnnId, drawMode, newPolylinePoints, finishPolyline, cancelPolyline, clipboardAnn, handleCopyAnnotation, handlePasteAnnotation]);
+    }, [handleUndo, handleRedo, selectedAnnId, drawMode, newPolylinePoints, finishPolyline, cancelPolyline, clipboardAnn, handleCopyAnnotation, handlePasteAnnotation, pendingAnnotation, pendingPolyline]);
 
     // The box to draw while mouse is held or while picker is open
     const drawnBox = pendingAnnotation || newAnnotation;
@@ -1657,7 +1667,7 @@ Do you want to proceed?`;
                                     className="btn-toolbar"
                                     onClick={() => handleNavigateImage('prev')}
                                     disabled={images.findIndex(img => img.id === currentImage.id) <= 0}
-                                    title="Previous image"
+                                    title="Previous image (←)"
                                 ><ArrowLeft size={14} /></button>
                                 <span className="canvas-nav-count">
                                     {images.findIndex(img => img.id === currentImage.id) + 1} / {images.length}
@@ -1666,7 +1676,7 @@ Do you want to proceed?`;
                                     className="btn-toolbar"
                                     onClick={() => handleNavigateImage('next')}
                                     disabled={images.findIndex(img => img.id === currentImage.id) >= images.length - 1}
-                                    title="Next image"
+                                    title="Next image (→)"
                                 ><ArrowRight size={14} /></button>
                             </div>
                             <span className="canvas-filename">{currentImage.filename}</span>
