@@ -302,6 +302,8 @@ export default function SequencePanel({ project, onClose }) {
             required_class: classes[0],
             required_classes: classes,
             label,
+            complete_on: pendingCompleteOn !== 'detect' ? pendingCompleteOn : undefined,
+            hold_seconds: pendingCompleteOn !== 'detect' ? Number(pendingHoldSeconds) || 0.4 : undefined,
         }]);
         setStepOrder(prev => [...prev, id]);
         setDrawing(null);
@@ -868,43 +870,43 @@ export default function SequencePanel({ project, onClose }) {
                                             onChange={e => setPendingClass(e.target.value)}
                                         />
                                         {regionKind === 'class' && (
-                                            <>
-                                                <label className="sq-class-input" style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
-                                                    <input
-                                                        type="checkbox"
-                                                        checked={pendingFreezeBoundary}
-                                                        onChange={e => setPendingFreezeBoundary(e.target.checked)}
-                                                    />
-                                                    Freeze boundary (survives occlusion)
-                                                </label>
-                                                <select
-                                                    className="sq-class-input"
-                                                    value={pendingCompleteOn}
-                                                    onChange={e => setPendingCompleteOn(e.target.value)}
-                                                    title="How this step decides it's done"
-                                                >
-                                                    <option value="detect">Pass instantly on touch (gate-style)</option>
-                                                    <option value="detect_hold">Press & hold — must stay on for N seconds (real key press, ignores pass-through)</option>
-                                                    <option value="undetect_hold">Gone for N seconds (gesture released/removed)</option>
-                                                </select>
-                                                {pendingCompleteOn !== 'detect' && (
-                                                    <input
-                                                        className="sq-class-input"
-                                                        type="number"
-                                                        min="0.1"
-                                                        step="0.1"
-                                                        style={{ width: 70 }}
-                                                        title={pendingCompleteOn === 'detect_hold'
-                                                            ? 'Seconds the class(es) must stay continuously matched before this step passes'
-                                                            : 'Seconds the class(es) must stay undetected before this step passes'}
-                                                        value={pendingHoldSeconds}
-                                                        onChange={e => setPendingHoldSeconds(e.target.value)}
-                                                    />
-                                                )}
-                                                <button className="sq-btn-add-step" onClick={addDetectionClassStep} disabled={freezing}>
-                                                    <Plus size={13} /> {freezing ? 'Freezing…' : 'Add Step'}
-                                                </button>
-                                            </>
+                                            <label className="sq-class-input" style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+                                                <input
+                                                    type="checkbox"
+                                                    checked={pendingFreezeBoundary}
+                                                    onChange={e => setPendingFreezeBoundary(e.target.checked)}
+                                                />
+                                                Freeze boundary (survives occlusion)
+                                            </label>
+                                        )}
+                                        <select
+                                            className="sq-class-input"
+                                            value={pendingCompleteOn}
+                                            onChange={e => setPendingCompleteOn(e.target.value)}
+                                            title="How this step decides it's done — applies to Box and Line regions too, not just Class"
+                                        >
+                                            <option value="detect">Pass instantly on touch (gate-style)</option>
+                                            <option value="detect_hold">Press & hold — must stay on for N seconds (real key press, ignores pass-through)</option>
+                                            <option value="undetect_hold">Gone for N seconds (gesture released/removed)</option>
+                                        </select>
+                                        {pendingCompleteOn !== 'detect' && (
+                                            <input
+                                                className="sq-class-input"
+                                                type="number"
+                                                min="0.1"
+                                                step="0.1"
+                                                style={{ width: 70 }}
+                                                title={pendingCompleteOn === 'detect_hold'
+                                                    ? 'Seconds the class(es) must stay continuously matched before this step passes'
+                                                    : 'Seconds the class(es) must stay undetected before this step passes'}
+                                                value={pendingHoldSeconds}
+                                                onChange={e => setPendingHoldSeconds(e.target.value)}
+                                            />
+                                        )}
+                                        {regionKind === 'class' && (
+                                            <button className="sq-btn-add-step" onClick={addDetectionClassStep} disabled={freezing}>
+                                                <Plus size={13} /> {freezing ? 'Freezing…' : 'Add Step'}
+                                            </button>
                                         )}
                                     </div>
                                     {availableClasses.length > 0 && (
