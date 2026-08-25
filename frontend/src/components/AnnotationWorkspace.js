@@ -316,6 +316,26 @@ const AnnotationWorkspace = ({ project, onProjectUpdated }) => {
     // was firing handleWheel and snapping the whole canvas to a different
     // zoom level ("zoomed out at some random point") in the middle of the drag.
     const isDraggingShapeRef = useRef(false);
+    // Konva only fires its own dragstart after the pointer has moved a few
+    // px past mousedown — so a wheel nudge in that initial window (press,
+    // then scroll before moving) slipped past isDraggingShapeRef above and
+    // still zoomed. Track the raw mouse-button-down state too, from the
+    // moment of press, so that gap is covered as well.
+    const isPointerDownRef = useRef(false);
+    useEffect(() => {
+        const down = () => { isPointerDownRef.current = true; };
+        const up = () => { isPointerDownRef.current = false; };
+        window.addEventListener('mousedown', down);
+        window.addEventListener('mouseup', up);
+        window.addEventListener('touchstart', down);
+        window.addEventListener('touchend', up);
+        return () => {
+            window.removeEventListener('mousedown', down);
+            window.removeEventListener('mouseup', up);
+            window.removeEventListener('touchstart', down);
+            window.removeEventListener('touchend', up);
+        };
+    }, []);
 
     // ── Grid overlay + fine rotation ─────────────────────────────
     const [showGrid, setShowGrid] = useState(false);
@@ -542,7 +562,7 @@ const AnnotationWorkspace = ({ project, onProjectUpdated }) => {
     // ── Zoom via mouse wheel ──────────────────────────────────────
     const handleWheel = useCallback((e) => {
         e.evt.preventDefault();
-        if (isDraggingShapeRef.current) return; // don't fight an in-progress shape drag
+        if (isDraggingShapeRef.current || isPointerDownRef.current) return; // don't fight an in-progress shape drag (or a press about to become one)
         const stage = e.target.getStage();
         const pointer = stage.getPointerPosition();
         const scaleBy = 1.12;
