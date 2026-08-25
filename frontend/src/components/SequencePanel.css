@@ -14,9 +14,13 @@
   background: #ffffff;
   border: 1px solid #e5e5e5;
   border-radius: 14px;
-  width: 920px;
+  /* Wide enough that the canvas (640px) + steps panel (min 220px) + gaps
+     fit side by side without the body needing a horizontal scrollbar —
+     920px was cutting it close and forced left/right scrolling to see
+     both the canvas and the steps list at once. */
+  width: 1240px;
   max-width: 96vw;
-  max-height: 90vh;
+  max-height: 92vh;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -56,7 +60,7 @@
 .sq-close:hover { color: #1a1a1a; background: #f5f5f5; }
 
 /* ── Body ────────────────────────────────────────────── */
-.sq-body { flex: 1; overflow-y: auto; padding: 20px 24px 24px; display: flex; flex-direction: column; gap: 16px; background: #f5f5f5; }
+.sq-body { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 20px 24px 24px; display: flex; flex-direction: column; gap: 16px; background: #f5f5f5; }
 
 .sq-error {
   display: flex; justify-content: space-between; align-items: center;
@@ -222,7 +226,7 @@
 .sq-input { flex: 1; min-width: 200px; }
 .sq-input:focus, .sq-select:focus { border-color: #dc143c; }
 
-.sq-builder-main { display: flex; gap: 16px; align-items: flex-start; }
+.sq-builder-main { display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap; }
 
 .sq-canvas-wrap { background: #ffffff; border: 1px solid #e5e5e5; border-radius: 10px; padding: 10px; flex-shrink: 0; }
 .sq-target-type-toggle { display: flex; gap: 6px; margin-bottom: 10px; padding-bottom: 10px; border-bottom: 1px solid #e5e5e5; }
