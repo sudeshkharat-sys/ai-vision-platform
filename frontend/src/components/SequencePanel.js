@@ -493,6 +493,18 @@ export default function SequencePanel({ project, onClose }) {
     const updateRegionCoords = (regionId, coords) =>
         setRegions(prev => prev.map(r => r.id === regionId ? { ...r, region_coords: coords } : r));
 
+    // Change an already-drawn region's pass condition (instant / press &
+    // hold / gone-for-N-seconds) after the fact — previously this was only
+    // ever set at draw time via the toolbar dropdown, with no way back in.
+    const updateRegionCompleteOn = (regionId, completeOn) =>
+        setRegions(prev => prev.map(r => r.id === regionId
+            ? { ...r, complete_on: completeOn === 'detect' ? undefined : completeOn,
+                hold_seconds: completeOn === 'detect' ? undefined : (r.hold_seconds || 0.4) }
+            : r));
+
+    const updateRegionHoldSeconds = (regionId, seconds) =>
+        setRegions(prev => prev.map(r => r.id === regionId ? { ...r, hold_seconds: seconds } : r));
+
     const clamp01 = v => Math.min(1, Math.max(0, v));
 
     const deleteRegion = (regionId) => {
@@ -1262,6 +1274,8 @@ export default function SequencePanel({ project, onClose }) {
                                                             {r.target_type === 'multi_region'
                                                                 ? `combo · ${r.sub_targets.length} regions`
                                                                 : (r.required_classes && r.required_classes.length > 1) ? r.required_classes.join(' + ') : r.required_class}
+                                                            {r.complete_on === 'detect_hold' && <em> · hold {r.hold_seconds || 0.4}s</em>}
+                                                            {r.complete_on === 'undetect_hold' && <em> · gone {r.hold_seconds || 0.4}s</em>}
                                                         </span>
                                                         <div className="sq-step-actions">
                                                             <button onClick={() => moveStep(i, -1)} disabled={i === 0} title="Move up">↑</button>
@@ -1278,17 +1292,45 @@ export default function SequencePanel({ project, onClose }) {
                                         <>
                                             <h4 className="sq-steps-title sq-steps-title--spaced">Drawn regions</h4>
                                             <div className="sq-region-chip-list">
-                                                {regions.map((r, i) => (
-                                                    <div key={r.id} className="sq-region-chip" style={{ borderColor: STEP_COLORS[i % STEP_COLORS.length] }}>
-                                                        <input
-                                                            className="sq-region-chip-input"
-                                                            value={r.label}
-                                                            onChange={e => updateRegionLabel(r.id, e.target.value)}
-                                                        />
-                                                        <button className="sq-region-chip-add" onClick={() => appendExistingRegion(r.id)} title="Add to sequence">+</button>
-                                                        <button className="sq-region-chip-del" onClick={() => deleteRegion(r.id)} title="Delete region"><Trash2 size={11} /></button>
+                                                {regions.map((r, i) => {
+                                                    const completeOn = r.complete_on || 'detect';
+                                                    return (
+                                                    <div key={r.id} className="sq-region-chip sq-region-chip--full" style={{ borderColor: STEP_COLORS[i % STEP_COLORS.length] }}>
+                                                        <div className="sq-region-chip-row">
+                                                            <input
+                                                                className="sq-region-chip-input"
+                                                                value={r.label}
+                                                                onChange={e => updateRegionLabel(r.id, e.target.value)}
+                                                            />
+                                                            <button className="sq-region-chip-add" onClick={() => appendExistingRegion(r.id)} title="Add to sequence">+</button>
+                                                            <button className="sq-region-chip-del" onClick={() => deleteRegion(r.id)} title="Delete region"><Trash2 size={11} /></button>
+                                                        </div>
+                                                        <div className="sq-region-chip-row">
+                                                            <select
+                                                                className="sq-region-chip-select"
+                                                                value={completeOn}
+                                                                onChange={e => updateRegionCompleteOn(r.id, e.target.value)}
+                                                                title="Pass condition for this region"
+                                                            >
+                                                                <option value="detect">Pass instantly</option>
+                                                                <option value="detect_hold">Press & hold</option>
+                                                                <option value="undetect_hold">Gone for N sec</option>
+                                                            </select>
+                                                            {completeOn !== 'detect' && (
+                                                                <input
+                                                                    className="sq-region-chip-seconds"
+                                                                    type="number"
+                                                                    min="0.1"
+                                                                    step="0.1"
+                                                                    value={r.hold_seconds ?? 0.4}
+                                                                    onChange={e => updateRegionHoldSeconds(r.id, Number(e.target.value) || 0.1)}
+                                                                    title="Seconds"
+                                                                />
+                                                            )}
+                                                        </div>
                                                     </div>
-                                                ))}
+                                                    );
+                                                })}
                                             </div>
                                         </>
                                     )}
