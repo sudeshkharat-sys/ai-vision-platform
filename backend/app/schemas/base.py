@@ -119,6 +119,11 @@ class VideoFrameExtractionRequest(BaseModel):
     max_frames: int = Field(default=300, ge=0, le=10000)
 
 
+class VideoFrameCaptureRequest(BaseModel):
+    # Timestamp in seconds to seek to and save as a single Image row.
+    t: float = Field(default=0.0, ge=0.0)
+
+
 # ── Region sequence schemas ───────────────────────────────────────
 class SequenceStep(BaseModel):
     order_index: int
@@ -135,6 +140,12 @@ class SequenceStep(BaseModel):
     # so this accepts either shape.
     region_type: Optional[str] = None  # "box" | "line" | "polygon"
     region_coords: Optional[Union[List[float], List[List[float]]]] = None
+
+    # Only meaningful when region_type == "line". "crossing" (default):
+    # the object's path must cross the line between frames. "overlap":
+    # matched the same way a box is — object's box/mask overlap % against
+    # the sequence's shared overlap_threshold, no motion needed.
+    trigger_mode: Optional[str] = None
 
     # Required when target_type == "detection_class" — the class whose
     # own detected mask becomes this step's target area.

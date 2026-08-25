@@ -49,6 +49,15 @@ def _is_line_region(step: dict) -> bool:
     return step.get("target_type", "region") == "region" and step.get("region_type") == "line"
 
 
+def _uses_crossing(step: dict) -> bool:
+    """A line region defaults to motion-crossing (needs two frames, no
+    overlap %). If trigger_mode == "overlap" it's evaluated exactly like a
+    box instead — same Intersection Area / Target Area x 100 formula and
+    the same shared overlap_threshold — via evaluate_step's line handling
+    (sequence_match.py buffers the segment into a thin rectangle)."""
+    return _is_line_region(step) and step.get("trigger_mode", "crossing") != "overlap"
+
+
 # How many consecutive dropped-match sampled frames a detect_hold step
 # tolerates before treating it as a real release rather than hand jitter.
 MISS_TOLERANCE = 2
@@ -148,7 +157,7 @@ class SequenceRunState:
         if complete_on == "detect_hold":
             return self._check_detect_hold(target, needed_classes, frame_number, detections, threshold_pct)
 
-        if _is_line_region(target):
+        if _uses_crossing(target):
             matched = self._check_line_region(target, needed_classes, detections)
         else:
             resolved = self._resolve_target(target, self.current_step, detections)
@@ -171,7 +180,7 @@ class SequenceRunState:
         wrong_region_hit = False
         for cls in needed_classes:
             for idx, step in enumerate(self.steps):
-                if idx <= self.current_step or _is_line_region(step):
+                if idx <= self.current_step or _uses_crossing(step):
                     continue
                 other_needed = _step_classes(step)
                 if cls not in other_needed:
@@ -243,7 +252,7 @@ class SequenceRunState:
         blip doesn't. This is what tells apart a real 'press and hold'
         from the hand just passing over the region on its way
         somewhere else."""
-        if _is_line_region(target):
+        if _uses_crossing(target):
             matched_now = self._check_line_region(target, needed_classes, detections)
         else:
             resolved = self._resolve_target(target, self.current_step, detections, allow_resync=(self.hold_counter == 0))

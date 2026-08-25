@@ -11,14 +11,17 @@ Workflow
 4. POST /videos/{video_id}/extract-frames — kick off the Celery frame-extraction task
 5. POST /videos/{video_id}/stop-extraction — cancel a running extraction
 6. DELETE /videos/{video_id}          — remove video + extracted frame Image rows
+7. GET  /videos/{video_id}/frame      — preview one frame at a timestamp (not saved)
+8. POST /videos/{video_id}/capture-frame — save one frame at a timestamp as an Image
 """
 
 import os
 import shutil
 import uuid
+from pathlib import Path
 from typing import List
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete
 
@@ -26,12 +29,37 @@ from ..database import get_db
 from ..models.video import Video
 from ..models.image import Image
 from ..models.user import User
-from ..schemas.base import VideoResponse, VideoFrameExtractionRequest, VideoRotateRequest
+from ..schemas.base import VideoResponse, VideoFrameExtractionRequest, VideoRotateRequest, ImageResponse, VideoFrameCaptureRequest
 from ..config import settings
 from ..api.auth import get_current_user
 from ..api.deps import get_owned_project, get_owned_video
 
 router = APIRouter(prefix="/videos", tags=["videos"])
+
+
+def _read_frame_at(video: Video, t: float):
+    """Open the video file, seek to timestamp t (seconds) and decode that
+    frame. Returns (frame_bgr, width, height) or None if the file/frame
+    can't be read."""
+    from ..tasks.video_processing import _resolve_video_path
+    import cv2
+
+    path = _resolve_video_path(video.filepath)
+    if path is None:
+        return None
+    cap = cv2.VideoCapture(str(path))
+    if not cap.isOpened():
+        cap.release()
+        return None
+    fps = cap.get(cv2.CAP_PROP_FPS) or video.fps or 25.0
+    frame_no = max(0, int(round(t * fps)))
+    cap.set(cv2.CAP_PROP_POS_FRAMES, frame_no)
+    ret, frame = cap.read()
+    cap.release()
+    if not ret or frame is None:
+        return None
+    h, w = frame.shape[:2]
+    return frame, w, h
 
 # Allowed video MIME types / extensions
 _ALLOWED_VIDEO_EXTS = {".mp4", ".avi", ".mov", ".mkv", ".webm", ".m4v", ".flv"}
@@ -102,6 +130,70 @@ async def get_video(
 ):
     """Fetch a single video by ID (useful for polling extraction status)."""
     return await get_owned_video(video_id, current_user, db)
+
+
+@router.get("/{video_id}/frame")
+async def preview_video_frame(
+    video_id: str,
+    t: float = 0.0,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Decode and return a single frame at timestamp t (seconds) as a JPEG,
+    without saving anything — for scrubbing a video to find a frame to use
+    as a reference (e.g. drawing Sequence Detection regions) without first
+    running full frame extraction into the training image pool."""
+    video = await get_owned_video(video_id, current_user, db)
+    result = _read_frame_at(video, t)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Could not read a frame at that timestamp.")
+    frame, _, _ = result
+
+    import cv2
+    ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+    if not ok:
+        raise HTTPException(status_code=500, detail="Failed to encode frame.")
+    return Response(content=buf.tobytes(), media_type="image/jpeg")
+
+
+@router.post("/{video_id}/capture-frame", response_model=ImageResponse)
+async def capture_video_frame(
+    video_id: str,
+    body: VideoFrameCaptureRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Save one frame at timestamp t as a normal Image row (status
+    'pending', same as any uploaded photo) — so any frame of an uploaded
+    video can be used as a reference frame (e.g. for Sequence Detection)
+    on demand, without running bulk frame extraction or requiring it to
+    already be part of the training/annotation set."""
+    video = await get_owned_video(video_id, current_user, db)
+    result = _read_frame_at(video, body.t)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Could not read a frame at that timestamp.")
+    frame, w, h = result
+
+    import cv2
+    frames_dir = settings.upload_dir / video.project_id / "video_frames" / video_id
+    frames_dir.mkdir(parents=True, exist_ok=True)
+    frame_uuid = str(uuid.uuid4())
+    frame_path = frames_dir / f"{frame_uuid}.jpg"
+    cv2.imwrite(str(frame_path), frame, [cv2.IMWRITE_JPEG_QUALITY, 90])
+
+    rel_path = f"/uploads/{video.project_id}/video_frames/{video_id}/{frame_uuid}.jpg"
+    stem = Path(video.original_filename).stem
+    display_name = f"{stem}_t{body.t:.2f}s.jpg"
+
+    db_image = Image(
+        id=frame_uuid, project_id=video.project_id,
+        filename=display_name, filepath=rel_path,
+        width=w, height=h, status="pending",
+    )
+    db.add(db_image)
+    await db.commit()
+    await db.refresh(db_image)
+    return db_image
 
 
 @router.post("/{video_id}/extract-frames", response_model=VideoResponse)

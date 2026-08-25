@@ -204,6 +204,17 @@
 .sq-ref-thumb--active { border-color: #dc143c; }
 .sq-ref-thumb img { width: 100%; height: 56px; object-fit: cover; border-radius: 5px; display: block; background: #111318; }
 .sq-ref-thumb-dims { font-size: 10px; color: #999; font-variant-numeric: tabular-nums; }
+
+/* ── Video-frame reference picker ────────────────────── */
+.sq-video-frame-picker { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.sq-video-scrub { flex: 1; min-width: 160px; }
+.sq-video-time { font-size: 11px; color: #999; font-variant-numeric: tabular-nums; min-width: 46px; }
+.sq-video-preview {
+  width: 120px; height: 68px; border-radius: 8px; border: 1px solid #e5e5e5; background: #111318;
+  display: flex; align-items: center; justify-content: center; overflow: hidden; flex-shrink: 0;
+}
+.sq-video-preview img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.sq-loading { display: flex; align-items: center; justify-content: center; color: #999; }
 .sq-input, .sq-select {
   font-size: 13px; border: 1px solid #e5e5e5; border-radius: 8px; padding: 8px 12px;
   background: #ffffff; color: #1a1a1a; outline: none;

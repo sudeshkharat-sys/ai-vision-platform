@@ -34,6 +34,33 @@ def bbox_to_polygon(xyxy: tuple[float, float, float, float]) -> list[list[float]
     return [[x1, y1], [x2, y1], [x2, y2], [x1, y2]]
 
 
+# Half-width (normalized 0-1) of the thin rectangle a line region is
+# buffered into for area-overlap matching — a true zero-width line has no
+# area, so "Intersection Area / Target Area" needs a strip to compare
+# against, not a geometric line.
+LINE_OVERLAP_HALF_WIDTH = 0.02
+
+
+def line_to_polygon(x1: float, y1: float, x2: float, y2: float,
+                     half_width: float = LINE_OVERLAP_HALF_WIDTH) -> list[list[float]]:
+    """Buffer a line segment into a thin rectangle (quad) so it can be
+    matched with the same pixel-intersection formula a box region uses."""
+    dx, dy = x2 - x1, y2 - y1
+    length = (dx * dx + dy * dy) ** 0.5
+    if length < 1e-6:
+        # Degenerate (zero-length) line — fall back to a small square
+        # around the single point so the polygon still has real area.
+        return [
+            [x1 - half_width, y1 - half_width], [x1 + half_width, y1 - half_width],
+            [x1 + half_width, y1 + half_width], [x1 - half_width, y1 + half_width],
+        ]
+    nx, ny = -dy / length * half_width, dx / length * half_width
+    return [
+        [x1 + nx, y1 + ny], [x2 + nx, y2 + ny],
+        [x2 - nx, y2 - ny], [x1 - nx, y1 - ny],
+    ]
+
+
 def mask_intersection_percent(target_polygon: list[list[float]],
                                other_polygon: list[list[float]],
                                resolution: int = 256) -> float:
@@ -113,6 +140,13 @@ def evaluate_step(step: dict, detections: list[dict], threshold_pct: float) -> d
             # detected live again — sidesteps a finger fully occluding the
             # key it's pressing, which would otherwise erase its mask.
             target_polygon = step["region_coords"]
+        elif region_type == "line" and step.get("trigger_mode") == "overlap":
+            # Opt-in: match this line region the same way a box is matched
+            # (area overlap %% against the shared threshold) instead of the
+            # default motion-crossing check, which needs two frames and so
+            # isn't usable here or in the single-image tester.
+            x1, y1, x2, y2 = step["region_coords"]
+            target_polygon = line_to_polygon(x1, y1, x2, y2)
         else:
             return {
                 "matched": False,

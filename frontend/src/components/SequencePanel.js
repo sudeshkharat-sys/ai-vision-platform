@@ -69,6 +69,17 @@ export default function SequencePanel({ project, onClose }) {
     const [videos, setVideos]           = useState([]);
     const [availableClasses, setAvailableClasses] = useState([]); // real classes annotated in this project (count > 0)
 
+    // ── Pick any frame of an uploaded video as the reference frame ────
+    // (instead of only being able to choose from images already saved
+    // into the training set) — scrub a video's timeline, preview the
+    // exact frame, then save just that one frame on demand.
+    const [refVideoId, setRefVideoId]       = useState('');
+    const [refVideoT, setRefVideoT]         = useState(0);
+    const [videoPreviewUrl, setVideoPreviewUrl] = useState(null);
+    const [videoPreviewLoading, setVideoPreviewLoading] = useState(false);
+    const [capturingFrame, setCapturingFrame] = useState(false);
+    const videoPreviewUrlRef = useRef(null);
+
     // Per-sequence run state: { [seqId]: { videoId, run } }
     const [runByCard, setRunByCard]     = useState({});
     const pollRef = useRef({});
@@ -88,6 +99,10 @@ export default function SequencePanel({ project, onClose }) {
     // "class" — target = another detected class's own mask (e.g. "M"),
     //   no drawing needed, just pick classes.
     const [regionKind, setRegionKind]   = useState('box');
+    // Only used when regionKind === 'line'. "crossing" (default): object's
+    // path must cross the line between frames. "overlap": matched the same
+    // area-overlap-%% way a box region is, no motion needed.
+    const [lineTriggerMode, setLineTriggerMode] = useState('crossing');
     const [editRegions, setEditRegions] = useState(false); // true: drag/resize existing regions instead of adding them as a step on click
     const [editingSequenceId, setEditingSequenceId] = useState(null); // non-null while editing an already-saved sequence (Save = PUT, not POST)
     const [drawing, setDrawing]         = useState(null); // in-progress shape
@@ -117,6 +132,51 @@ export default function SequencePanel({ project, onClose }) {
     // Stale test results are worse than none — clear them whenever the
     // steps or reference image change so nobody trusts an outdated pass/fail.
     useEffect(() => { setTestResults(null); }, [stepOrder, refImage]);
+
+    // ── Live preview while scrubbing a video's timeline ────────────────
+    // The frame-preview endpoint requires auth (Bearer header), so a plain
+    // <img src> can't hit it directly — fetch as a blob via axios and turn
+    // it into an object URL instead. Debounced so dragging the slider
+    // doesn't fire a decode on every intermediate value.
+    useEffect(() => {
+        if (!refVideoId) { setVideoPreviewUrl(null); return; }
+        setVideoPreviewLoading(true);
+        const handle = setTimeout(() => {
+            axios.get(`${API_URL}/videos/${refVideoId}/frame`, {
+                params: { t: refVideoT },
+                responseType: 'blob',
+            })
+                .then(res => {
+                    const url = URL.createObjectURL(res.data);
+                    if (videoPreviewUrlRef.current) URL.revokeObjectURL(videoPreviewUrlRef.current);
+                    videoPreviewUrlRef.current = url;
+                    setVideoPreviewUrl(url);
+                })
+                .catch(() => setVideoPreviewUrl(null))
+                .finally(() => setVideoPreviewLoading(false));
+        }, 150);
+        return () => clearTimeout(handle);
+    }, [refVideoId, refVideoT]);
+
+    // Revoke the last preview URL on unmount so it doesn't leak.
+    useEffect(() => () => {
+        if (videoPreviewUrlRef.current) URL.revokeObjectURL(videoPreviewUrlRef.current);
+    }, []);
+
+    const handleUseVideoFrame = async () => {
+        if (!refVideoId) return;
+        setCapturingFrame(true);
+        setError(null);
+        try {
+            const res = await axios.post(`${API_URL}/videos/${refVideoId}/capture-frame`, { t: refVideoT });
+            setImages(prev => [...prev, res.data]);
+            setRefImage(res.data);
+        } catch (err) {
+            setError(extractErrorMessage(err, 'Could not capture that frame.'));
+        } finally {
+            setCapturingFrame(false);
+        }
+    };
 
     // ── Load sequences + images + the project's actual annotated classes ──
     const fetchAll = useCallback(async () => {
@@ -175,6 +235,7 @@ export default function SequencePanel({ project, onClose }) {
             target_type: step.target_type || 'region',
             region_type: step.region_type,
             region_coords: step.region_coords,
+            trigger_mode: step.trigger_mode,
             target_class: step.target_class,
             required_class: step.required_class,
             required_classes: step.required_classes,
@@ -237,6 +298,7 @@ export default function SequencePanel({ project, onClose }) {
             target_type: 'region',
             region_type: regionKind,
             region_coords: coords,
+            trigger_mode: regionKind === 'line' ? lineTriggerMode : undefined,
             required_class: classes[0],
             required_classes: classes,
             label,
@@ -360,6 +422,7 @@ export default function SequencePanel({ project, onClose }) {
             target_type: r.target_type || 'region',
             region_type: r.region_type,
             region_coords: r.region_coords,
+            trigger_mode: r.region_type === 'line' ? r.trigger_mode : undefined,
             target_class: r.target_class,
             required_class: r.required_class,
             required_classes: r.required_classes && r.required_classes.length > 1 ? r.required_classes : undefined,
@@ -691,6 +754,58 @@ export default function SequencePanel({ project, onClose }) {
                                 </div>
                             )}
 
+                            {videos.length > 0 && (
+                                <div className="sq-ref-picker">
+                                    <span className="sq-ref-picker-label">Or pick any frame of an uploaded video</span>
+                                    <div className="sq-video-frame-picker">
+                                        <select
+                                            className="sq-class-input"
+                                            value={refVideoId}
+                                            onChange={e => { setRefVideoId(e.target.value); setRefVideoT(0); }}
+                                        >
+                                            <option value="">Select a video…</option>
+                                            {videos.map(v => (
+                                                <option key={v.id} value={v.id}>{v.original_filename}</option>
+                                            ))}
+                                        </select>
+
+                                        {refVideoId && (
+                                            <>
+                                                <input
+                                                    type="range"
+                                                    min="0"
+                                                    max={videos.find(v => v.id === refVideoId)?.duration || 0}
+                                                    step="0.05"
+                                                    value={refVideoT}
+                                                    onChange={e => setRefVideoT(parseFloat(e.target.value))}
+                                                    className="sq-video-scrub"
+                                                />
+                                                <span className="sq-video-time">{refVideoT.toFixed(2)}s</span>
+
+                                                <div className="sq-video-preview">
+                                                    {videoPreviewLoading ? (
+                                                        <div className="sq-loading"><Loader2 size={16} className="sq-spin" /></div>
+                                                    ) : videoPreviewUrl ? (
+                                                        <img src={videoPreviewUrl} alt={`Frame at ${refVideoT.toFixed(2)}s`} />
+                                                    ) : (
+                                                        <span className="sq-hint">No frame decoded yet.</span>
+                                                    )}
+                                                </div>
+
+                                                <button
+                                                    type="button"
+                                                    className="sq-btn-save"
+                                                    disabled={!videoPreviewUrl || capturingFrame}
+                                                    onClick={handleUseVideoFrame}
+                                                >
+                                                    {capturingFrame ? 'Saving…' : 'Use this frame'}
+                                                </button>
+                                            </>
+                                        )}
+                                    </div>
+                                </div>
+                            )}
+
                             <div className="sq-builder-main">
                                 <div className="sq-canvas-wrap">
                                     <div className="sq-toolbar">
@@ -714,6 +829,18 @@ export default function SequencePanel({ project, onClose }) {
                                             onClick={() => setRegionKind('class')}
                                             title="Target = another detected class's own mask — no drawing needed"
                                         >Class</button>
+
+                                        {regionKind === 'line' && (
+                                            <select
+                                                className="sq-class-input"
+                                                value={lineTriggerMode}
+                                                onChange={e => setLineTriggerMode(e.target.value)}
+                                                title="How a line region decides it's triggered"
+                                            >
+                                                <option value="crossing">Trigger: crossing (default)</option>
+                                                <option value="overlap">Trigger: area overlap (like Box)</option>
+                                            </select>
+                                        )}
 
                                         {regionKind === 'class' ? (
                                             <select
