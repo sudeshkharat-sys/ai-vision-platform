@@ -1023,6 +1023,35 @@ def _load_crnn(project_id: str):
     return model, charset
 
 
+def _project_allowed_chars(project_id: str) -> set | None:
+    """Distinct single-character class names actually annotated anywhere
+    in this project (e.g. {"0","1","4","6"}), uppercased — or None if the
+    project has no single-character annotations at all (nothing to
+    restrict to, so decoding falls back to the model's full charset
+    unchanged, same as before this existed).
+
+    The CRNN's charset is a fixed 0-9+A-Z (see crnn_training.py) no
+    matter what a project trained on — a project that only ever drew
+    "0"/"1"/"4"/"6" boxes still has a live, mostly-synthetic-trained path
+    to every letter A-Z, so an undertrained model can (and does) emit
+    letters like "Z" that were never part of the project's own data.
+    Restricting the decode to only the classes this project actually
+    uses closes that off."""
+    from ..connectors.statedb_connector import StateDBConnector
+
+    db = StateDBConnector()
+    with db.get_session() as conn:
+        rows = db.execute_query(
+            conn,
+            "SELECT DISTINCT a.class_name FROM annotations a "
+            "JOIN images i ON i.id = a.image_id "
+            "WHERE i.project_id = :pid AND char_length(a.class_name) = 1",
+            {"pid": project_id},
+        )
+    chars = {r["class_name"].upper() for r in rows if r.get("class_name")}
+    return chars or None
+
+
 def _estimate_text_angle(boxes):
     """
     Best-fit tilt (degrees) of the line through character-box centers —
@@ -1045,10 +1074,22 @@ def _estimate_text_angle(boxes):
     return angle if abs(angle) <= 60 else 0.0
 
 
-def _greedy_decode_steps(probs, blank_index, charset):
+def _greedy_decode_steps(probs, blank_index, charset, allowed_indices=None):
     """CTC greedy decode keeping, for every emitted character, the class
     index and the timestep that emitted it — so a format constraint can go
-    back to that timestep's full softmax and re-pick among allowed classes."""
+    back to that timestep's full softmax and re-pick among allowed classes.
+
+    allowed_indices, when given, restricts every timestep's argmax to that
+    set (plus blank_index, always kept so CTC's repeat/blank collapsing
+    still works) — the model's charset is a fixed 0-9+A-Z regardless of
+    what a project actually trained on, so a project with only digit
+    classes could still emit any letter it was ever even weakly confused
+    about. Masking here stops that at the source instead of only patching
+    it up after the fact once a pattern-length guess happens to match."""
+    if allowed_indices is not None:
+        mask = np.full(probs.shape[1], -np.inf, dtype=np.float32)
+        mask[list(allowed_indices)] = 0.0
+        probs = probs + mask  # local copy — never mutates the caller's array
     best = probs.argmax(axis=1)
     out, prev = [], -1
     for t, idx in enumerate(best):
@@ -1151,7 +1192,7 @@ def _trim_weak_edges(emits, probs, min_keep=3):
     return emits[start:end]
 
 
-def _decode_line_both_ways(model, crop, normalize, blank_index, charset):
+def _decode_line_both_ways(model, crop, normalize, blank_index, charset, allowed_indices=None):
     """Read a line crop at 0° and 180° and keep the more confident read —
     a serial detected as 'vertical' is upright after one 90° rotation and
     upside-down after the other, and box geometry can't tell those apart."""
@@ -1160,7 +1201,7 @@ def _decode_line_both_ways(model, crop, normalize, blank_index, charset):
         c = cv2.rotate(crop, cv2.ROTATE_180) if flipped else crop
         norm = normalize(c).astype(np.float32) / 255.0
         probs = model.predict(norm[None, ..., None], verbose=0)[0]
-        emits = _greedy_decode_steps(probs, blank_index, charset)
+        emits = _greedy_decode_steps(probs, blank_index, charset, allowed_indices)
         confs = [float(probs[t, i]) for (_, i, t) in emits]
         conf = sum(confs) / len(confs) if confs else 0.0
         # prefer the unflipped read unless the flip is clearly better
@@ -1192,6 +1233,12 @@ def _predict_with_crnn(project_id: str, img: np.ndarray, gray: np.ndarray,
     from ..tasks.crnn_training import _normalize_line, BLANK_INDEX
 
     model, charset = _load_crnn(project_id)
+
+    allowed_chars = _project_allowed_chars(project_id)
+    allowed_indices = (
+        {i for i, c in enumerate(charset) if c in allowed_chars} | {BLANK_INDEX}
+        if allowed_chars else None
+    )
 
     boxes = _yolo_char_boxes(project_id, img)
     line_regions = []
@@ -1314,7 +1361,7 @@ def _predict_with_crnn(project_id: str, img: np.ndarray, gray: np.ndarray,
         if crop.size == 0:
             continue
         emits, probs, conf = _decode_line_both_ways(
-            model, crop, _normalize_line, BLANK_INDEX, charset)
+            model, crop, _normalize_line, BLANK_INDEX, charset, allowed_indices)
         line_text = "".join(e[0] for e in emits)
         if pattern:
             fixed = _apply_pattern(emits, probs, pattern.strip().upper(), charset)
@@ -1340,7 +1387,8 @@ def _predict_with_crnn(project_id: str, img: np.ndarray, gray: np.ndarray,
             "region_source": region_source,
             "pattern": pattern or None,
             "pattern_applied": pattern_applied,
-            "pattern_mismatch": pattern_mismatch}
+            "pattern_mismatch": pattern_mismatch,
+            "restricted_to": sorted(allowed_chars) if allowed_chars else None}
 
 
 @router.get("/evaluate-on-training/{project_id}")
