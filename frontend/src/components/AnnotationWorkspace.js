@@ -36,7 +36,7 @@ const KonvaImage = ({ src, onLoad }) => {
 // vertex handles when selected. Dragging the fill/outline moves the whole
 // shape; dragging a handle reshapes just that corner — the workflow for
 // tracing a character's true rotated outline instead of an axis-aligned box.
-const PolygonAnnotation = ({ ann, imgW, imgH, color, isSelected, isPanning, totalScale, onSelect, onRelabel, onMoveEnd, onVertexDragEnd }) => {
+const PolygonAnnotation = ({ ann, imgW, imgH, color, isSelected, isPanning, totalScale, onSelect, onRelabel, onMoveEnd, onVertexDragEnd, isDraggingShapeRef }) => {
     const lineRef = useRef(null);
     const pixelPoints = ann.points.map(([x, y]) => [x * imgW, y * imgH]);
     const flat = pixelPoints.flat();
@@ -44,6 +44,7 @@ const PolygonAnnotation = ({ ann, imgW, imgH, color, isSelected, isPanning, tota
     return (
         <Group
             draggable={isSelected && !isPanning}
+            onDragStart={(e) => { if (e.target === e.currentTarget) isDraggingShapeRef.current = true; }}
             onDragEnd={(e) => {
                 // Konva's drag events bubble — dragging a vertex Circle (below) also
                 // fires this handler via bubbling. Only act when the Group itself
@@ -51,6 +52,7 @@ const PolygonAnnotation = ({ ann, imgW, imgH, color, isSelected, isPanning, tota
                 // get misread as a whole-shape move with a bogus offset and corrupt
                 // every point (the annotation appears to "vanish").
                 if (e.target !== e.currentTarget) return;
+                isDraggingShapeRef.current = false;
                 const dx = e.target.x();
                 const dy = e.target.y();
                 if (dx === 0 && dy === 0) return;
@@ -84,6 +86,7 @@ const PolygonAnnotation = ({ ann, imgW, imgH, color, isSelected, isPanning, tota
                     draggable={!isPanning}
                     onClick={(e) => { e.cancelBubble = true; }}
                     onTap={(e) => { e.cancelBubble = true; }}
+                    onDragStart={(e) => { e.cancelBubble = true; isDraggingShapeRef.current = true; }}
                     onDragMove={(e) => {
                         e.cancelBubble = true; // stop the ancestor Group's onDragEnd from misfiring
                         const line = lineRef.current;
@@ -96,6 +99,7 @@ const PolygonAnnotation = ({ ann, imgW, imgH, color, isSelected, isPanning, tota
                     }}
                     onDragEnd={(e) => {
                         e.cancelBubble = true; // stop the ancestor Group's onDragEnd from misfiring
+                        isDraggingShapeRef.current = false;
                         const line = lineRef.current;
                         const pts = line ? line.points() : flat;
                         const newPixelPoints = [];
@@ -305,6 +309,13 @@ const AnnotationWorkspace = ({ project, onProjectUpdated }) => {
 
     // ── Copy / paste a shape (box, polygon or segment) ────────────
     const [clipboardAnn, setClipboardAnn] = useState(null);
+
+    // Ignore wheel-zoom while a shape is actively being dragged — a hand
+    // resting on a scroll wheel/trackpad mid-drag (very easy right after a
+    // paste, since the mouse is already moving the new shape into place)
+    // was firing handleWheel and snapping the whole canvas to a different
+    // zoom level ("zoomed out at some random point") in the middle of the drag.
+    const isDraggingShapeRef = useRef(false);
 
     // ── Grid overlay + fine rotation ─────────────────────────────
     const [showGrid, setShowGrid] = useState(false);
@@ -531,6 +542,7 @@ const AnnotationWorkspace = ({ project, onProjectUpdated }) => {
     // ── Zoom via mouse wheel ──────────────────────────────────────
     const handleWheel = useCallback((e) => {
         e.evt.preventDefault();
+        if (isDraggingShapeRef.current) return; // don't fight an in-progress shape drag
         const stage = e.target.getStage();
         const pointer = stage.getPointerPosition();
         const scaleBy = 1.12;
@@ -1906,6 +1918,7 @@ Do you want to proceed?`;
                                                         onRelabel={(e) => handleEditLabel(ann, e)}
                                                         onMoveEnd={(pts) => handlePolygonMoveEnd(ann, pts)}
                                                         onVertexDragEnd={(pts) => handlePolygonVertexEnd(ann, pts)}
+                                                        isDraggingShapeRef={isDraggingShapeRef}
                                                     />
                                                 ) : (
                                                     <Rect
@@ -1924,7 +1937,8 @@ Do you want to proceed?`;
                                                         onTap={(e) => handleAnnClick(ann.id, e)}
                                                         onDblClick={(e) => handleEditLabel(ann, e)}
                                                         onDblTap={(e) => handleEditLabel(ann, e)}
-                                                        onDragEnd={(e) => handleAnnDragEnd(e, ann)}
+                                                        onDragStart={() => { isDraggingShapeRef.current = true; }}
+                                                        onDragEnd={(e) => { isDraggingShapeRef.current = false; handleAnnDragEnd(e, ann); }}
                                                         onTransformEnd={(e) => handleAnnTransformEnd(e, ann)}
                                                         onMouseEnter={e => { e.target.getStage().container().style.cursor = 'move'; }}
                                                         onMouseLeave={e => { e.target.getStage().container().style.cursor = isPanning ? 'grab' : 'crosshair'; }}
