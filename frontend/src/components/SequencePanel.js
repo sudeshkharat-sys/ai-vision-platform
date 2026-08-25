@@ -46,7 +46,15 @@ function computeImageLayout(imgWidth, imgHeight) {
 }
 
 function BackgroundImage({ src, layout }) {
-    const [image] = useImage(src, 'anonymous');
+    // No crossOrigin here — nothing in this canvas ever reads pixel data
+    // back out (no toDataURL/getImageData/export), so there's no need for
+    // it. Requesting it anyway broke switching between reference images:
+    // the thumbnail row loads each photo with a plain (non-CORS) <img>
+    // first, and browsers won't reuse that cached response for a second,
+    // crossOrigin="anonymous" request to the exact same URL — it silently
+    // fails instead, leaving the canvas blank for every image except
+    // whichever one happened to load through this path first.
+    const [image] = useImage(src);
     if (!image) return null;
     return (
         <Group listening={false}>
