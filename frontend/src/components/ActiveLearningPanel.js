@@ -50,6 +50,13 @@ const MODES = [
     },
 ];
 
+const MODEL_TYPES = [
+    { id: 'seed',     label: 'Seed Model' },
+    { id: 'main',     label: 'Main Model' },
+    { id: 'seg_seed', label: 'Seg Seed Model' },
+    { id: 'seg_main', label: 'Seg Main Model' },
+];
+
 const STRATEGIES = [
     { id: 'combined',   label: 'Combined',        desc: 'Confidence + Entropy + TTA (recommended)' },
     { id: 'confidence', label: 'Confidence',       desc: 'Lowest detection confidence first' },
@@ -421,13 +428,15 @@ const ActiveLearningPanel = ({ project, onClose, onAnnotationsUpdated, onAnnotat
 
         if (mode === 'suggest') {
             endpoint = `${API_URL}/pipeline/active-learning/suggest/${project.id}`;
-            body = { budget, strategy };
-            jobConfig.budget = budget;
+            body = { budget, strategy, model_type: modelType };
+            jobConfig.budget     = budget;
+            jobConfig.model_type = modelType;
         } else if (mode === 'curriculum') {
             endpoint = `${API_URL}/pipeline/active-learning/curriculum-annotate/${project.id}`;
-            body = { high_conf: highConf, low_conf: lowConf, use_tta: useTta };
-            jobConfig.high_conf = highConf;
-            jobConfig.low_conf  = lowConf;
+            body = { high_conf: highConf, low_conf: lowConf, use_tta: useTta, model_type: modelType };
+            jobConfig.high_conf  = highConf;
+            jobConfig.low_conf   = lowConf;
+            jobConfig.model_type = modelType;
         } else if (mode === 'score') {
             endpoint = `${API_URL}/pipeline/active-learning/score/${project.id}`;
             body = { model_type: modelType, strategy, top_k: topK, use_tta: useTta };
@@ -464,7 +473,10 @@ const ActiveLearningPanel = ({ project, onClose, onAnnotationsUpdated, onAnnotat
     const anyRunning  = jobs.some(j => j.status === 'PENDING' || j.status === 'STARTED');
     const hasSeed     = modelStatus?.has_seed_model;
     const hasMain     = modelStatus?.has_main_model;
-    const modelNeeded = mode === 'score' ? (modelType === 'seed' ? hasSeed : hasMain) : hasSeed;
+    const hasSegSeed  = modelStatus?.has_seg_seed_model;
+    const hasSegMain  = modelStatus?.has_seg_main_model;
+    const modelAvailability = { seed: hasSeed, main: hasMain, seg_seed: hasSegSeed, seg_main: hasSegMain };
+    const modelNeeded = modelAvailability[modelType];
     const canStart    = modelNeeded && !launching;
 
     return (
@@ -514,14 +526,22 @@ const ActiveLearningPanel = ({ project, onClose, onAnnotationsUpdated, onAnnotat
                                             <Circle size={8} className={hasMain ? 'alp-dot-green' : 'alp-dot-red'} fill="currentColor" />
                                             Main Model
                                         </div>
+                                        <div className={`alp-model-chip ${hasSegSeed ? 'alp-model-chip--ok' : 'alp-model-chip--miss'}`}>
+                                            <Circle size={8} className={hasSegSeed ? 'alp-dot-green' : 'alp-dot-red'} fill="currentColor" />
+                                            Seg Seed Model
+                                        </div>
+                                        <div className={`alp-model-chip ${hasSegMain ? 'alp-model-chip--ok' : 'alp-model-chip--miss'}`}>
+                                            <Circle size={8} className={hasSegMain ? 'alp-dot-green' : 'alp-dot-red'} fill="currentColor" />
+                                            Seg Main Model
+                                        </div>
                                         <button className="alp-refresh-btn" onClick={loadSetup} title="Refresh">
                                             <RefreshCw size={14} />
                                         </button>
                                     </div>
                                 )}
-                                {!hasSeed && modelStatus != null && (
+                                {!hasSeed && !hasMain && !hasSegSeed && !hasSegMain && modelStatus != null && (
                                     <p className="alp-hint" style={{ marginTop: 8 }}>
-                                        Train the seed model first using <strong>Train Seed Model</strong>.
+                                        Train a model first using <strong>Train Seed Model</strong> (or <strong>Train Segmentation Model</strong> for a segmentation project).
                                     </p>
                                 )}
                             </section>
@@ -551,6 +571,20 @@ const ActiveLearningPanel = ({ project, onClose, onAnnotationsUpdated, onAnnotat
                                 <section className="alp-section">
                                     <p className="alp-section-title">Configuration</p>
                                     <div className="alp-field">
+                                        <label className="alp-label">Model to use</label>
+                                        <div className="alp-model-type-row">
+                                            {MODEL_TYPES.map(({ id, label }) => (
+                                                <button
+                                                    key={id}
+                                                    className={`alp-model-type-btn ${modelType === id ? 'alp-model-type-btn--active' : ''}`}
+                                                    onClick={() => setModelType(id)}
+                                                >
+                                                    {label}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    </div>
+                                    <div className="alp-field" style={{ marginTop: 14 }}>
                                         <label className="alp-label">
                                             Images to Suggest
                                             <span className="alp-hint-text">Number of most uncertain images to return</span>
@@ -588,6 +622,20 @@ const ActiveLearningPanel = ({ project, onClose, onAnnotationsUpdated, onAnnotat
                                 <section className="alp-section">
                                     <p className="alp-section-title">Confidence Thresholds</p>
                                     <div className="alp-field">
+                                        <label className="alp-label">Model to use</label>
+                                        <div className="alp-model-type-row">
+                                            {MODEL_TYPES.map(({ id, label }) => (
+                                                <button
+                                                    key={id}
+                                                    className={`alp-model-type-btn ${modelType === id ? 'alp-model-type-btn--active' : ''}`}
+                                                    onClick={() => setModelType(id)}
+                                                >
+                                                    {label}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    </div>
+                                    <div className="alp-field" style={{ marginTop: 14 }}>
                                         <label className="alp-label">
                                             Auto-Accept threshold
                                             <span className="alp-hint-text">Confidence ≥ this → annotated automatically</span>
@@ -636,13 +684,13 @@ const ActiveLearningPanel = ({ project, onClose, onAnnotationsUpdated, onAnnotat
                                     <div className="alp-field">
                                         <label className="alp-label">Model to use for scoring</label>
                                         <div className="alp-model-type-row">
-                                            {['seed', 'main'].map(mt => (
+                                            {MODEL_TYPES.map(({ id, label }) => (
                                                 <button
-                                                    key={mt}
-                                                    className={`alp-model-type-btn ${modelType === mt ? 'alp-model-type-btn--active' : ''}`}
-                                                    onClick={() => setModelType(mt)}
+                                                    key={id}
+                                                    className={`alp-model-type-btn ${modelType === id ? 'alp-model-type-btn--active' : ''}`}
+                                                    onClick={() => setModelType(id)}
                                                 >
-                                                    {mt === 'seed' ? 'Seed Model' : 'Main Model'}
+                                                    {label}
                                                 </button>
                                             ))}
                                         </div>

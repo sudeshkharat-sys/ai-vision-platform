@@ -37,6 +37,31 @@ import os
 
 # ── Scoring helpers ──────────────────────────────────────────────────
 
+VALID_MODEL_TYPES = ("seed", "main", "seg_seed", "seg_main")
+
+
+def _resolve_scoring_model_path(project_id: str, model_type: str) -> Path | None:
+    """
+    Resolve the weights file for a given model_type.
+
+    ``"seed"``/``"main"`` are the plain detector weights. ``"seg_seed"``/
+    ``"seg_main"`` are the instance-segmentation weights — segmentation
+    models still expose ``r.boxes`` alongside ``r.masks``, so the same
+    box-based uncertainty scoring below works unmodified against them.
+    Falls back to the legacy pre seed/main-split ``seg_best.pt`` if the
+    requested seg weights file isn't there yet but the legacy one is.
+    """
+    project_model_dir = settings.model_dir.resolve() / project_id
+    path = project_model_dir / f"{model_type}_best.pt"
+    if path.exists():
+        return path
+    if model_type in ("seg_seed", "seg_main"):
+        legacy = project_model_dir / "seg_best.pt"
+        if legacy.exists():
+            return legacy
+    return None
+
+
 def _resolve_image_path(filepath: str) -> Path | None:
     """Resolve an uploaded image to an absolute path (same logic as auto_annotate)."""
     rel = filepath.lstrip("/")
@@ -218,7 +243,8 @@ def score_unlabeled_images(
     Parameters
     ----------
     model_type : str
-        ``"seed"`` or ``"main"`` — which trained model to use for scoring.
+        ``"seed"``, ``"main"``, ``"seg_seed"`` or ``"seg_main"`` — which
+        trained model to use for scoring.
     strategy : str
         ``"confidence"`` | ``"entropy"`` | ``"tta"`` | ``"combined"``
     top_k : int
@@ -238,9 +264,10 @@ def score_unlabeled_images(
     db = StateDBConnector()
 
     # ── 1. Load model ──────────────────────────────────────────────
-    weight_name = "seed_best.pt" if model_type == "seed" else "main_best.pt"
-    model_path = settings.model_dir.resolve() / project_id / weight_name
-    if not model_path.exists():
+    if model_type not in VALID_MODEL_TYPES:
+        return {"error": f"model_type must be one of {VALID_MODEL_TYPES}"}
+    model_path = _resolve_scoring_model_path(project_id, model_type)
+    if model_path is None:
         return {"error": f"{model_type} model not found. Train it first."}
 
     model = YOLO(str(model_path))
@@ -346,6 +373,7 @@ def curriculum_auto_annotate(
     review_band_top: float = 0.6,
     review_band_bottom: float = 0.35,
     use_tta: bool = True,
+    model_type: str = "seed",
 ):
     """
     Curriculum-based auto-annotation with confidence tiers.
@@ -381,10 +409,12 @@ def curriculum_auto_annotate(
 
     db = StateDBConnector()
 
-    # ── 1. Load seed model ──────────────────────────────────────────
-    model_path = settings.model_dir.resolve() / project_id / "seed_best.pt"
-    if not model_path.exists():
-        return {"error": "Seed model not found. Train the seed model first."}
+    # ── 1. Load model ──────────────────────────────────────────────
+    if model_type not in VALID_MODEL_TYPES:
+        return {"error": f"model_type must be one of {VALID_MODEL_TYPES}"}
+    model_path = _resolve_scoring_model_path(project_id, model_type)
+    if model_path is None:
+        return {"error": f"{model_type} model not found. Train it first."}
 
     model = YOLO(str(model_path))
     class_map = model.names
@@ -543,6 +573,7 @@ def suggest_for_review(
     project_id: str,
     budget: int = 10,
     strategy: str = "combined",
+    model_type: str = "seed",
 ):
     """
     Quick endpoint: returns the top-*budget* most uncertain pending images
@@ -555,10 +586,12 @@ def suggest_for_review(
 
     db = StateDBConnector()
 
-    # ── 1. Load seed model ─────────────────────────────────────────
-    model_path = settings.model_dir.resolve() / project_id / "seed_best.pt"
-    if not model_path.exists():
-        return {"error": "Seed model not found. Train the seed model first."}
+    # ── 1. Load model ──────────────────────────────────────────────
+    if model_type not in VALID_MODEL_TYPES:
+        return {"error": f"model_type must be one of {VALID_MODEL_TYPES}"}
+    model_path = _resolve_scoring_model_path(project_id, model_type)
+    if model_path is None:
+        return {"error": f"{model_type} model not found. Train it first."}
 
     model = YOLO(str(model_path))
     n_classes = len(model.names)

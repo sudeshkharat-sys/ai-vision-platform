@@ -618,7 +618,7 @@ async def download_model_pack(
 # ── Active Learning ──────────────────────────────────────────────
 
 class ScoreImagesRequest(BaseModel):
-    model_type: str = "seed"
+    model_type: str = "seed"  # "seed" | "main" | "seg_seed" | "seg_main"
     strategy: str = "combined"
     top_k: int = 0
     use_tta: bool = False
@@ -630,11 +630,13 @@ class CurriculumAnnotateRequest(BaseModel):
     review_band_top: float = 0.6
     review_band_bottom: float = 0.35
     use_tta: bool = True
+    model_type: str = "seed"  # "seed" | "main" | "seg_seed" | "seg_main"
 
 
 class SuggestReviewRequest(BaseModel):
     budget: int = 10
     strategy: str = "combined"
+    model_type: str = "seed"  # "seed" | "main" | "seg_seed" | "seg_main"
 
 
 @router.post("/active-learning/score/{project_id}")
@@ -665,7 +667,7 @@ async def start_curriculum_annotate(
     req = body or CurriculumAnnotateRequest()
     task = curriculum_auto_annotate.delay(
         project_id, req.high_conf, req.low_conf,
-        req.review_band_top, req.review_band_bottom, req.use_tta,
+        req.review_band_top, req.review_band_bottom, req.use_tta, req.model_type,
     )
     return {"task_id": task.id, "status": "queued"}
 
@@ -680,7 +682,7 @@ async def start_suggest_review(
     """Get the top-N most uncertain images that need human annotation."""
     await get_owned_project(project_id, current_user, db)
     req = body or SuggestReviewRequest()
-    task = suggest_for_review.delay(project_id, req.budget, req.strategy)
+    task = suggest_for_review.delay(project_id, req.budget, req.strategy, req.model_type)
     return {"task_id": task.id, "status": "queued"}
 
 
