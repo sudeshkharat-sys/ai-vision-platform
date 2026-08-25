@@ -108,13 +108,46 @@ def best_polygon_for_class(detections: list[dict], class_name: str) -> list[list
 
 
 def evaluate_step(step: dict, detections: list[dict], threshold_pct: float) -> dict:
-    """Evaluate one step's region/detection_class target against one
-    frame's or image's detections. threshold_pct is on a 0-100 scale.
+    """Evaluate one step's target against one frame's or image's
+    detections. threshold_pct is on a 0-100 scale.
 
     Returns {matched, target_type, testable, per_class, note}.
+
+    target_type == "multi_region" is a combo step — 2+ independently
+    drawn regions (e.g. left hand on region A AND right hand on region B)
+    that must ALL match in the SAME frame, each evaluated as its own
+    single-region check via _match_single and ANDed together. Everything
+    else (a plain "region" or "detection_class" step) goes straight to
+    _match_single.
+    """
+    if step.get("target_type") == "multi_region":
+        sub_targets = step.get("sub_targets") or []
+        if not sub_targets:
+            return {
+                "matched": False, "target_type": "multi_region", "testable": True,
+                "per_class": [], "note": "Combo step has no sub-regions defined.",
+            }
+        results = [_match_single(sub, detections, threshold_pct) for sub in sub_targets]
+        testable = all(r["testable"] for r in results)
+        notes = [r["note"] for r in results if r["note"]]
+        return {
+            "matched": testable and all(r["matched"] for r in results),
+            "target_type": "multi_region",
+            "testable": testable,
+            "per_class": [c for r in results for c in r["per_class"]],
+            "note": "; ".join(notes) if notes else None,
+        }
+    return _match_single(step, detections, threshold_pct)
+
+
+def _match_single(step: dict, detections: list[dict], threshold_pct: float) -> dict:
+    """Evaluate one region/detection_class target (never multi_region —
+    that's unwrapped into these by evaluate_step above) against one
+    frame's or image's detections.
+
     Only "region" (box) and "detection_class" targets are handled here —
-    line regions return testable=False; the caller should keep using the
-    separate motion-crossing check for those.
+    a plain motion-crossing line region returns testable=False; the
+    caller should keep using the separate motion-crossing check for those.
     """
     target_type = step.get("target_type", "region")
 

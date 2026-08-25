@@ -38,7 +38,16 @@ class StepEvent:
 
 def _step_classes(step: dict) -> list[str]:
     """A step's required classes — required_classes if set (2+ classes,
-    ALL must be present at once), else the single legacy required_class."""
+    ALL must be present at once), else the single legacy required_class.
+    For a "multi_region" combo step, this is every sub-region's classes
+    flattened together (used for wrong-region-hit checks against other
+    steps, and detect_hold/undetect_hold's "is any needed class present"
+    checks)."""
+    if step.get("target_type") == "multi_region":
+        classes = []
+        for sub in step.get("sub_targets") or []:
+            classes.extend(sub.get("required_classes") or [sub.get("required_class")])
+        return [c for c in classes if c]
     classes = step.get("required_classes")
     if classes:
         return list(classes)

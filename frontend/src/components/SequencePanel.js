@@ -103,6 +103,13 @@ export default function SequencePanel({ project, onClose }) {
     // path must cross the line between frames. "overlap": matched the same
     // area-overlap-%% way a box region is, no motion needed.
     const [lineTriggerMode, setLineTriggerMode] = useState('crossing');
+    // "Combo" steps — 2+ independently-drawn regions that must ALL match in
+    // the SAME frame (e.g. left hand on region A AND right hand on region B
+    // at once), for when the two spots are too far apart to cover with one
+    // drawn region + required_classes. Boxes only in this tool (no line
+    // sub-regions) — sub-regions accumulate here while being drawn, then
+    // "Finish Combo Step" bundles them into one multi_region step.
+    const [comboSubTargets, setComboSubTargets] = useState([]);
     const [editRegions, setEditRegions] = useState(false); // true: drag/resize existing regions instead of adding them as a step on click
     const [editingSequenceId, setEditingSequenceId] = useState(null); // non-null while editing an already-saved sequence (Save = PUT, not POST)
     const [drawing, setDrawing]         = useState(null); // in-progress shape
@@ -237,6 +244,7 @@ export default function SequencePanel({ project, onClose }) {
             region_coords: step.region_coords,
             trigger_mode: step.trigger_mode,
             target_class: step.target_class,
+            sub_targets: step.sub_targets,
             required_class: step.required_class,
             required_classes: step.required_classes,
             label: step.label,
@@ -290,6 +298,21 @@ export default function SequencePanel({ project, onClose }) {
         const nx1 = toImgX(Math.min(x1, x2)), nx2 = toImgX(Math.max(x1, x2));
         const ny1 = toImgY(Math.min(y1, y2)), ny2 = toImgY(Math.max(y1, y2));
         const coords = regionKind === 'line' ? [toImgX(x1), toImgY(y1), toImgX(x2), toImgY(y2)] : [nx1, ny1, nx2, ny2];
+
+        if (regionKind === 'combo') {
+            // Not a step yet — just accumulate this box as one sub-region
+            // of the combo step being built. "Finish Combo Step" bundles
+            // whatever's accumulated here into one multi_region step.
+            setComboSubTargets(prev => [...prev, {
+                region_type: 'box',
+                region_coords: [nx1, ny1, nx2, ny2],
+                required_class: classes[0],
+                required_classes: classes,
+            }]);
+            setDrawing(null);
+            setError(null);
+            return;
+        }
 
         const id = nextRegionId();
         const label = pendingLabel.trim() || `Region ${regions.length + 1}`;
@@ -384,6 +407,32 @@ export default function SequencePanel({ project, onClose }) {
         setPendingLabel('');
     };
 
+    const removeComboSubTarget = (idx) =>
+        setComboSubTargets(prev => prev.filter((_, i) => i !== idx));
+
+    // ── Bundle the accumulated combo sub-regions into ONE multi_region
+    // step — all of them must match in the SAME frame for the step to pass.
+    const finishComboStep = () => {
+        if (comboSubTargets.length < 2) {
+            setError('Draw at least 2 sub-regions before finishing a combo step.');
+            return;
+        }
+        const id = nextRegionId();
+        const label = pendingLabel.trim() || `Combo ${regions.length + 1}`;
+        setRegions(prev => [...prev, {
+            id,
+            target_type: 'multi_region',
+            sub_targets: comboSubTargets,
+            label,
+            complete_on: pendingCompleteOn !== 'detect' ? pendingCompleteOn : undefined,
+            hold_seconds: pendingCompleteOn !== 'detect' ? Number(pendingHoldSeconds) || 0.4 : undefined,
+        }]);
+        setStepOrder(prev => [...prev, id]);
+        setComboSubTargets([]);
+        setError(null);
+        setPendingLabel('');
+    };
+
     // ── Click an EXISTING region to add it again as the next step ────
     const appendExistingRegion = (regionId) => {
         setStepOrder(prev => [...prev, regionId]);
@@ -426,6 +475,7 @@ export default function SequencePanel({ project, onClose }) {
             region_coords: r.region_coords,
             trigger_mode: r.region_type === 'line' ? r.trigger_mode : undefined,
             target_class: r.target_class,
+            sub_targets: r.target_type === 'multi_region' ? r.sub_targets : undefined,
             required_class: r.required_class,
             required_classes: r.required_classes && r.required_classes.length > 1 ? r.required_classes : undefined,
             complete_on: (r.complete_on === 'undetect_hold' || r.complete_on === 'detect_hold') ? r.complete_on : undefined,
@@ -831,6 +881,11 @@ export default function SequencePanel({ project, onClose }) {
                                             onClick={() => setRegionKind('class')}
                                             title="Target = another detected class's own mask — no drawing needed"
                                         >Class</button>
+                                        <button
+                                            className={`sq-tool-btn ${regionKind === 'combo' ? 'sq-tool-btn--active' : ''}`}
+                                            onClick={() => setRegionKind('combo')}
+                                            title="Draw 2+ separate regions that must ALL match at the SAME time (e.g. left hand on one region AND right hand on another, at once)"
+                                        >Combo</button>
 
                                         {regionKind === 'line' && (
                                             <select
@@ -865,7 +920,9 @@ export default function SequencePanel({ project, onClose }) {
                                             className="sq-class-input"
                                             placeholder={regionKind === 'class'
                                                 ? 'intersect with class(es) — pick below, or type comma-separated'
-                                                : 'required class(es) — pick below, or type comma-separated'}
+                                                : regionKind === 'combo'
+                                                    ? 'required class(es) for the NEXT box you draw'
+                                                    : 'required class(es) — pick below, or type comma-separated'}
                                             value={pendingClass}
                                             onChange={e => setPendingClass(e.target.value)}
                                         />
@@ -909,6 +966,30 @@ export default function SequencePanel({ project, onClose }) {
                                             </button>
                                         )}
                                     </div>
+                                    {regionKind === 'combo' && (
+                                        <div className="sq-combo-panel">
+                                            {comboSubTargets.length === 0 ? (
+                                                <p className="sq-hint">Set a required class above, then draw a box for sub-region 1. Repeat for each region that must ALL match at once, then finish the step.</p>
+                                            ) : (
+                                                <div className="sq-combo-list">
+                                                    {comboSubTargets.map((sub, i) => (
+                                                        <div key={i} className="sq-combo-chip">
+                                                            <span>#{i + 1} — {sub.required_classes.length > 1 ? sub.required_classes.join(' + ') : sub.required_class}</span>
+                                                            <button type="button" onClick={() => removeComboSubTarget(i)} title="Remove"><Trash2 size={12} /></button>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            )}
+                                            <button
+                                                className="sq-btn-add-step"
+                                                onClick={finishComboStep}
+                                                disabled={comboSubTargets.length < 2}
+                                                title={comboSubTargets.length < 2 ? 'Draw at least 2 sub-regions first' : 'Bundle these regions into one combo step'}
+                                            >
+                                                <Plus size={13} /> Finish Combo Step ({comboSubTargets.length})
+                                            </button>
+                                        </div>
+                                    )}
                                     {availableClasses.length > 0 && (
                                         <div className="sq-class-picker">
                                             {availableClasses.map(cls => {
@@ -930,6 +1011,8 @@ export default function SequencePanel({ project, onClose }) {
                                             ? ' Editing gates: drag a region to move it, or drag its white corner/end handles to resize. Click "Editing gates" again to go back to adding steps.'
                                             : regionKind === 'class'
                                             ? ' Pick a target class + intersect class(es), then click "Add Step" — nothing to draw.'
+                                            : regionKind === 'combo'
+                                            ? ' Draw one box per region that must ALL match at the SAME time (e.g. left hand region + right hand region), then click "Finish Combo Step".'
                                             : ' Draw a new region on empty canvas. Click an already-drawn region to reuse it as the next step, or click "Edit gates" to reposition/resize existing ones. Pick two or more classes to require ALL of them at once.'}
                                     </p>
                                     <Stage
@@ -962,6 +1045,36 @@ export default function SequencePanel({ project, onClose }) {
                                                     radius: 6, fill: '#ffffff', stroke: color, strokeWidth: 2,
                                                     draggable: true,
                                                 };
+                                                if (r.target_type === 'multi_region') {
+                                                    // A combo step's own regions aren't individually
+                                                    // draggable in v1 — just shown as a static group,
+                                                    // click any of them to reuse the whole combo step.
+                                                    return (
+                                                        <Group
+                                                            key={r.id}
+                                                            onClick={() => !editRegions && appendExistingRegion(r.id)}
+                                                            onTap={() => !editRegions && appendExistingRegion(r.id)}
+                                                        >
+                                                            {r.sub_targets.map((sub, si) => {
+                                                                const [sx1, sy1, sx2, sy2] = sub.region_coords;
+                                                                return (
+                                                                    <React.Fragment key={si}>
+                                                                        <Rect
+                                                                            x={toPx(sx1)} y={toPy(sy1)}
+                                                                            width={toPx(sx2) - toPx(sx1)} height={toPy(sy2) - toPy(sy1)}
+                                                                            stroke={color} strokeWidth={2} dash={[6, 3]} fill={`${color}22`}
+                                                                        />
+                                                                        <Text
+                                                                            x={toPx(sx1) + 4} y={toPy(sy1) + 4}
+                                                                            text={`${r.label} #${si + 1}${timesUsed > 1 ? ` ×${timesUsed}` : ''}`}
+                                                                            fill={color} fontStyle="bold" fontSize={12}
+                                                                        />
+                                                                    </React.Fragment>
+                                                                );
+                                                            })}
+                                                        </Group>
+                                                    );
+                                                }
                                                 if (r.region_type === 'box') {
                                                     const [x1, y1, x2, y2] = r.region_coords;
                                                     return (
@@ -1048,8 +1161,21 @@ export default function SequencePanel({ project, onClose }) {
                                                     </Group>
                                                 );
                                             })}
+                                            {regionKind === 'combo' && comboSubTargets.map((sub, si) => {
+                                                const [sx1, sy1, sx2, sy2] = sub.region_coords;
+                                                const toPx = fx => imgLayout.x + fx * imgLayout.width;
+                                                const toPy = fy => imgLayout.y + fy * imgLayout.height;
+                                                return (
+                                                    <Rect
+                                                        key={si}
+                                                        x={toPx(sx1)} y={toPy(sy1)}
+                                                        width={toPx(sx2) - toPx(sx1)} height={toPy(sy2) - toPy(sy1)}
+                                                        stroke="#f59e0b" strokeWidth={2} dash={[6, 3]} fill="#f59e0b22"
+                                                    />
+                                                );
+                                            })}
                                             {drawing && (
-                                                regionKind === 'box' ? (
+                                                regionKind === 'box' || regionKind === 'combo' ? (
                                                     <Rect
                                                         x={Math.min(drawing.x1, drawing.x2)} y={Math.min(drawing.y1, drawing.y2)}
                                                         width={Math.abs(drawing.x2 - drawing.x1)} height={Math.abs(drawing.y2 - drawing.y1)}
@@ -1077,7 +1203,11 @@ export default function SequencePanel({ project, onClose }) {
                                                         <span className="sq-step-dot" style={{ background: regionColor(regionId) }} />
                                                         <span className="sq-step-num">{i + 1}.</span>
                                                         <span className="sq-step-region-label">{r.label}</span>
-                                                        <span className="sq-step-class">{(r.required_classes && r.required_classes.length > 1) ? r.required_classes.join(' + ') : r.required_class}</span>
+                                                        <span className="sq-step-class">
+                                                            {r.target_type === 'multi_region'
+                                                                ? `combo · ${r.sub_targets.length} regions`
+                                                                : (r.required_classes && r.required_classes.length > 1) ? r.required_classes.join(' + ') : r.required_class}
+                                                        </span>
                                                         <div className="sq-step-actions">
                                                             <button onClick={() => moveStep(i, -1)} disabled={i === 0} title="Move up">↑</button>
                                                             <button onClick={() => moveStep(i, 1)} disabled={i === stepOrder.length - 1} title="Move down">↓</button>

@@ -125,6 +125,21 @@ class VideoFrameCaptureRequest(BaseModel):
 
 
 # ── Region sequence schemas ───────────────────────────────────────
+class SequenceSubTarget(BaseModel):
+    """One region within a "multi_region" combo step — same shape as a
+    plain region step's target fields, minus anything step-level
+    (label, complete_on, order_index live on the parent step, not here)."""
+    region_type: str  # "box" | "line" | "polygon"
+    region_coords: Union[List[float], List[List[float]]]
+    # Only meaningful when region_type == "line" — combo sub-regions only
+    # support "overlap" (no motion-crossing inside a combo: crossing state
+    # is tracked per class, and the same class could appear in more than
+    # one sub-region of the same combo, which would corrupt it).
+    trigger_mode: Optional[str] = None
+    required_class: str
+    required_classes: Optional[List[str]] = None
+
+
 class SequenceStep(BaseModel):
     order_index: int
     label: str
@@ -132,6 +147,9 @@ class SequenceStep(BaseModel):
     # "region" (default): target = a user-drawn region on the reference
     # frame. "detection_class": target = another detected class's OWN
     # mask (e.g. use "M"'s predicted mask as the target, no drawn region).
+    # "multi_region": 2+ independently drawn regions (sub_targets) that
+    # must ALL match in the SAME frame — e.g. left hand on region A AND
+    # right hand on region B at once, which a single region can't express.
     target_type: str = "region"
 
     # Required when target_type == "region".
@@ -151,10 +169,15 @@ class SequenceStep(BaseModel):
     # own detected mask becomes this step's target area.
     target_class: Optional[str] = None
 
+    # Required when target_type == "multi_region" — one entry per region
+    # that must simultaneously match for this step to pass.
+    sub_targets: Optional[List[SequenceSubTarget]] = None
+
     # Kept for backward compatibility with sequences saved before
     # required_classes existed — treated as required_classes[0] if that
-    # list is absent.
-    required_class: str
+    # list is absent. Not used (and not required) when target_type ==
+    # "multi_region" — each sub_target has its own required_class(es).
+    required_class: Optional[str] = None
     # If set (2+ entries), ALL of these classes must have a detection
     # overlapping the target in the SAME frame for the step to pass —
     # e.g. ["hand", "m"] to require a finger AND the letter "m" both
