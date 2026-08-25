@@ -109,7 +109,12 @@ def mask_intersection_percent(target_polygon: list[list[float]],
 def best_polygon_for_class(detections: list[dict], class_name: str) -> list[list[float]] | None:
     """Highest-confidence detection of this class this frame, as a polygon —
     its real segmentation mask if the model produced one, else its bbox
-    corners (so a plain box-only detector still degrades gracefully)."""
+    corners (so a plain box-only detector still degrades gracefully).
+
+    Only for picking a "detection_class" step's TARGET area, where there is
+    no region to compare against yet. To decide whether a required class
+    is inside a region, use best_overlap_for_class instead — see why there.
+    """
     best, best_conf = None, -1.0
     for det in detections:
         if det["class_name"] != class_name:
@@ -118,6 +123,32 @@ def best_polygon_for_class(detections: list[dict], class_name: str) -> list[list
         if conf > best_conf:
             best_conf = conf
             best = det.get("mask") or bbox_to_polygon(det["xyxy"])
+    return best
+
+
+def best_overlap_for_class(detections: list[dict], class_name: str,
+                            target_polygon: list[list[float]],
+                            basis: str = "region") -> float:
+    """Best overlap % against target_polygon across EVERY detection of this
+    class this frame — not just the single most confident one.
+
+    A frame routinely contains more than one detection of the same class:
+    genuinely (two hands both labelled "Lh" when the model confuses left
+    vs right) or spuriously (duplicate overlapping masks). Scoring only the
+    highest-confidence one then asks the wrong question — "is the model's
+    single favourite Lh in this region?" instead of "is ANY Lh in this
+    region?" — and a step fails while a perfectly good detection of the
+    required class sits squarely inside its region, simply because some
+    other instance elsewhere happened to score 0.01 higher.
+    """
+    best = 0.0
+    for det in detections:
+        if det["class_name"] != class_name:
+            continue
+        polygon = det.get("mask") or bbox_to_polygon(det["xyxy"])
+        pct = mask_intersection_percent(target_polygon, polygon, basis=basis)
+        if pct > best:
+            best = pct
     return best
 
 
@@ -210,8 +241,7 @@ def _match_single(step: dict, detections: list[dict], threshold_pct: float,
     needed = step.get("required_classes") or [step["required_class"]]
     per_class = []
     for cls in needed:
-        other_polygon = best_polygon_for_class(detections, cls)
-        pct = mask_intersection_percent(target_polygon, other_polygon, basis=basis) if other_polygon else 0.0
+        pct = best_overlap_for_class(detections, cls, target_polygon, basis)
         per_class.append({
             "class_name": cls,
             "matched": pct >= threshold_pct,
