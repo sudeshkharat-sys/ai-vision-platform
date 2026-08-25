@@ -68,6 +68,10 @@ export default function SequencePanel({ project, onClose }) {
     const [refImage, setRefImage]       = useState(null);
     const [videos, setVideos]           = useState([]);
     const [availableClasses, setAvailableClasses] = useState([]); // real classes annotated in this project (count > 0)
+    // Filter the "Reference frame" thumbnail row down to one video's
+    // already-extracted frames — '' shows every image (plain uploads +
+    // every video's frames mixed together, as before).
+    const [refImageVideoFilter, setRefImageVideoFilter] = useState('');
 
     // ── Pick any frame of an uploaded video as the reference frame ────
     // (instead of only being able to choose from images already saved
@@ -135,6 +139,15 @@ export default function SequencePanel({ project, onClose }) {
         () => computeImageLayout(refImage?.width, refImage?.height),
         [refImage]
     );
+
+    // Frames bulk-extracted from a video are saved under
+    // /uploads/{project}/video_frames/{video_id}/... (see video_processing.py)
+    // — that path segment is the only place a video_id is recorded against
+    // an Image row, so filtering by video means matching on it.
+    const refImages = useMemo(() => {
+        if (!refImageVideoFilter) return images;
+        return images.filter(img => img.filepath.includes(`/video_frames/${refImageVideoFilter}/`));
+    }, [images, refImageVideoFilter]);
 
     // Stale test results are worse than none — clear them whenever the
     // steps or reference image change so nobody trusts an outdated pass/fail.
@@ -784,9 +797,26 @@ export default function SequencePanel({ project, onClose }) {
 
                             {images.length > 1 && (
                                 <div className="sq-ref-picker">
-                                    <span className="sq-ref-picker-label">Reference frame</span>
+                                    <div className="sq-ref-picker-header">
+                                        <span className="sq-ref-picker-label">Reference frame</span>
+                                        {videos.length > 0 && (
+                                            <select
+                                                className="sq-ref-video-filter"
+                                                value={refImageVideoFilter}
+                                                onChange={e => setRefImageVideoFilter(e.target.value)}
+                                                title="Show only one video's already-extracted frames"
+                                            >
+                                                <option value="">All images</option>
+                                                {videos.map(v => (
+                                                    <option key={v.id} value={v.id}>{v.original_filename}</option>
+                                                ))}
+                                            </select>
+                                        )}
+                                    </div>
                                     <div className="sq-ref-thumbs">
-                                        {images.map(img => (
+                                        {refImages.length === 0 ? (
+                                            <p className="sq-hint">No frames extracted from this video yet — use "Extract Frames" on it first, or pick "All images".</p>
+                                        ) : refImages.map(img => (
                                             <button
                                                 type="button"
                                                 key={img.id}

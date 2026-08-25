@@ -199,6 +199,11 @@
 .sq-ref-picker-label {
   font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: #999;
 }
+.sq-ref-picker-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.sq-ref-video-filter {
+  font-size: 12px; border: 1px solid #e5e5e5; border-radius: 6px; padding: 4px 8px; outline: none;
+  flex: 0 0 auto; min-width: 160px; max-width: 220px;
+}
 .sq-ref-thumbs { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 4px; }
 .sq-ref-thumb {
   flex-shrink: 0; width: 84px; padding: 3px; background: #fff; border: 2px solid #e5e5e5;
