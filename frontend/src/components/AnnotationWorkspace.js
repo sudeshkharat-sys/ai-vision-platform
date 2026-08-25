@@ -15,7 +15,7 @@ import OcrActiveLearningPanel from './OcrActiveLearningPanel';
 import OcrTrainingPanel from './OcrTrainingPanel';
 import SegTrainingPanel from './SegTrainingPanel';
 import './AnnotationWorkspace.css';
-import { Sparkles, AlertTriangle, X, Upload, Image as ImageIcon, Check, ArrowLeft, ArrowRight, Brain, Rocket, Eye, Target, Tag, Package, Film, Undo2, Redo2, ZoomIn, ZoomOut, Maximize2, Trash2, ImageOff, Type, RotateCw, RotateCcw, Grid3x3, Wand2, Square, PenTool, RefreshCw, Scissors } from 'lucide-react';
+import { Sparkles, AlertTriangle, X, Upload, Image as ImageIcon, Check, ArrowLeft, ArrowRight, Brain, Rocket, Eye, Target, Tag, Package, Film, Undo2, Redo2, ZoomIn, ZoomOut, Maximize2, Trash2, ImageOff, Type, RotateCw, RotateCcw, Grid3x3, Wand2, Square, PenTool, RefreshCw, Scissors, Copy, ClipboardPaste } from 'lucide-react';
 
 import { API_URL } from '../config';
 
@@ -302,6 +302,9 @@ const AnnotationWorkspace = ({ project, onProjectUpdated }) => {
     const [selectedAnnId, setSelectedAnnId] = useState(null);
     const transformerRef = useRef(null);
     const annNodesRef = useRef({});
+
+    // ── Copy / paste a shape (box, polygon or segment) ────────────
+    const [clipboardAnn, setClipboardAnn] = useState(null);
 
     // ── Grid overlay + fine rotation ─────────────────────────────
     const [showGrid, setShowGrid] = useState(false);
@@ -650,6 +653,45 @@ Do you want to proceed?`;
             setError("Failed to delete annotation.");
         }
     };
+
+    // Copy the selected shape (box, polygon or segment mask) so it can be
+    // pasted again — same class + same exact outline, no redrawing.
+    const handleCopyAnnotation = useCallback(() => {
+        const ann = annotations.find(a => a.id === selectedAnnId);
+        if (!ann) return;
+        setClipboardAnn(ann);
+        showStatus(`Copied ${ann.class_name} — Ctrl+V (or the Paste button) to place it`);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [annotations, selectedAnnId]);
+
+    // Paste the copied shape as a new annotation, nudged so it doesn't sit
+    // exactly on top of the original — drag it into place afterward.
+    const handlePasteAnnotation = useCallback(() => {
+        if (!clipboardAnn || !currentImage) return;
+        const dxN = 24 / imgW;
+        const dyN = 24 / imgH;
+        const isShape = (clipboardAnn.annotation_type === 'polygon' || clipboardAnn.annotation_type === 'segment') && clipboardAnn.points;
+        const body = {
+            image_id: currentImage.id,
+            class_name: clipboardAnn.class_name,
+            annotation_type: clipboardAnn.annotation_type,
+            ...(isShape
+                ? { points: clipboardAnn.points.map(([x, y]) => [x + dxN, y + dyN]) }
+                : { bbox: [clipboardAnn.bbox[0] + dxN, clipboardAnn.bbox[1] + dyN, clipboardAnn.bbox[2], clipboardAnn.bbox[3]] }),
+        };
+        axios.post(`${API_URL}/annotations`, body)
+            .then(res => {
+                setAnnotations(prev => [...prev, res.data]);
+                pushHistory({ type: 'add', ann: res.data });
+                setSelectedAnnId(res.data.id);
+                setImages(prev => prev.map(img =>
+                    img.id === currentImage.id ? { ...img, status: 'annotated' } : img
+                ));
+                showStatus(`Pasted ${clipboardAnn.class_name} — drag it into place`);
+            })
+            .catch(() => setError('Failed to paste annotation.'));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [clipboardAnn, currentImage, imgW, imgH, pushHistory]);
 
     const handleDeleteImage = async () => {
         if (!currentImage) return;
@@ -1272,6 +1314,7 @@ Do you want to proceed?`;
     // Keyboard: space=pan, Ctrl+Z=undo, Ctrl+Y / Ctrl+Shift+Z=redo
     useEffect(() => {
         const onKeyDown = (e) => {
+            const inTextField = ['INPUT', 'TEXTAREA'].includes(e.target?.tagName) || e.target?.isContentEditable;
             if (e.key === ' ' && !e.repeat) {
                 e.preventDefault();
                 setIsPanning(true);
@@ -1283,6 +1326,14 @@ Do you want to proceed?`;
             if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.key === 'z' && e.shiftKey))) {
                 e.preventDefault();
                 handleRedo();
+            }
+            if ((e.ctrlKey || e.metaKey) && e.key === 'c' && !inTextField && selectedAnnId) {
+                e.preventDefault();
+                handleCopyAnnotation();
+            }
+            if ((e.ctrlKey || e.metaKey) && e.key === 'v' && !inTextField && clipboardAnn) {
+                e.preventDefault();
+                handlePasteAnnotation();
             }
             if (e.key === 'Escape') {
                 setSelectedAnnId(null);
@@ -1305,7 +1356,7 @@ Do you want to proceed?`;
             window.removeEventListener('keyup', onKeyUp);
         };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [handleUndo, handleRedo, selectedAnnId, drawMode, newPolylinePoints, finishPolyline, cancelPolyline]);
+    }, [handleUndo, handleRedo, selectedAnnId, drawMode, newPolylinePoints, finishPolyline, cancelPolyline, clipboardAnn, handleCopyAnnotation, handlePasteAnnotation]);
 
     // The box to draw while mouse is held or while picker is open
     const drawnBox = pendingAnnotation || newAnnotation;
@@ -1658,6 +1709,9 @@ Do you want to proceed?`;
                             {/* ── Undo / Redo ── */}
                             <button className="btn-toolbar" onClick={handleUndo} disabled={!history.length} title="Undo (Ctrl+Z)"><Undo2 size={14} /></button>
                             <button className="btn-toolbar" onClick={handleRedo} disabled={!redoStack.length} title="Redo (Ctrl+Y)"><Redo2 size={14} /></button>
+                            {/* ── Copy / paste a shape (box, polygon or segment) ── */}
+                            <button className="btn-toolbar" onClick={handleCopyAnnotation} disabled={!selectedAnnId} title="Copy selected shape (Ctrl+C)"><Copy size={14} /></button>
+                            <button className="btn-toolbar" onClick={handlePasteAnnotation} disabled={!clipboardAnn} title="Paste copied shape (Ctrl+V) — then drag it into place"><ClipboardPaste size={14} /></button>
                             {/* ── Clear all annotations ── */}
                             <button className="btn-toolbar" onClick={handleClearAllAnnotations} disabled={annotations.length === 0} title="Delete all annotations on this image"><Trash2 size={14} /></button>
                             {/* ── Delete image ── */}
