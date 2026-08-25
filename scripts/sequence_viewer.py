@@ -12,8 +12,10 @@ it's fully self-contained (just opencv-python, numpy, ultralytics). You
 export a sequence as JSON from the web app, and pass it here alongside
 your .pt model(s) and a video file or webcam.
 
-Understands all the step types the web builder can produce: box/line/
-frozen-polygon regions, "detection_class" live class-vs-class steps, and
+Understands all the step types the web builder can produce: box/line
+(crossing or opt-in area-overlap trigger_mode)/frozen-polygon regions,
+"detection_class" live class-vs-class steps, "multi_region" combo steps
+(2+ independent sub-regions that must all match in the same frame), and
 the complete_on modes "detect" (default, instant), "detect_hold" (must
 stay matched for hold_seconds — a real press, not a pass-through), and
 "undetect_hold" (must stay gone for hold_seconds — gesture released).
@@ -104,7 +106,25 @@ def best_polygon_for_class(detections, class_name):
     return best
 
 
-def evaluate_step(step: dict, detections: list, threshold_pct: float) -> dict:
+# Half-width (normalized 0-1) a line region is buffered into for
+# area-overlap matching (trigger_mode == "overlap") — a true zero-width
+# line has no area, so "Intersection Area / Target Area" needs a strip
+# to compare against, not a geometric line. Matches
+# backend/app/services/sequence_match.py's LINE_OVERLAP_HALF_WIDTH.
+LINE_OVERLAP_HALF_WIDTH = 0.02
+
+
+def line_to_polygon(x1, y1, x2, y2, half_width=LINE_OVERLAP_HALF_WIDTH):
+    dx, dy = x2 - x1, y2 - y1
+    length = (dx * dx + dy * dy) ** 0.5
+    if length < 1e-6:
+        return [[x1 - half_width, y1 - half_width], [x1 + half_width, y1 - half_width],
+                [x1 + half_width, y1 + half_width], [x1 - half_width, y1 + half_width]]
+    nx, ny = -dy / length * half_width, dx / length * half_width
+    return [[x1 + nx, y1 + ny], [x2 + nx, y2 + ny], [x2 - nx, y2 - ny], [x1 - nx, y1 - ny]]
+
+
+def _match_single(step: dict, detections: list, threshold_pct: float) -> dict:
     target_type = step.get("target_type", "region")
 
     if target_type == "detection_class":
@@ -122,6 +142,9 @@ def evaluate_step(step: dict, detections: list, threshold_pct: float) -> dict:
             # Frozen class boundary (from "Freeze boundary" in the web app) —
             # a static shape, so it works even if that class is occluded now.
             target_polygon = step["region_coords"]
+        elif region_type == "line" and step.get("trigger_mode") == "overlap":
+            x1, y1, x2, y2 = step["region_coords"]
+            target_polygon = line_to_polygon(x1, y1, x2, y2)
         else:
             return {"matched": False, "testable": False, "per_class": [],
                     "note": "Line regions use motion-crossing, not evaluated here."}
@@ -135,6 +158,27 @@ def evaluate_step(step: dict, detections: list, threshold_pct: float) -> dict:
 
     return {"matched": bool(needed) and all(c["matched"] for c in per_class),
             "testable": True, "per_class": per_class, "note": None}
+
+
+def evaluate_step(step: dict, detections: list, threshold_pct: float) -> dict:
+    """"multi_region" (a "Combo" step from the web builder) is 2+
+    independent sub_targets that must ALL match in the SAME frame (e.g.
+    left hand on region A AND right hand on region B at once) — evaluate
+    each sub-target the same way a normal region step is, via
+    _match_single, and AND every result together. Everything else goes
+    straight to _match_single."""
+    if step.get("target_type") == "multi_region":
+        sub_targets = step.get("sub_targets") or []
+        if not sub_targets:
+            return {"matched": False, "testable": True, "per_class": [],
+                    "note": "Combo step has no sub-regions defined."}
+        results = [_match_single(sub, detections, threshold_pct) for sub in sub_targets]
+        testable = all(r["testable"] for r in results)
+        return {"matched": testable and all(r["matched"] for r in results),
+                "testable": testable,
+                "per_class": [c for r in results for c in r["per_class"]],
+                "note": "; ".join(r["note"] for r in results if r["note"]) or None}
+    return _match_single(step, detections, threshold_pct)
 
 
 def segments_intersect(p1, p2, p3, p4) -> bool:
@@ -160,11 +204,22 @@ def segments_intersect(p1, p2, p3, p4) -> bool:
 
 
 def _step_classes(step: dict) -> list:
+    if step.get("target_type") == "multi_region":
+        classes = []
+        for sub in step.get("sub_targets") or []:
+            classes.extend(sub.get("required_classes") or [sub.get("required_class")])
+        return [c for c in classes if c]
     return list(step["required_classes"]) if step.get("required_classes") else [step["required_class"]]
 
 
 def _is_line_region(step: dict) -> bool:
     return step.get("target_type", "region") == "region" and step.get("region_type") == "line"
+
+
+def _uses_crossing(step: dict) -> bool:
+    """A line region defaults to motion-crossing. If trigger_mode ==
+    "overlap" it's evaluated exactly like a box instead (see _match_single)."""
+    return _is_line_region(step) and step.get("trigger_mode", "crossing") != "overlap"
 
 
 # How many consecutive dropped-match frames a detect_hold step tolerates
@@ -257,7 +312,7 @@ class SequenceState:
         if complete_on == "detect_hold":
             return self._check_detect_hold(target, needed_classes, detections, threshold_pct)
 
-        if _is_line_region(target):
+        if _uses_crossing(target):
             matched = self._check_line_region(target, needed_classes, detections)
         else:
             resolved = self._resolve_target(target, self.current_step, detections)
@@ -278,7 +333,7 @@ class SequenceState:
         wrong_region_hit = False
         for cls in needed_classes:
             for idx, step in enumerate(self.steps):
-                if idx <= self.current_step or _is_line_region(step):
+                if idx <= self.current_step or _uses_crossing(step):
                     continue
                 if cls not in _step_classes(step):
                     continue
@@ -350,7 +405,7 @@ class SequenceState:
         return self._advance()
 
     def _check_detect_hold(self, target, needed_classes, detections, threshold_pct) -> str:
-        if _is_line_region(target):
+        if _uses_crossing(target):
             matched_now = self._check_line_region(target, needed_classes, detections)
         else:
             resolved = self._resolve_target(target, self.current_step, detections, allow_resync=(self.hold_counter == 0))
@@ -422,24 +477,33 @@ def draw_overlay(frame, detections, target, status):
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
 
     step_color = _STATUS_COLORS.get(status, (255, 255, 255))
-    region_type = target.get("region_type") if target else None
-    if target and target.get("target_type", "region") == "region" and region_type == "box":
-        rx1, ry1, rx2, ry2 = target["region_coords"]
-        cv2.rectangle(img, (int(rx1 * w), int(ry1 * h)), (int(rx2 * w), int(ry2 * h)), step_color, 2)
-    elif target and region_type == "line":
-        x1, y1, x2, y2 = target["region_coords"]
-        cv2.line(img, (int(x1 * w), int(y1 * h)), (int(x2 * w), int(y2 * h)), step_color, 3)
-    elif target and region_type == "polygon":
-        # Class-target (frozen letter) regions specifically get a black
-        # ring drawn UNDER the status-colored outline — none of your
-        # trained classes' own segmentation masks use black/gray, so this
-        # boundary always stays visible even against a screen full of
-        # jumbled, similarly-colored mask fills from every other detected
-        # class. Gate (box/line) regions don't need this — they aren't
-        # drawn over other classes' masks the same way.
-        pts = np.array([[int(px * w), int(py * h)] for px, py in target["region_coords"]], dtype=np.int32)
-        cv2.polylines(img, [pts], isClosed=True, color=(0, 0, 0), thickness=5)
-        cv2.polylines(img, [pts], isClosed=True, color=step_color, thickness=3)
+
+    def _draw_region_shape(rt, coords):
+        if rt == "box":
+            rx1, ry1, rx2, ry2 = coords
+            cv2.rectangle(img, (int(rx1 * w), int(ry1 * h)), (int(rx2 * w), int(ry2 * h)), step_color, 2)
+        elif rt == "line":
+            x1, y1, x2, y2 = coords
+            cv2.line(img, (int(x1 * w), int(y1 * h)), (int(x2 * w), int(y2 * h)), step_color, 3)
+        elif rt == "polygon":
+            # Class-target (frozen letter) regions specifically get a black
+            # ring drawn UNDER the status-colored outline — none of your
+            # trained classes' own segmentation masks use black/gray, so this
+            # boundary always stays visible even against a screen full of
+            # jumbled, similarly-colored mask fills from every other detected
+            # class. Gate (box/line) regions don't need this — they aren't
+            # drawn over other classes' masks the same way.
+            pts = np.array([[int(px * w), int(py * h)] for px, py in coords], dtype=np.int32)
+            cv2.polylines(img, [pts], isClosed=True, color=(0, 0, 0), thickness=5)
+            cv2.polylines(img, [pts], isClosed=True, color=step_color, thickness=3)
+
+    if target and target.get("target_type") == "multi_region":
+        # A combo step has no single region_type/region_coords of its own —
+        # draw every sub-region so the whole combo's gate is visible.
+        for sub in target.get("sub_targets", []):
+            _draw_region_shape(sub.get("region_type"), sub.get("region_coords"))
+    elif target and target.get("target_type", "region") == "region":
+        _draw_region_shape(target.get("region_type"), target.get("region_coords"))
 
     step_label = target.get("label", "") if target else "COMPLETE"
     banner_color = _STATUS_COLORS.get(status, (255, 255, 255))
