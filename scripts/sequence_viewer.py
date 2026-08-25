@@ -253,6 +253,12 @@ class SequenceState:
     # Ordered log of {label, status} for every step, refreshed each frame —
     # drives the on-screen "Step 1: ... complete" checklist.
     step_status: list = field(default_factory=list)
+    # Per-class {class_name, matched, percent} from the CURRENT step's most
+    # recent match attempt — surfaced on-screen so "both hands look like
+    # they're in the box but it won't pass" can actually be diagnosed
+    # (e.g. only 42% of the drawn region is covered vs the 70% required)
+    # instead of guessed at.
+    last_detail: list = field(default_factory=list)
 
     @property
     def is_complete(self) -> bool:
@@ -314,9 +320,12 @@ class SequenceState:
 
         if _uses_crossing(target):
             matched = self._check_line_region(target, needed_classes, detections)
+            self.last_detail = []
         else:
             resolved = self._resolve_target(target, self.current_step, detections)
-            matched = evaluate_step(resolved, detections, threshold_pct)["matched"]
+            result = evaluate_step(resolved, detections, threshold_pct)
+            matched = result["matched"]
+            self.last_detail = result["per_class"]
 
         if matched:
             self.current_step += 1
@@ -407,9 +416,12 @@ class SequenceState:
     def _check_detect_hold(self, target, needed_classes, detections, threshold_pct) -> str:
         if _uses_crossing(target):
             matched_now = self._check_line_region(target, needed_classes, detections)
+            self.last_detail = []
         else:
             resolved = self._resolve_target(target, self.current_step, detections, allow_resync=(self.hold_counter == 0))
-            matched_now = evaluate_step(resolved, detections, threshold_pct)["matched"]
+            result = evaluate_step(resolved, detections, threshold_pct)
+            matched_now = result["matched"]
+            self.last_detail = result["per_class"]
         if not matched_now:
             # A hand naturally jitters slightly during a long hold — don't
             # wipe out the whole hold on a single dropped-match frame, only
@@ -450,7 +462,7 @@ def _color_for_class(class_name: str):
     return _class_color_cache[class_name]
 
 
-def draw_overlay(frame, detections, target, status):
+def draw_overlay(frame, detections, target, status, detail=None, threshold_pct=0.0):
     img = frame.copy()
     h, w = img.shape[:2]
 
@@ -507,6 +519,25 @@ def draw_overlay(frame, detections, target, status):
 
     step_label = target.get("label", "") if target else "COMPLETE"
     banner_color = _STATUS_COLORS.get(status, (255, 255, 255))
+
+    # Second banner line: exact overlap %% per required class this frame,
+    # vs the threshold — the actual number to look at when a hand LOOKS
+    # like it's inside the box but the step still won't pass (e.g. only
+    # 42%% of the drawn region is covered, but overlap_threshold needs 70%%
+    # — the box is bigger than the hand, or the hand is only in one corner
+    # of it, not truly "touching" by this formula's definition).
+    banner_h = 34
+    if detail:
+        parts = []
+        for c in detail:
+            mark = "OK" if c["matched"] else "X"
+            parts.append(f'{c["class_name"]}:{c["percent"]:.0f}%{mark}')
+        detail_text = f'  need >= {threshold_pct:.0f}%   ' + '   '.join(parts)
+        banner_h = 56
+        cv2.rectangle(img, (0, 34), (w, banner_h), (30, 30, 30), -1)
+        cv2.putText(img, detail_text, (10, 50),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (220, 220, 220), 1, cv2.LINE_AA)
+
     cv2.rectangle(img, (0, 0), (w, 34), (30, 30, 30), -1)
     cv2.putText(img, f'Step: {step_label}   [{status}]', (10, 23),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, banner_color, 2, cv2.LINE_AA)
@@ -646,7 +677,8 @@ def main():
                 synced = state.synced_polygons.get(step_index)
                 if synced is not None:
                     draw_target = {**target, "region_coords": synced}
-            display = draw_overlay(frame, detections, draw_target, status)
+            display = draw_overlay(frame, detections, draw_target, status,
+                                    detail=state.last_detail, threshold_pct=state.overlap_threshold * 100.0)
             display = draw_checklist(display, steps, state.current_step)
 
         cv2.imshow(window, display)
