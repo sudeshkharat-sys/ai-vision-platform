@@ -15,7 +15,7 @@ import OcrActiveLearningPanel from './OcrActiveLearningPanel';
 import OcrTrainingPanel from './OcrTrainingPanel';
 import SegTrainingPanel from './SegTrainingPanel';
 import './AnnotationWorkspace.css';
-import { Sparkles, AlertTriangle, X, Upload, Image as ImageIcon, Check, ArrowLeft, ArrowRight, Brain, Rocket, Eye, Target, Tag, Package, Film, Undo2, Redo2, ZoomIn, ZoomOut, Maximize2, Trash2, ImageOff, Type, RotateCw, RotateCcw, Grid3x3, Wand2, Square, PenTool, RefreshCw, Scissors, Copy, ClipboardPaste } from 'lucide-react';
+import { Sparkles, AlertTriangle, X, Upload, Image as ImageIcon, Check, ArrowLeft, ArrowRight, Brain, Rocket, Eye, Target, Tag, Package, Film, Undo2, Redo2, ZoomIn, ZoomOut, Maximize2, Trash2, ImageOff, Type, RotateCw, RotateCcw, Grid3x3, Wand2, Square, PenTool, RefreshCw, Scissors, Copy, ClipboardPaste, Info } from 'lucide-react';
 
 import { API_URL } from '../config';
 
@@ -1681,15 +1681,19 @@ Do you want to proceed?`;
                             </div>
                             <span className="canvas-filename">{currentImage.filename}</span>
                             <span className="canvas-dims">{imgW} × {imgH}px</span>
-                            <span className="canvas-hint" title="Scroll to zoom · hold Space + drag to pan">
-                                {isPanning
-                                    ? 'Pan mode — drag to move'
-                                    : selectedAnnId
-                                        ? 'Drag to move · handles to resize · double-click to fix the label'
-                                        : (drawMode === 'polyline' || drawMode === 'segment')
-                                            ? 'Click to place points · double-click or Enter to finish · Esc to cancel · double-click a shape to fix its label'
-                                            : 'Draw a box to annotate · double-click a shape to fix its label'}
-                            </span>
+                            <span
+                                className="canvas-hint-icon"
+                                title={
+                                    (isPanning
+                                        ? 'Pan mode — drag to move'
+                                        : selectedAnnId
+                                            ? 'Drag to move · handles to resize · double-click to fix the label'
+                                            : (drawMode === 'polyline' || drawMode === 'segment')
+                                                ? 'Click to place points · double-click or Enter to finish · Esc to cancel · double-click a shape to fix its label'
+                                                : 'Draw a box to annotate · double-click a shape to fix its label')
+                                    + ' · Scroll to zoom · hold Space + drag to pan'
+                                }
+                            ><Info size={14} /></span>
                             {/* ── Draw mode: Box vs Polyline vs Segment ── */}
                             <div className="draw-mode-toggle">
                                 <button
