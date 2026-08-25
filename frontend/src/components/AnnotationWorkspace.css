@@ -673,7 +673,10 @@
 
 /* ── Class Picker ───────────────────────────────────── */
 .class-picker-overlay {
-  position: absolute;
+  /* Fixed to the viewport, not the canvas box — the canvas box has
+     overflow:hidden and can be shorter than the picker needs, which
+     was clipping the class list instead of letting it scroll. */
+  position: fixed;
   inset: 0;
   display: flex;
   align-items: center;
@@ -681,7 +684,6 @@
   background: rgba(0, 0, 0, 0.3);
   backdrop-filter: blur(2px);
   z-index: 50;
-  border-radius: 10px;
 }
 
 .class-picker {
@@ -690,6 +692,9 @@
   border-radius: 14px;
   padding: 0;
   width: 280px;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.15);
   overflow: hidden;
   animation: pickerIn 0.15s ease;
@@ -711,6 +716,7 @@
   text-transform: uppercase;
   letter-spacing: 0.6px;
   border-bottom: 1px solid #e5e5e5;
+  flex: 0 0 auto;
 }
 
 .class-picker-close {
@@ -735,7 +741,8 @@
   display: flex;
   flex-direction: column;
   padding: 6px 0;
-  max-height: 220px;
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
 }
 
@@ -812,6 +819,7 @@
   gap: 8px;
   padding: 10px 12px 12px;
   border-top: 1px solid #e5e5e5;
+  flex: 0 0 auto;
 }
 
 .class-picker-input {
@@ -1241,6 +1249,7 @@
   grid-template-columns: repeat(9, 1fr);
   gap: 5px;
   padding: 0 14px 14px;
+  overflow-y: auto;
 }
 
 .ocr-char-key {
