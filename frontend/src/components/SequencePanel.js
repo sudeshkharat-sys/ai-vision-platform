@@ -81,6 +81,7 @@ export default function SequencePanel({ project, onClose }) {
     const [refVideoT, setRefVideoT]         = useState(0);
     const [videoPreviewUrl, setVideoPreviewUrl] = useState(null);
     const [videoPreviewLoading, setVideoPreviewLoading] = useState(false);
+    const [videoPreviewError, setVideoPreviewError] = useState(null);
     const [capturingFrame, setCapturingFrame] = useState(false);
     const videoPreviewUrlRef = useRef(null);
 
@@ -159,7 +160,7 @@ export default function SequencePanel({ project, onClose }) {
     // it into an object URL instead. Debounced so dragging the slider
     // doesn't fire a decode on every intermediate value.
     useEffect(() => {
-        if (!refVideoId) { setVideoPreviewUrl(null); return; }
+        if (!refVideoId) { setVideoPreviewUrl(null); setVideoPreviewError(null); return; }
         setVideoPreviewLoading(true);
         const handle = setTimeout(() => {
             axios.get(`${API_URL}/videos/${refVideoId}/frame`, {
@@ -171,8 +172,22 @@ export default function SequencePanel({ project, onClose }) {
                     if (videoPreviewUrlRef.current) URL.revokeObjectURL(videoPreviewUrlRef.current);
                     videoPreviewUrlRef.current = url;
                     setVideoPreviewUrl(url);
+                    setVideoPreviewError(null);
                 })
-                .catch(() => setVideoPreviewUrl(null))
+                .catch(async (err) => {
+                    setVideoPreviewUrl(null);
+                    // responseType 'blob' means axios doesn't parse the error
+                    // body as JSON — read it back out manually so the real
+                    // reason (e.g. "Could not read a frame at that timestamp")
+                    // shows up instead of the preview just silently staying blank.
+                    let detail = 'Could not decode a frame at this timestamp.';
+                    try {
+                        const text = await err?.response?.data?.text?.();
+                        const parsed = text ? JSON.parse(text) : null;
+                        if (parsed?.detail) detail = parsed.detail;
+                    } catch { /* keep the generic fallback */ }
+                    setVideoPreviewError(detail);
+                })
                 .finally(() => setVideoPreviewLoading(false));
         }, 150);
         return () => clearTimeout(handle);
@@ -869,6 +884,8 @@ export default function SequencePanel({ project, onClose }) {
                                                         <div className="sq-loading"><Loader2 size={16} className="sq-spin" /></div>
                                                     ) : videoPreviewUrl ? (
                                                         <img src={videoPreviewUrl} alt={`Frame at ${refVideoT.toFixed(2)}s`} />
+                                                    ) : videoPreviewError ? (
+                                                        <span className="sq-hint sq-video-preview-error" title={videoPreviewError}>{videoPreviewError}</span>
                                                     ) : (
                                                         <span className="sq-hint">No frame decoded yet.</span>
                                                     )}
