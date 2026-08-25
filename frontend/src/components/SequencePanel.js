@@ -300,7 +300,7 @@ export default function SequencePanel({ project, onClose }) {
         // Stored per-step (steps is a JSON column); every step carries the
         // same value, so read it off the first one. Sequences saved before
         // overlap_basis existed have none — they matched against the region.
-        setSeqOverlapBasis(seq.steps?.[0]?.overlap_basis || 'region');
+        setSeqOverlapBasis(seq.steps?.[0]?.overlap_basis || 'object');
         setRegions(loaded);
         setStepOrder(loaded.map(r => r.id));
         setEditingSequenceId(seq.id);

@@ -29,6 +29,17 @@ frames, which is state sequence_engine.py already tracks separately.
 from __future__ import annotations
 
 
+# What overlap_threshold is measured as a fraction OF when a step doesn't
+# say (see mask_intersection_percent). "object" — how much of the DETECTED
+# OBJECT is inside the region — is the default because the alternative,
+# "region", is unusable unless every region happens to be drawn tightly
+# around the object: a hand fully inside a box ~3x its size scores ~15%
+# there, so no threshold setting can make it pass. Steps saved before
+# overlap_basis existed carry no value and so get this too, which changes
+# their behavior — deliberately, since that is the broken case.
+DEFAULT_OVERLAP_BASIS = "object"
+
+
 def bbox_to_polygon(xyxy: tuple[float, float, float, float]) -> list[list[float]]:
     x1, y1, x2, y2 = xyxy
     return [[x1, y1], [x2, y1], [x2, y2], [x1, y2]]
@@ -174,7 +185,7 @@ def evaluate_step(step: dict, detections: list[dict], threshold_pct: float) -> d
             }
         # A combo step's own overlap_basis applies to every sub-region —
         # sub-targets carry only geometry + classes, not match semantics.
-        basis = step.get("overlap_basis") or "region"
+        basis = step.get("overlap_basis") or DEFAULT_OVERLAP_BASIS
         results = [_match_single(sub, detections, threshold_pct, basis) for sub in sub_targets]
         testable = all(r["testable"] for r in results)
         notes = [r["note"] for r in results if r["note"]]
@@ -185,7 +196,7 @@ def evaluate_step(step: dict, detections: list[dict], threshold_pct: float) -> d
             "per_class": [c for r in results for c in r["per_class"]],
             "note": "; ".join(notes) if notes else None,
         }
-    return _match_single(step, detections, threshold_pct, step.get("overlap_basis") or "region")
+    return _match_single(step, detections, threshold_pct, step.get("overlap_basis") or DEFAULT_OVERLAP_BASIS)
 
 
 def _match_single(step: dict, detections: list[dict], threshold_pct: float,

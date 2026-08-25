@@ -70,6 +70,16 @@ import numpy as np
 # and sequence_engine.py, so a sequence behaves the same way here as it did
 # when you tested it in the web app. ──────────────────────────────────────
 
+# What overlap_threshold is measured as a fraction OF when a step doesn't
+# say (see mask_intersection_percent). "object" — how much of the DETECTED
+# OBJECT is inside the region — is the default because the alternative,
+# "region", is unusable unless every region happens to be drawn tightly
+# around the object: a hand fully inside a box ~3x its size scores ~15%
+# there, so no threshold setting can make it pass. Matches
+# backend/app/services/sequence_match.py's DEFAULT_OVERLAP_BASIS.
+DEFAULT_OVERLAP_BASIS = "object"
+
+
 def bbox_to_polygon(xyxy):
     x1, y1, x2, y2 = xyxy
     return [[x1, y1], [x2, y1], [x2, y2], [x1, y2]]
@@ -212,14 +222,14 @@ def evaluate_step(step: dict, detections: list, threshold_pct: float) -> dict:
                     "note": "Combo step has no sub-regions defined."}
         # A combo step's own overlap_basis applies to every sub-region —
         # sub-targets carry only geometry + classes, not match semantics.
-        basis = step.get("overlap_basis") or "region"
+        basis = step.get("overlap_basis") or DEFAULT_OVERLAP_BASIS
         results = [_match_single(sub, detections, threshold_pct, basis) for sub in sub_targets]
         testable = all(r["testable"] for r in results)
         return {"matched": testable and all(r["matched"] for r in results),
                 "testable": testable,
                 "per_class": [c for r in results for c in r["per_class"]],
                 "note": "; ".join(r["note"] for r in results if r["note"]) or None}
-    return _match_single(step, detections, threshold_pct, step.get("overlap_basis") or "region")
+    return _match_single(step, detections, threshold_pct, step.get("overlap_basis") or DEFAULT_OVERLAP_BASIS)
 
 
 def segments_intersect(p1, p2, p3, p4) -> bool:
@@ -651,6 +661,112 @@ def detect_frame(detector, segmenter, frame) -> list:
 _ROTATE_CODES = {"cw": cv2.ROTATE_90_CLOCKWISE, "ccw": cv2.ROTATE_90_COUNTERCLOCKWISE, "180": cv2.ROTATE_180}
 
 
+def run_diagnose(cap, detector, segmenter, steps, threshold, basis, rotate_code):
+    """Scan the whole source once and report, per step, why it does or
+    doesn't pass — evaluating EVERY step against EVERY frame independently
+    of sequence progress, so a step that never gets reached is still
+    measured. Prints to stdout rather than drawing a window, so the answer
+    can be read (and screenshotted) straight from the terminal.
+
+    For each step this answers the three questions that actually matter:
+    does each required class ever reach the threshold in that region, do
+    they ever ALL reach it in the SAME frame, and does that hold long
+    enough to satisfy a detect_hold.
+    """
+    threshold_pct = threshold * 100.0
+    # Per step: peak % per class, frames the whole step matched, longest
+    # consecutive matching run, and whether any detection of each class
+    # was seen at all this run.
+    stats = [{"peak": {}, "match_frames": 0, "longest_run": 0, "_run": 0,
+              "seen": set(), "testable": True, "note": None} for _ in steps]
+    all_classes_seen = set()
+    frames = 0
+
+    while True:
+        ok, frame = cap.read()
+        if not ok:
+            break
+        if rotate_code is not None:
+            frame = cv2.rotate(frame, rotate_code)
+        frames += 1
+        detections = detect_frame(detector, segmenter, frame)
+        for det in detections:
+            all_classes_seen.add(det["class_name"])
+
+        for i, step in enumerate(steps):
+            st = stats[i]
+            if _uses_crossing(step):
+                st["testable"] = False
+                st["note"] = "line region (motion crossing) — not measurable as a %"
+                continue
+            result = evaluate_step(step, detections, threshold_pct)
+            if not result["testable"]:
+                st["testable"] = False
+                st["note"] = result.get("note")
+                continue
+            for c in result["per_class"]:
+                cls = c["class_name"]
+                st["peak"][cls] = max(st["peak"].get(cls, 0.0), c["percent"])
+                if any(d["class_name"] == cls for d in detections):
+                    st["seen"].add(cls)
+            if result["matched"]:
+                st["match_frames"] += 1
+                st["_run"] += 1
+                st["longest_run"] = max(st["longest_run"], st["_run"])
+            else:
+                st["_run"] = 0
+
+    print()
+    print("=" * 72)
+    print(f'DIAGNOSE — {frames} frames   basis="{basis}"   threshold={threshold_pct:.0f}%')
+    print(f'Classes the model actually produced: {sorted(all_classes_seen) or "NONE"}')
+    print("=" * 72)
+
+    for i, step in enumerate(steps):
+        st = stats[i]
+        kind = step.get("target_type", "region")
+        hold_frames = step.get("hold_frames", 1) if step.get("complete_on") in ("detect_hold", "undetect_hold") else 1
+        mode = step.get("complete_on") or "detect"
+        print()
+        print(f'Step {i + 1}  "{step.get("label", "")}"   [{kind}, {mode}'
+              + (f', needs {hold_frames} consecutive frames' if hold_frames > 1 else '') + ']')
+
+        if not st["testable"]:
+            print(f'   (not measurable here) {st["note"] or ""}')
+            continue
+
+        for cls, peak in sorted(st["peak"].items()):
+            verdict = "reaches threshold" if peak >= threshold_pct else "NEVER reaches threshold"
+            seen = "" if cls in st["seen"] else "   <-- class NEVER detected anywhere in this video"
+            print(f'   {cls:<10} peak {peak:5.1f}%   {verdict}{seen}')
+
+        print(f'   all classes matched together: {st["match_frames"]}/{frames} frames'
+              f'   longest run {st["longest_run"]}')
+
+        if st["match_frames"] == 0:
+            weak = [c for c, p in st["peak"].items() if p < threshold_pct]
+            never = [c for c in weak if c not in st["seen"]]
+            if never:
+                print(f'   >>> BLOCKER: {", ".join(never)} never detected — wrong model, or class name mismatch')
+            elif weak:
+                best = ", ".join(f"{c} peaked at {st['peak'][c]:.0f}%" for c in weak)
+                print(f'   >>> BLOCKER: {best}, below the {threshold_pct:.0f}% threshold.')
+                print(f'       Lower --overlap-threshold, or move/resize this region.')
+            else:
+                print('   >>> BLOCKER: each class clears the threshold, but never in the SAME frame.')
+        elif st["longest_run"] < hold_frames:
+            print(f'   >>> BLOCKER: matches, but longest run is {st["longest_run"]} frames < the '
+                  f'{hold_frames} needed for a {step.get("hold_seconds", 0)}s hold.')
+            print('       Shorten hold_seconds, or hold the pose more steadily.')
+        else:
+            print('   >>> OK: this step can pass.')
+
+    print()
+    print("Note: each step is measured independently of sequence order, so a step")
+    print("listed OK here can still be blocked at runtime by an earlier step.")
+    print()
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--model", help="Path to a detector .pt (main_best.pt / seed_best.pt)")
@@ -661,13 +777,17 @@ def main():
     parser.add_argument("--rotate", choices=["cw", "ccw", "180"], help="Rotate incoming frames to match the reference orientation")
     parser.add_argument("--overlap-basis", choices=["region", "object"],
                         help="What the overlap %% is measured as a fraction OF. "
-                             "'region' (the saved default): how much of the DRAWN REGION the object covers — "
+                             "'region': how much of the DRAWN REGION the object covers — "
                              "a region drawn bigger than the object can never score high. "
                              "'object': how much of the DETECTED OBJECT is inside the region — "
                              "'my hand is in the box' in the intuitive sense (fully inside = 100%%). "
                              "Overrides whatever the sequence.json says, for all steps.")
     parser.add_argument("--overlap-threshold", type=float,
                         help="Override the sequence's overlap_threshold (0-1) without editing the JSON.")
+    parser.add_argument("--diagnose", action="store_true",
+                        help="Don't open a window — scan the whole video and print, per step, the peak "
+                             "overlap %% each required class reaches, whether they ever match together, "
+                             "and whether that holds long enough. Says exactly what is blocking each step.")
     args = parser.parse_args()
 
     if not args.model and not args.seg_model:
@@ -695,18 +815,26 @@ def main():
     for step in steps:
         if step.get("complete_on") in ("undetect_hold", "detect_hold") and step.get("hold_frames") is None:
             step["hold_frames"] = max(1, round(step.get("hold_seconds", 1.0) * fps))
-        if args.overlap_basis:
-            step["overlap_basis"] = args.overlap_basis
+    # Resolve one effective basis (CLI > whatever the JSON saved > default)
+    # and stamp it on every step, so what runs is never ambiguous.
+    json_basis = next((s.get("overlap_basis") for s in steps if s.get("overlap_basis")), None)
+    basis_label = args.overlap_basis or json_basis or DEFAULT_OVERLAP_BASIS
+    for step in steps:
+        step["overlap_basis"] = basis_label
 
     threshold = args.overlap_threshold if args.overlap_threshold is not None \
         else sequence.get("overlap_threshold", 0.5)
     state = SequenceState(steps=steps, mode=sequence.get("mode", "strict"),
                            overlap_threshold=threshold)
-    basis_label = args.overlap_basis or (steps[0].get("overlap_basis") if steps else None) or "region"
     print(f'[sequence_viewer] overlap basis = "{basis_label}", threshold = {threshold:.2f} '
           f'({threshold * 100:.0f}%)')
 
     rotate_code = _ROTATE_CODES.get(args.rotate) if args.rotate else None
+
+    if args.diagnose:
+        run_diagnose(cap, detector, segmenter, steps, threshold, basis_label, rotate_code)
+        cap.release()
+        return
 
     window = f'Sequence Viewer — {sequence.get("name", "sequence")}'
     paused = False
