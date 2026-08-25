@@ -740,53 +740,57 @@ const SegTrainingPanel = ({ project, onClose }) => {
                                         <div className="mtp-warning" style={{ marginTop: 8 }}>
                                             Draw at least one annotation with the Segment tool (mask outline, not a box or precision polyline) before training — bbox-only images are skipped.
                                         </div>
-                                        <div className="mtp-warning" style={{ marginTop: 8 }}>
-                                            Still have plain box annotations across this project? Turn every
-                                            box into a 4-corner polygon in one click — then drag corners onto
-                                            the real outline where needed before converting to segment masks.
-                                            <div style={{ marginTop: 8 }}>
-                                                <button
-                                                    className="mtp-refresh"
-                                                    style={{ width: 'auto', padding: '6px 12px' }}
-                                                    disabled={convertingBoxes}
-                                                    onClick={convertBoxes}
-                                                >
-                                                    {convertingBoxes ? 'Converting…' : 'Convert all boxes → polygons'}
-                                                </button>
-                                            </div>
-                                            {convertBoxesResult && (
-                                                <p style={{ marginTop: 6 }}>
-                                                    {convertBoxesResult.error
-                                                        ? `❌ ${convertBoxesResult.error}`
-                                                        : `✅ Converted ${convertBoxesResult.converted} of ${convertBoxesResult.total_annotations} annotation(s) to polygons.`}
-                                                </p>
-                                            )}
-                                        </div>
-                                        <div className="mtp-warning" style={{ marginTop: 8 }}>
-                                            Already traced plate/character outlines with the Polyline tool
-                                            (annotation type "polygon") in this project? Those are real
-                                            outlines, not boxes — re-tag them as Segment masks below instead
-                                            of redrawing everything.
-                                            <div style={{ marginTop: 8 }}>
-                                                <button
-                                                    className="mtp-refresh"
-                                                    style={{ width: 'auto', padding: '6px 12px' }}
-                                                    disabled={converting}
-                                                    onClick={convertPolygons}
-                                                >
-                                                    {converting ? 'Converting…' : 'Convert existing polygons → segment masks'}
-                                                </button>
-                                            </div>
-                                            {convertResult && (
-                                                <p style={{ marginTop: 6 }}>
-                                                    {convertResult.error
-                                                        ? `❌ ${convertResult.error}`
-                                                        : `✅ Converted ${convertResult.converted} of ${convertResult.total_polygons} polygon annotation(s) to segment masks.`}
-                                                </p>
-                                            )}
-                                        </div>
                                     </>
                                 ) : <p className="mtp-error-text">Failed to load stats.</p>}
+                            </section>
+
+                            <section className="mtp-section">
+                                <p className="mtp-section-title">Convert Existing Annotations</p>
+                                <div className="mtp-warning">
+                                    Still have plain box annotations across this project? Turn every
+                                    box into a 4-corner polygon in one click — then drag corners onto
+                                    the real outline where needed before converting to segment masks.
+                                    <div style={{ marginTop: 8 }}>
+                                        <button
+                                            className="mtp-refresh"
+                                            style={{ width: 'auto', padding: '6px 12px' }}
+                                            disabled={convertingBoxes}
+                                            onClick={convertBoxes}
+                                        >
+                                            {convertingBoxes ? 'Converting…' : 'Convert all boxes → polygons'}
+                                        </button>
+                                    </div>
+                                    {convertBoxesResult && (
+                                        <p style={{ marginTop: 6 }}>
+                                            {convertBoxesResult.error
+                                                ? `❌ ${convertBoxesResult.error}`
+                                                : `✅ Converted ${convertBoxesResult.converted} of ${convertBoxesResult.total_annotations} annotation(s) to polygons.`}
+                                        </p>
+                                    )}
+                                </div>
+                                <div className="mtp-warning" style={{ marginTop: 8 }}>
+                                    Already traced plate/character outlines with the Polyline tool
+                                    (annotation type "polygon") in this project? Those are real
+                                    outlines, not boxes — re-tag them as Segment masks below instead
+                                    of redrawing everything.
+                                    <div style={{ marginTop: 8 }}>
+                                        <button
+                                            className="mtp-refresh"
+                                            style={{ width: 'auto', padding: '6px 12px' }}
+                                            disabled={converting}
+                                            onClick={convertPolygons}
+                                        >
+                                            {converting ? 'Converting…' : 'Convert existing polygons → segment masks'}
+                                        </button>
+                                    </div>
+                                    {convertResult && (
+                                        <p style={{ marginTop: 6 }}>
+                                            {convertResult.error
+                                                ? `❌ ${convertResult.error}`
+                                                : `✅ Converted ${convertResult.converted} of ${convertResult.total_polygons} polygon annotation(s) to segment masks.`}
+                                        </p>
+                                    )}
+                                </div>
                             </section>
 
                             <section className="mtp-section">
