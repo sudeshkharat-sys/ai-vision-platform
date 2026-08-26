@@ -859,8 +859,8 @@ Do you want to proceed?`;
 
     const handleOcrAutoLabel = async () => {
         setOcrAutoLabeling(true);
+        const shapeForMode = drawMode === 'segment' ? 'segment' : drawMode === 'polyline' ? 'polygon' : 'bbox';
         try {
-            const shapeForMode = drawMode === 'segment' ? 'segment' : drawMode === 'polyline' ? 'polygon' : 'bbox';
             const res = await axios.post(`${API_URL}/ocr/auto-annotate/${project.id}`, {
                 shape: shapeForMode,
             });
