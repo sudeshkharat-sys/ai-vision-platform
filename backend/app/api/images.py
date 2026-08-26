@@ -22,6 +22,11 @@ from PIL import Image as PILImage
 
 router = APIRouter(prefix="/images", tags=["images"])
 
+# Formats browsers decode natively. PIL reads many more (TIFF, PPM, ...),
+# but a photo that cannot be shown in a browser cannot be annotated, so
+# uploads are limited to these — see upload_images.
+BROWSER_DISPLAYABLE_FORMATS = {"JPEG", "PNG", "GIF", "WEBP", "BMP"}
+
 
 @router.post("/upload/{project_id}")
 async def upload_images(
@@ -52,6 +57,26 @@ async def upload_images(
                 buffer.write(contents)
 
             with PILImage.open(file_path) as img:
+                # PILImage.open() only reads the header, so a truncated or
+                # corrupt file gets accepted here and then renders blank on
+                # the annotation canvas with nothing to explain why. load()
+                # forces the actual decode, failing now instead of silently.
+                img.load()
+
+                # Likewise, PIL reads plenty of formats browsers cannot
+                # display (TIFF, CMYK JPEG, ...). Annotating happens in a
+                # browser, so accepting one just produces a blank photo.
+                if img.format not in BROWSER_DISPLAYABLE_FORMATS:
+                    raise ValueError(
+                        f"{img.format} images can't be displayed by browsers — "
+                        "convert to JPEG or PNG first"
+                    )
+                if img.mode == "CMYK":
+                    raise ValueError(
+                        "CMYK images render black in most browsers — "
+                        "convert to RGB JPEG or PNG first"
+                    )
+
                 width, height = img.size
                 try:
                     exif_data = img._getexif()
