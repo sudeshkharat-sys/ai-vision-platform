@@ -595,24 +595,77 @@ def draw_overlay(frame, detections, target, status, detail=None, threshold_pct=0
     return img
 
 
+_ROW_H = 22           # px per checklist row
+_PANEL_PAD = 24       # padding above the first row
+_TOP_RESERVED = 34    # status banner drawn across the top of the frame
+_PANEL_MIN_W = 260
+
+
+def _checklist_window(n, current_step, max_rows):
+    """Pick which steps to show so the list always fits the frame.
+
+    Returns (start, end, more_above, more_below). When everything fits the
+    window is the whole list; otherwise it slides to keep the CURRENT step
+    visible, reserving two rows for the "N more" markers.
+    """
+    if n <= max_rows:
+        return 0, n, 0, 0
+
+    win = max(1, max_rows - 2)
+    half = win // 2
+    start = min(max(0, current_step - half), n - win)
+    end = start + win
+    return start, end, start, n - end
+
+
 def draw_checklist(img, steps, current_step):
-    """Left-side panel listing every step with its status — 'Step 1: gate1
-    - COMPLETE', 'Step 2: m - CURRENT', 'Step 3: a - pending', etc."""
+    """Bottom-left panel listing steps with status — 'Step 1: gate1 -
+    COMPLETE', 'Step 2: m - CURRENT', 'Step 3: a - pending', etc.
+
+    The panel is anchored to the bottom of the frame and grows upward, so a
+    long sequence used to run off the top and hide its own rows. The list is
+    now windowed to whatever the frame height allows, scrolling to keep the
+    CURRENT step on screen and marking how many steps are hidden either side.
+    """
     h, w = img.shape[:2]
     n = len(steps)
-    panel_h = 24 + n * 22
+    if n == 0:
+        return img
+
+    max_rows = max(1, (h - _TOP_RESERVED - _PANEL_PAD) // _ROW_H)
+    start, end, more_above, more_below = _checklist_window(n, current_step, max_rows)
+
+    lines = []  # (text, color)
+    if more_above:
+        lines.append((f'... {more_above} more above', (140, 140, 140)))
+    for i in range(start, end):
+        label = steps[i].get("label", "")
+        if i < current_step:
+            lines.append((f'Step {i + 1}: {label} - COMPLETE', (74, 222, 128)))
+        elif i == current_step:
+            lines.append((f'Step {i + 1}: {label} - CURRENT', (11, 170, 250)))
+        else:
+            lines.append((f'Step {i + 1}: {label} - pending', (140, 140, 140)))
+    if more_below:
+        lines.append((f'... {more_below} more below', (140, 140, 140)))
+
+    panel_h = _PANEL_PAD + len(lines) * _ROW_H
+    top = max(0, h - panel_h)
+
+    # Widen the backing panel to the longest row so long step labels sit on
+    # the dark background instead of spilling onto the video, but never let
+    # it eat more than 45% of the frame.
+    text_w = max(
+        cv2.getTextSize(t, cv2.FONT_HERSHEY_SIMPLEX, 0.45, 1)[0][0] for t, _ in lines
+    )
+    panel_w = int(min(max(_PANEL_MIN_W, text_w + 20), w * 0.45))
+
     overlay = img.copy()
-    cv2.rectangle(overlay, (0, h - panel_h), (260, h), (20, 20, 20), -1)
+    cv2.rectangle(overlay, (0, top), (panel_w, h), (20, 20, 20), -1)
     cv2.addWeighted(overlay, 0.75, img, 0.25, 0, img)
 
-    for i, step in enumerate(steps):
-        if i < current_step:
-            text, color = f'Step {i + 1}: {step.get("label", "")} - COMPLETE', (74, 222, 128)
-        elif i == current_step:
-            text, color = f'Step {i + 1}: {step.get("label", "")} - CURRENT', (11, 170, 250)
-        else:
-            text, color = f'Step {i + 1}: {step.get("label", "")} - pending', (140, 140, 140)
-        y = h - panel_h + 22 + i * 22
+    for row, (text, color) in enumerate(lines):
+        y = top + _PANEL_PAD - 2 + row * _ROW_H
         cv2.putText(img, text, (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1, cv2.LINE_AA)
     return img
 
