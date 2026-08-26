@@ -27,10 +27,14 @@ async def create_project(
     db: AsyncSession = Depends(get_db),
 ):
     if data.project_type not in ("detection", "ocr", "combined"):
-        raise HTTPException(status_code=400, detail="project_type must be 'detection', 'ocr', or 'combined'")
+        raise HTTPException(status_code=400, detail="project_type must be 'detection' or 'combined'")
+
+    # 'ocr' has been merged into 'combined' (same underlying pipeline; 'combined'
+    # is the superset that also exposes the detection stage). Map legacy callers.
+    project_type = "combined" if data.project_type == "ocr" else data.project_type
 
     classes = data.classes
-    if data.project_type in ("ocr", "combined") and not classes:
+    if project_type == "combined" and not classes:
         # Pre-fill the full character set so labeling boxes is one click
         classes = [str(d) for d in range(10)] + [chr(c) for c in range(ord("A"), ord("Z") + 1)]
 
@@ -38,7 +42,7 @@ async def create_project(
         name=data.name,
         description=data.description,
         classes=classes,
-        project_type=data.project_type,
+        project_type=project_type,
         user_id=current_user.id,
     )
     db.add(project)

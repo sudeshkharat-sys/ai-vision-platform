@@ -131,3 +131,8 @@ async def init_db() -> None:
         await conn.execute(text(
             "ALTER TABLE region_sequences ADD COLUMN IF NOT EXISTS ref_image_height INTEGER"
         ))
+        # Migration: 'ocr' project_type merged into 'combined' (same pipeline,
+        # 'combined' is a superset that also exposes the detection stage)
+        await conn.execute(text(
+            "UPDATE projects SET project_type = 'combined' WHERE project_type = 'ocr'"
+        ))

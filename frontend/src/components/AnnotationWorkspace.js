@@ -1409,7 +1409,7 @@ Do you want to proceed?`;
         <div className="workspace">
             {/* ── Sidebar ── */}
             <aside className="workspace-sidebar">
-                {project.project_type === 'combined' ? (
+                {project.project_type === 'combined' || project.project_type === 'ocr' ? (
                     <div className="sidebar-section sidebar-actions">
                         <p className="sidebar-label">Pipeline (Detect + OCR + Segment)</p>
                         <button className="btn-action" onClick={() => setShowTrainingPanel(true)}>
@@ -1453,68 +1453,6 @@ Do you want to proceed?`;
                             className="btn-action btn-action-seg"
                             onClick={() => setShowSegPanel(true)}
                             title="Train an instance-segmentation model on annotations drawn with the Segment tool (mask outlines, not boxes)"
-                        >
-                            <Scissors size={14} /> Train Segmentation Model
-                        </button>
-                        <button
-                            className="btn-action btn-action-review"
-                            onClick={() => setShowReviewPanel(true)}
-                            disabled={images.filter(img => img.status === 'annotated').length === 0}
-                        >
-                            <Eye size={14} /> Review Annotations
-                        </button>
-                        <button className="btn-action btn-action-labels" onClick={() => setShowLabelsPanel(true)}>
-                            <Tag size={14} /> Edit Labels
-                        </button>
-                        <button className="btn-action btn-action-models" onClick={() => setShowModelsPanel(true)}>
-                            <Package size={14} /> View Models
-                        </button>
-                    </div>
-                ) : project.project_type === 'ocr' ? (
-                    <div className="sidebar-section sidebar-actions">
-                        <p className="sidebar-label">OCR Pipeline</p>
-                        <details className="ocr-flow-hint-dropdown">
-                            <summary>Pipeline steps</summary>
-                            <div className="ocr-flow-hint">
-                                1. Upload plate photos<br />
-                                2. Box + label each character<br />
-                                3. Train Character Detector (YOLO) — finds each char box<br />
-                                4. Train OCR Model — reads each box<br />
-                                5. Test / download
-                            </div>
-                        </details>
-                        <button className="btn-action" onClick={() => setShowTrainingPanel(true)}>
-                            <Rocket size={14} /> Train Character Detector
-                        </button>
-                        {seedModelInfo && (
-                            <p className="ocr-seed-status">
-                                {seedModelInfo.exists
-                                    ? '✓ Character detector trained'
-                                    : '— Character detector not trained yet (test window falls back to slower classical detection)'}
-                            </p>
-                        )}
-                        <button className="btn-action btn-action-ocr" onClick={() => setShowOcrPanel(true)}>
-                            <Type size={14} /> Train OCR Model
-                        </button>
-                        <button
-                            className="btn-action btn-action-secondary"
-                            onClick={handleOcrAutoLabel}
-                            disabled={ocrAutoLabeling || images.filter(img => img.status === 'pending').length === 0}
-                            title={`Use the trained OCR model to pre-label pending photos as ${drawMode === 'segment' ? 'segmentation masks (requires a trained segmentation model)' : drawMode === 'polyline' ? 'polylines' : 'boxes'} (current canvas tool) — review and correct after`}
-                        >
-                            <Sparkles size={14} /> {ocrAutoLabeling ? 'Labeling…' : `Auto-Label Characters (${drawMode === 'segment' ? 'Segment' : drawMode === 'polyline' ? 'Polyline' : 'Box'})`}
-                        </button>
-                        <button
-                            className="btn-action btn-action-al"
-                            onClick={() => setShowOcrActiveLearningPanel(true)}
-                            title="Rank pending photos by how uncertain the trained OCR model is, so you label the hardest ones first"
-                        >
-                            <Brain size={14} /> Active Learning
-                        </button>
-                        <button
-                            className="btn-action btn-action-seg"
-                            onClick={() => setShowSegPanel(true)}
-                            title="Train an instance-segmentation model on annotations drawn with the Segment tool (mask outlines, not boxes) — for dotted/engraved characters"
                         >
                             <Scissors size={14} /> Train Segmentation Model
                         </button>

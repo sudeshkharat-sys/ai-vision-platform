@@ -11,7 +11,9 @@ class Project(Base):
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     classes: Mapped[list[str]] = mapped_column(JSON, default=list)
-    # "detection" (YOLO pipeline) or "ocr" (character-classifier pipeline)
+    # "detection" (YOLO pipeline) or "combined" (YOLO detection + character
+    # OCR + segmentation). Legacy "ocr" rows are migrated to "combined" in
+    # database.init_db(); new projects can no longer be created as "ocr".
     project_type: Mapped[str] = mapped_column(String(20), default="detection")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     user_id: Mapped[str | None] = mapped_column(
