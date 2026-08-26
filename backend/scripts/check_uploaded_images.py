@@ -11,6 +11,11 @@ renders blank/black on the annotation and review canvases.
 This script forces a FULL decode of every file and reports what it finds.
 It only reads; nothing is modified or deleted.
 
+It also cross-checks the database against the disk. An image row whose
+file is missing is the case that looks strangest in the UI: the review
+screen still draws that photo's annotation boxes (they come from the row)
+while the photo itself never loads, because the request for it 404s.
+
 Usage
 -----
     # every project
@@ -18,6 +23,9 @@ Usage
 
     # one project
     python -m scripts.check_uploaded_images <project_id>
+
+    # skip the database cross-check (disk scan only)
+    python -m scripts.check_uploaded_images --no-db
 
 Run it from the ``backend`` directory so ``./data/uploads`` resolves.
 """
@@ -64,14 +72,64 @@ def check_file(path: Path) -> tuple[str, str]:
     return "OK", f"{fmt} {mode} {w}x{h} ({size_bytes // 1024} KB)"
 
 
+def check_db_rows(only: str | None) -> int:
+    """Report image rows whose file is missing from disk.
+
+    Returns the number of missing files, or -1 if the DB was unreachable.
+    """
+    try:
+        # Imported lazily so --no-db works without app deps/DB configured.
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+        from app.connectors.statedb_connector import StateDBConnector
+        from app.config import settings
+    except Exception as e:
+        print(f"\n(Skipping DB cross-check — could not import app: {e})")
+        return -1
+
+    sql = "SELECT id, project_id, filename, filepath FROM images"
+    params: dict = {}
+    if only:
+        sql += " WHERE project_id = :pid"
+        params["pid"] = only
+    sql += " ORDER BY project_id, filename"
+
+    try:
+        connector = StateDBConnector()
+        with connector.get_session() as conn:
+            rows = connector.execute_query(conn, sql, params)
+    except Exception as e:
+        print(f"\n(Skipping DB cross-check — could not query the database: {e})")
+        return -1
+
+    missing = []
+    for r in rows:
+        # Same resolution the API uses: filepath is stored as "/uploads/<pid>/<file>"
+        path = settings.upload_dir.parent / str(r["filepath"]).lstrip("/")
+        if not path.exists():
+            missing.append(r)
+
+    print(f"\n=== Database cross-check — {len(rows)} image row(s) ===")
+    if not missing:
+        print("  Every image row has its file on disk.")
+    else:
+        print(f"  {len(missing)} row(s) point at a file that is NOT on disk.")
+        print("  These still show their annotation boxes in review, but the")
+        print("  photo itself cannot load:")
+        for r in missing:
+            print(f"    project {r['project_id']}  {r['filename']}  ->  {r['filepath']}")
+    return len(missing)
+
+
 def main() -> int:
+    args = [a for a in sys.argv[1:] if a != "--no-db"]
+    with_db = "--no-db" not in sys.argv
     uploads = Path("./data/uploads")
     if not uploads.is_dir():
         print(f"No uploads directory at {uploads.resolve()}")
         print("Run this from the backend/ directory.")
         return 2
 
-    only = sys.argv[1] if len(sys.argv) > 1 else None
+    only = args[0] if args else None
     project_dirs = [d for d in sorted(uploads.iterdir()) if d.is_dir()]
     if only:
         project_dirs = [d for d in project_dirs if d.name == only]
@@ -92,12 +150,16 @@ def main() -> int:
                 problems.append((f, verdict, detail))
                 print(f"  {verdict:7} {f.name}  {detail}")
 
-    print(f"\nChecked {total} file(s): {len(problems)} problem(s).")
+    print(f"\nChecked {total} file(s) on disk: {len(problems)} problem(s).")
     if problems:
         broken = sum(1 for _, v, _ in problems if v == "BROKEN")
         fmt = sum(1 for _, v, _ in problems if v == "FORMAT")
         print(f"  BROKEN (corrupt/truncated, re-upload these): {broken}")
         print(f"  FORMAT (valid but browsers can't show, convert to JPEG/PNG): {fmt}")
+
+    if with_db:
+        check_db_rows(only)
+
     return 0
 
 
