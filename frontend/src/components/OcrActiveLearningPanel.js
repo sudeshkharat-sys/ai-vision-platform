@@ -12,20 +12,24 @@ import { API_URL } from '../config';
 //  trained character classifier instead of a YOLO detector — a much
 //  simpler single-mode flow that runs synchronously (no job queue).
 // ════════════════════════════════════════════════════════════
-const OcrActiveLearningPanel = ({ project, onClose, onAnnotateImages }) => {
+const OcrActiveLearningPanel = ({ project, drawMode, onClose, onAnnotateImages }) => {
     const [budget, setBudget]   = useState(10);
     const [loading, setLoading] = useState(false);
     const [error, setError]     = useState(null);
     const [result, setResult]   = useState(null);
 
+    const shape = drawMode === 'segment' ? 'segment' : drawMode === 'polyline' ? 'polygon' : 'bbox';
+
     const handleScore = async () => {
         setLoading(true);
         setError(null);
         try {
-            const res = await axios.post(`${API_URL}/ocr/active-learning/suggest/${project.id}`, { budget });
+            const res = await axios.post(`${API_URL}/ocr/active-learning/suggest/${project.id}`, { budget, shape });
             setResult(res.data);
         } catch (e) {
-            setError(e.response?.data?.detail || 'Scoring failed. Train the OCR model first.');
+            setError(e.response?.data?.detail || (shape === 'segment'
+                ? 'Scoring failed. Train the segmentation model first.'
+                : 'Scoring failed. Train the OCR model first.'));
         } finally {
             setLoading(false);
         }
@@ -39,7 +43,7 @@ const OcrActiveLearningPanel = ({ project, onClose, onAnnotateImages }) => {
                         <span className="alp-header-icon"><Brain size={20} /></span>
                         <div>
                             <h2 className="alp-title">Active Learning</h2>
-                            <p className="alp-subtitle">{project.name} — OCR characters</p>
+                            <p className="alp-subtitle">{project.name} — {shape === 'segment' ? 'Segmentation masks' : 'OCR characters'}</p>
                         </div>
                     </div>
                     <button className="alp-close" onClick={onClose}><X size={18} /></button>
@@ -49,9 +53,10 @@ const OcrActiveLearningPanel = ({ project, onClose, onAnnotateImages }) => {
                     <section className="alp-section">
                         <p className="alp-section-title">Suggest Images to Review</p>
                         <p className="alp-mode-desc" style={{ marginBottom: 14 }}>
-                            Ranks pending photos by how uncertain the trained OCR model is about
+                            Ranks pending photos by how uncertain the trained {shape === 'segment' ? 'segmentation' : 'OCR'} model is about
                             their characters (lowest confidence first, no-detection photos worst)
                             so you label the hardest ones instead of guessing which to do next.
+                            Uses the {shape === 'segment' ? 'Segment' : shape === 'polygon' ? 'Polyline' : 'Box'} tool currently selected on the canvas.
                         </p>
                         <label className="alp-label">
                             How many to suggest

@@ -873,7 +873,9 @@ Do you want to proceed?`;
                 setAnnotations(annRes.data);
             }
         } catch (e) {
-            setError(e.response?.data?.detail || 'Auto-labeling failed. Train an OCR model first.');
+            setError(e.response?.data?.detail || (shapeForMode === 'segment'
+                ? 'Auto-labeling failed. Train a segmentation model first.'
+                : 'Auto-labeling failed. Train an OCR model first.'));
         } finally {
             setOcrAutoLabeling(false);
         }
@@ -1438,7 +1440,7 @@ Do you want to proceed?`;
                             className="btn-action btn-action-secondary"
                             onClick={handleOcrAutoLabel}
                             disabled={ocrAutoLabeling || images.filter(img => img.status === 'pending').length === 0}
-                            title={`Use the trained OCR model to pre-label pending photos as ${drawMode === 'segment' ? 'segmentation masks (requires a trained segmentation model)' : drawMode === 'polyline' ? 'polylines' : 'boxes'} (current canvas tool) — review and correct after`}
+                            title={`Use the trained ${drawMode === 'segment' ? 'segmentation model' : 'OCR model'} to pre-label pending photos as ${drawMode === 'segment' ? 'segmentation masks' : drawMode === 'polyline' ? 'polylines' : 'boxes'} (current canvas tool) — review and correct after`}
                         >
                             <Sparkles size={14} /> {ocrAutoLabeling ? 'Labeling…' : `Auto-Label Characters (${drawMode === 'segment' ? 'Segment' : drawMode === 'polyline' ? 'Polyline' : 'Box'})`}
                         </button>
@@ -2214,6 +2216,7 @@ Do you want to proceed?`;
             {showOcrActiveLearningPanel && (
                 <OcrActiveLearningPanel
                     project={project}
+                    drawMode={drawMode}
                     onClose={() => setShowOcrActiveLearningPanel(false)}
                     onAnnotateImages={handleAnnotateImages}
                 />

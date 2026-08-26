@@ -1719,6 +1719,7 @@ async def ocr_auto_annotate(
 
 class OcrSuggestReviewRequest(BaseModel):
     budget: int = 10  # 0 = return every scored pending image
+    shape: str = "bbox"  # "bbox" | "polygon" -> character classifier, "segment" -> seg model
 
 
 @router.post("/active-learning/suggest/{project_id}")
@@ -1728,10 +1729,26 @@ async def ocr_suggest_for_review(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Rank pending images by OCR-model uncertainty — most useful to label first."""
+    """Rank pending images by model uncertainty — most useful to label first.
+
+    Mirrors ocr_auto_annotate's shape branching: "segment" scores the trained
+    segmentation model's per-detection confidence, everything else scores the
+    trained character classifier.
+    """
     await get_owned_project(project_id, current_user, db)
-    model, classes, img_size = _load_project_model(project_id)
     req = body or OcrSuggestReviewRequest()
+
+    use_seg = req.shape == "segment"
+    if use_seg:
+        from ..services.seg_model import resolve_seg_model_path
+        if resolve_seg_model_path(project_id) is None:
+            raise HTTPException(
+                status_code=404,
+                detail="No trained segmentation model found. Train the segmentation "
+                       "model (seed or main) first, or use shape=bbox/polygon instead.",
+            )
+    else:
+        model, classes, img_size = _load_project_model(project_id)
 
     result = await db.execute(
         select(Image).where(Image.project_id == project_id, Image.status == "pending")
@@ -1754,6 +1771,39 @@ async def ocr_suggest_for_review(
             img = cv2.resize(img, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         H, W = gray.shape
+
+        if use_seg:
+            confs = []
+            results = _yolo_seg_predict_raw(project_id, img, conf=0.0)
+            if results is not None:
+                for r in results:
+                    if r.masks is None or r.boxes is None:
+                        continue
+                    for b in r.boxes:
+                        confs.append(float(b.conf[0]))
+
+            if not confs:
+                scored.append({
+                    "image_id": img_row.id,
+                    "filename": img_row.filename,
+                    "char_count": 0,
+                    "avg_confidence": 0.0,
+                    "min_confidence": 0.0,
+                    "reason": "No characters detected — segmentation may be struggling on this photo",
+                })
+                continue
+
+            avg_conf = float(np.mean(confs))
+            min_conf = float(np.min(confs))
+            scored.append({
+                "image_id": img_row.id,
+                "filename": img_row.filename,
+                "char_count": len(confs),
+                "avg_confidence": avg_conf,
+                "min_confidence": min_conf,
+                "reason": f"{len(confs)} chars — lowest confidence {min_conf:.0%}, avg {avg_conf:.0%}",
+            })
+            continue
 
         boxes = _yolo_char_boxes(project_id, img)
         if boxes is None:
