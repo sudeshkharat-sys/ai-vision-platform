@@ -92,6 +92,16 @@ def _boxes_to_lines(anns, iw, ih):
     overlap a neighboring character on a tilted plate -- de-skew to the
     actual traced outline instead.
     """
+    return _group_chars_into_lines(_anns_to_chars(anns, iw, ih))
+
+
+def _anns_to_chars(anns, iw, ih):
+    """Annotation dicts -> (label, x1, y1, x2, y2, points_px) tuples in pixels.
+
+    Split out of _boxes_to_lines so a caller that needs to transform the
+    characters before grouping them -- de-skewing an angled plate, say --
+    can do so and then call _group_chars_into_lines itself.
+    """
     chars = []
     for ann in anns:
         if not ann["bbox"]:
@@ -110,6 +120,11 @@ def _boxes_to_lines(anns, iw, ih):
         if ann.get("annotation_type") == "polygon" and ann.get("points") and len(ann["points"]) >= 3:
             points_px = [(px * iw, py * ih) for px, py in ann["points"]]
         chars.append((label, x1, y1, x2, y2, points_px))
+    return chars
+
+
+def _group_chars_into_lines(chars):
+    """Group character tuples into text lines, top-to-bottom then L-to-R."""
     if not chars:
         return []
 

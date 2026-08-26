@@ -1071,26 +1071,10 @@ def _project_allowed_chars(project_id: str) -> set | None:
     return chars or None
 
 
-def _estimate_text_angle(boxes):
-    """
-    Best-fit tilt (degrees) of the line through character-box centers —
-    0 for a horizontal line. Used to de-skew a photo of an angled plate
-    before row-grouping/cropping, since both of those assume roughly
-    horizontal text.
-
-    Falls back to 0 (no correction) for too few boxes, a near-vertical fit
-    (unreliable — more likely noise than a genuinely vertical plate), or a
-    near-zero horizontal spread (division/slope blow-up).
-    """
-    if len(boxes) < 2:
-        return 0.0
-    centers = np.array([[b[0] + b[2] / 2, b[1] + b[3] / 2] for b in boxes], dtype=np.float32)
-    xs, ys = centers[:, 0], centers[:, 1]
-    if float(np.ptp(xs)) < 1.0:
-        return 0.0
-    slope, _ = np.polyfit(xs, ys, 1)
-    angle = float(np.degrees(np.arctan(slope)))
-    return angle if abs(angle) <= 60 else 0.0
+# Canonical definition lives in tasks/crnn_training.py so the CRNN's TRAINING
+# crop and this inference crop de-skew by exactly the same rule — they drifted
+# apart once already, and the model paid for it.
+from ..tasks.crnn_training import _estimate_text_angle  # noqa: E402
 
 
 def _greedy_decode_steps(probs, blank_index, charset, allowed_indices=None):

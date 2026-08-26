@@ -22,7 +22,7 @@ Design choices that matter for this project
 """
 from .celery_app import celery_app
 from .training import _fetch_training_data, _group_annotations, _safe_float
-from .tesseract_training import _boxes_to_lines
+from .tesseract_training import _anns_to_chars, _group_chars_into_lines
 from ..config import settings
 
 import json
@@ -95,6 +95,40 @@ def _normalize_line(gray: np.ndarray) -> np.ndarray:
     canvas = np.full((IMG_H, IMG_W), 255, dtype=np.uint8)
     canvas[:, :nw] = resized
     return canvas
+
+
+def _estimate_text_angle(boxes):
+    """
+    Best-fit tilt (degrees) of the line through character-box centers —
+    0 for a horizontal line. Used to de-skew a photo of an angled plate
+    before row-grouping/cropping, since both of those assume roughly
+    horizontal text.
+
+    Falls back to 0 (no correction) for too few boxes, a near-vertical fit
+    (unreliable — more likely noise than a genuinely vertical plate), or a
+    near-zero horizontal spread (division/slope blow-up).
+
+    Lives here, not in api/ocr.py, because BOTH training and inference must
+    de-skew identically — when only inference did, the CRNN was trained on
+    tilted crops and asked to read de-skewed ones.
+    """
+    if len(boxes) < 2:
+        return 0.0
+    centers = np.array([[b[0] + b[2] / 2, b[1] + b[3] / 2] for b in boxes], dtype=np.float32)
+    xs, ys = centers[:, 0], centers[:, 1]
+    if float(np.ptp(xs)) < 1.0:
+        return 0.0
+    slope, _ = np.polyfit(xs, ys, 1)
+    angle = float(np.degrees(np.arctan(slope)))
+    return angle if abs(angle) <= 60 else 0.0
+
+
+# Padding added around a line's character boxes before cropping. Must match
+# api/ocr.py's inference crop: it pads half a median character width either
+# side plus 4px vertically, and a CRNN trained on tight zero-margin crops
+# reads that unfamiliar border as extra characters.
+LINE_PAD_W_FRAC = 0.5
+LINE_PAD_H_PX = 4
 
 
 def _deskewed_char_crop(gray_full: np.ndarray, points_px):
@@ -500,36 +534,76 @@ def train_crnn_model(
             continue
         ih, iw = img.shape[:2]
         gray_full = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        for line in _boxes_to_lines(anns_by_image.get(img_row["id"], []), iw, ih):
+        chars = _anns_to_chars(anns_by_image.get(img_row["id"], []), iw, ih)
+        if not chars:
+            continue
+
+        # ── Build the line crop EXACTLY the way inference does ──
+        # api/ocr.py de-skews an angled plate around the character cluster
+        # before grouping/cropping, then pads the crop. Training used to do
+        # neither: it cropped the raw axis-aligned envelope of the tilted
+        # boxes with zero margin. So the CRNN learned to read tilted,
+        # tight-cropped strips and was then asked to read de-skewed, padded
+        # ones -- a geometry mismatch the validation score never showed,
+        # because validation is dominated by generated lines that go
+        # through neither path.
+        line_src = gray_full
+        angle = _estimate_text_angle([(c[1], c[2], c[3] - c[1], c[4] - c[2]) for c in chars])
+        if abs(angle) > 2.0:
+            centers = np.array(
+                [[(c[1] + c[3]) / 2, (c[2] + c[4]) / 2] for c in chars], dtype=np.float32)
+            cx, cy = float(centers[:, 0].mean()), float(centers[:, 1].mean())
+            M = cv2.getRotationMatrix2D((cx, cy), angle, 1.0)
+            line_src = cv2.warpAffine(gray_full, M, (iw, ih),
+                                      flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE)
+            ones = np.ones((centers.shape[0], 1), dtype=np.float32)
+            rotated = (M @ np.hstack([centers, ones]).T).T
+            # Move each character's center onto the de-skewed frame, keeping
+            # its own width/height — same simplification inference makes.
+            chars_for_lines = [
+                (c[0], ncx - (c[3] - c[1]) / 2, ncy - (c[4] - c[2]) / 2,
+                 ncx + (c[3] - c[1]) / 2, ncy + (c[4] - c[2]) / 2, c[5])
+                for c, (ncx, ncy) in zip(chars, rotated)
+            ]
+        else:
+            chars_for_lines = chars
+
+        med_w = float(np.median([c[3] - c[1] for c in chars_for_lines]))
+        pad_x = med_w * LINE_PAD_W_FRAC
+        for line in _group_chars_into_lines(chars_for_lines):
             text = "".join(c[0] for c in line if c[0] in _CHAR_TO_IDX)
             if not text:
                 continue
-            x1 = max(0, int(min(c[1] for c in line)))
-            y1 = max(0, int(min(c[2] for c in line)))
-            x2 = min(iw, int(max(c[3] for c in line)))
-            y2 = min(ih, int(max(c[4] for c in line)))
+            x1 = max(0, int(min(c[1] for c in line) - pad_x))
+            y1 = max(0, int(min(c[2] for c in line) - LINE_PAD_H_PX))
+            x2 = min(iw, int(max(c[3] for c in line) + pad_x))
+            y2 = min(ih, int(max(c[4] for c in line) + LINE_PAD_H_PX))
             if x2 - x1 < 4 or y2 - y1 < 4:
                 continue
-            real_lines.append((_normalize_line(gray_full[y1:y2, x1:x2]), text, img_row["id"]))
-            # individual char crops for compositing
-            for (label, cx1, cy1, cx2, cy2, points_px) in line:
-                if label not in _CHAR_TO_IDX:
-                    continue
-                # A polygon-traced character gets a de-skewed crop of just
-                # its own outline -- on a tilted plate, the axis-aligned
-                # box below can extend well past the glyph and into a
-                # neighboring character, silently feeding a crop that's
-                # part-Z-part-whatever's-next-to-it into training as if it
-                # were a clean "Z". Falls back to the plain box crop when
-                # there's no polygon (old bbox-only annotations).
-                crop = _deskewed_char_crop(gray_full, points_px) if points_px else None
-                if crop is None:
-                    a1, b1 = max(0, int(cx1)), max(0, int(cy1))
-                    a2, b2 = min(iw, int(cx2)), min(ih, int(cy2))
-                    if a2 - a1 >= 2 and b2 - b1 >= 2:
-                        crop = gray_full[b1:b2, a1:a2]
-                if crop is not None and crop.size > 0:
-                    char_crops[label].append(_char_strip(crop))
+            real_lines.append((_normalize_line(line_src[y1:y2, x1:x2]), text, img_row["id"]))
+
+        # Individual char crops for compositing, taken from the ORIGINAL
+        # frame: _deskewed_char_crop straightens each glyph from its own
+        # traced outline, which is finer-grained than the whole-line
+        # de-skew above and would be degraded by resampling twice.
+        for (label, cx1, cy1, cx2, cy2, points_px) in chars:
+            if label not in _CHAR_TO_IDX:
+                continue
+            # A polygon-traced character gets a de-skewed crop of just
+            # its own outline -- on a tilted plate, the axis-aligned
+            # box below can extend well past the glyph and into a
+            # neighboring character, silently feeding a crop that's
+            # part-Z-part-whatever's-next-to-it into training as if it
+            # were a clean "Z". Falls back to the plain box crop when
+            # there's no polygon (old bbox-only annotations).
+            crop = _deskewed_char_crop(gray_full, points_px) if points_px else None
+            if crop is None:
+                a1, b1 = max(0, int(cx1)), max(0, int(cy1))
+                a2, b2 = min(iw, int(cx2)), min(ih, int(cy2))
+                if a2 - a1 >= 2 and b2 - b1 >= 2:
+                    crop = gray_full[b1:b2, a1:a2]
+            if crop is not None and crop.size > 0:
+                char_crops[label].append(_char_strip(crop))
 
         if (idx + 1) % 5 == 0 or idx + 1 == total:
             try:
