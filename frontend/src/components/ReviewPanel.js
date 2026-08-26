@@ -9,7 +9,10 @@ import logoImg from '../logo.png';
 import { API_URL, BASE_URL } from '../config';
 
 const CanvasImage = ({ src, onLoad }) => {
-    const [img] = useImage(src, 'anonymous');
+    // No crossOrigin — see the same note in AnnotationWorkspace/SequencePanel:
+    // this canvas never reads pixels back, and requesting CORS makes any
+    // photo already cached from a plain <img> fail to load at all.
+    const [img] = useImage(src);
     useEffect(() => {
         if (img && onLoad) {
             onLoad(img.naturalWidth || img.width, img.naturalHeight || img.height);
@@ -641,7 +644,6 @@ export default function ReviewPanel({ project, images, onClose, onAnnotationsUpd
                                     <img
                                         src={`${BASE_URL}${img.filepath}`}
                                         alt={img.filename}
-                                        crossOrigin="anonymous"
                                     />
                                     {reviewedIds.has(img.id) && (
                                         <div className="rp-strip-check"><Check size={12} /></div>

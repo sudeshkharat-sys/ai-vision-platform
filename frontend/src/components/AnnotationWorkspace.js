@@ -22,7 +22,13 @@ import { API_URL } from '../config';
 // Reports naturalWidth/naturalHeight once loaded so the parent can use the
 // browser-corrected dimensions (EXIF orientation, etc.) for scale calculation.
 const KonvaImage = ({ src, onLoad }) => {
-    const [image] = useImage(src, 'anonymous');
+    // No crossOrigin — nothing in this canvas reads pixel data back out
+    // (no toDataURL/getImageData/export), so it buys nothing, and asking
+    // for it breaks images that any other panel already loaded through a
+    // plain <img>: browsers won't reuse a cached non-CORS response for a
+    // crossOrigin="anonymous" request to the same URL, they just fail
+    // silently, leaving the canvas blank. Same fix as SequencePanel.
+    const [image] = useImage(src);
     useEffect(() => {
         if (image && onLoad) {
             onLoad(image.naturalWidth || image.width, image.naturalHeight || image.height);
