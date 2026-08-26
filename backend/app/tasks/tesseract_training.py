@@ -70,6 +70,13 @@ def _get_tessdata_best(task=None) -> Path:
 
 # ── Line building from per-character boxes ────────────────────────
 
+# How far a character's vertical centre may sit from its nearest neighbour on
+# a line, as a multiple of median character height. Below 1.0 so genuinely
+# stacked rows still separate; comparison is local (see _boxes_to_lines) so
+# this does not need to absorb a whole line's tilt.
+_LINE_Y_TOL = 0.8
+
+
 def _boxes_to_lines(anns, iw, ih):
     """
     Group single-character annotations into text lines.
@@ -107,20 +114,37 @@ def _boxes_to_lines(anns, iw, ih):
         return []
 
     med_h = float(np.median([c[4] - c[2] for c in chars]))
-    chars.sort(key=lambda c: (c[2] + c[4]) / 2)
+
+    # Walk characters in READING order (left to right) and compare each one
+    # against its nearest-by-x neighbour already on a line, not against that
+    # line's overall mean.
+    #
+    # The mean is what broke tilted plates. On a photo taken at an angle the
+    # baseline drifts steadily across the plate, so by the time the line has
+    # a few members its mean sits well above (or below) where the next
+    # character actually is -- the character fails the test, starts a NEW
+    # line, and one plate gets chopped into fragments. Each fragment then
+    # becomes its own training sample labelled with only part of the string,
+    # which teaches the reader to drop characters.
+    #
+    # Comparing locally makes the test invariant to steady tilt: consecutive
+    # characters differ only slightly in y no matter how far the whole line
+    # has drifted end to end.
+    chars.sort(key=lambda c: (c[1] + c[3]) / 2)
 
     lines = []
     for c in chars:
-        cy = (c[2] + c[4]) / 2
-        placed = False
+        cx, cy = (c[1] + c[3]) / 2, (c[2] + c[4]) / 2
+        best_line, best_dy = None, None
         for line in lines:
-            ly = np.mean([(x[2] + x[4]) / 2 for x in line])
-            if abs(cy - ly) < med_h * 0.6:
-                line.append(c)
-                placed = True
-                break
-        if not placed:
+            near = min(line, key=lambda x: abs((x[1] + x[3]) / 2 - cx))
+            dy = abs(cy - (near[2] + near[4]) / 2)
+            if dy < med_h * _LINE_Y_TOL and (best_dy is None or dy < best_dy):
+                best_line, best_dy = line, dy
+        if best_line is None:
             lines.append([c])
+        else:
+            best_line.append(c)
 
     for line in lines:
         line.sort(key=lambda c: c[1])

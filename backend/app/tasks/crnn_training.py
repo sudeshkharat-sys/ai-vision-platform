@@ -48,6 +48,14 @@ NUM_CLASSES = len(CHARSET) + 1
 MAX_LABEL_LEN = 24
 _CHAR_TO_IDX = {c: i for i, c in enumerate(CHARSET)}
 
+# Shortest generated training line. Every generator used to start at 3+, so a
+# real plate carrying a single character ("6") or two ("10") was a length the
+# model had never seen across ~14k generated lines -- it had learned that a
+# line holds several characters and would pad a lone glyph out to match,
+# reading "6" as "666". Generating down to one character puts those lengths
+# back in the distribution.
+MIN_LINE_LEN = 1
+
 
 # ── Line-image normalization ──────────────────────────────────────
 
@@ -218,7 +226,7 @@ _CONFUSION_PAIRS = [
 ]
 
 
-def _confusable_string(rng: random.Random, min_len=6, max_len=12) -> str:
+def _confusable_string(rng: random.Random, min_len=MIN_LINE_LEN, max_len=12) -> str:
     """Random string biased toward the confusable characters."""
     n = rng.randint(min_len, max_len)
     out = []
@@ -336,6 +344,26 @@ def _augment_line(img_u8: np.ndarray, rng: random.Random) -> np.ndarray:
         cv2.circle(glare, (gx, gy), rng.randint(w // 6, w // 2), rng.uniform(-70, 70), -1)
         glare = cv2.blur(glare, (w // 4 | 1, h | 1))
         out = np.clip(out.astype(np.float32) + glare, 0, 255).astype(np.uint8)
+
+    # Slide the text along the canvas. _normalize_line always letterboxes
+    # content hard against the LEFT edge, so without this every training
+    # line the model ever sees starts at x=0. A short line then puts one or
+    # two glyphs in the far left corner with most of the canvas empty --
+    # and having never seen content anywhere else, the model treats that
+    # emptiness as evidence more characters should be there and invents
+    # them ("6" read as "666"). Offsetting teaches it that position in the
+    # canvas carries no meaning; left-aligned stays in the distribution as
+    # offset 0, which is what inference still produces.
+    if rng.random() < 0.5:
+        bg = int(np.median(np.concatenate([out[:, -1], out[0, :], out[-1, :]])))
+        content_cols = np.where(out.min(axis=0) < bg - 12)[0]
+        content_end = int(content_cols[-1]) + 1 if content_cols.size else out.shape[1]
+        room = out.shape[1] - content_end
+        if room > 1:
+            shift = rng.randint(1, room)
+            shifted = np.full_like(out, bg)
+            shifted[:, shift:] = out[:, :out.shape[1] - shift]
+            out = shifted
     return out
 
 
@@ -346,7 +374,7 @@ def _encode(text: str):
     return seq[:MAX_LABEL_LEN]
 
 
-def _random_string(rng: random.Random, min_len=3, max_len=10) -> str:
+def _random_string(rng: random.Random, min_len=MIN_LINE_LEN, max_len=10) -> str:
     n = rng.randint(min_len, max_len)
     return "".join(rng.choice(CHARSET) for _ in range(n))
 
@@ -561,7 +589,7 @@ def train_crnn_model(
     guard = 0
     while made < composite_lines and have_chars and guard < composite_lines * 5:
         guard += 1
-        text = "".join(rng.choice(have_chars) for _ in range(rng.randint(3, 9)))
+        text = "".join(rng.choice(have_chars) for _ in range(rng.randint(MIN_LINE_LEN, 9)))
         im = _composite_line(char_crops, text, rng)
         if im is not None:
             X.append(im); Y.append(text); made += 1
@@ -580,7 +608,7 @@ def train_crnn_model(
         pool_chars = [c for c in CHARSET if emnist_pools.get(c)]
         while made_em < emnist_lines and pool_chars and guard < emnist_lines * 5:
             guard += 1
-            text = "".join(rng.choice(pool_chars) for _ in range(rng.randint(3, 9)))
+            text = "".join(rng.choice(pool_chars) for _ in range(rng.randint(MIN_LINE_LEN, 9)))
             im = _composite_line(emnist_pools, text, rng)
             if im is not None:
                 X.append(im); Y.append(text); made_em += 1
@@ -595,7 +623,7 @@ def train_crnn_model(
     # (V/U, 0/8, 6/9, ...) so the model learns to disambiguate them from
     # overall glyph shape even when a dot is faint or missing
     for i in range(dotpeen_lines):
-        text = _confusable_string(rng) if i % 2 == 0 else _random_string(rng, 6, 12)
+        text = _confusable_string(rng) if i % 2 == 0 else _random_string(rng, MIN_LINE_LEN, 12)
         X.append(_render_dotpeen_line(text, rng)); Y.append(text)
 
     # ── Phase 4: split + tensors ─────────────────────────────────
