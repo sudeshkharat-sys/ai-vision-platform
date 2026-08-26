@@ -618,6 +618,43 @@ def _checklist_window(n, current_step, max_rows):
     return start, end, start, n - end
 
 
+def _screen_size(fallback=(1280, 720)):
+    """Best-effort usable screen size, for sizing the preview window.
+
+    OpenCV can't report the display size, so ask Tk (stdlib). Falls back to a
+    conservative default on a headless box or where Tk isn't available.
+    """
+    try:
+        import tkinter
+        root = tkinter.Tk()
+        root.withdraw()
+        size = (root.winfo_screenwidth(), root.winfo_screenheight())
+        root.destroy()
+        return size
+    except Exception:
+        return fallback
+
+
+def _fit_for_display(frame, max_w, max_h):
+    """Shrink a frame so the WHOLE of it lands on screen.
+
+    cv2.imshow with no namedWindow opens an auto-sized window locked to the
+    video's native resolution. A phone video or any source taller than the
+    desktop therefore hangs off the bottom of the screen -- taking the step
+    checklist, which is anchored to the bottom of the frame, behind the
+    taskbar with it. Scaling here (before any overlay is drawn) keeps the
+    checklist on screen AND keeps its text at a fixed readable size, since
+    it is then rendered at display resolution rather than being shrunk with
+    the picture.
+    """
+    h, w = frame.shape[:2]
+    if w <= max_w and h <= max_h:
+        return frame
+    scale = min(max_w / w, max_h / h)
+    return cv2.resize(frame, (max(1, int(w * scale)), max(1, int(h * scale))),
+                      interpolation=cv2.INTER_AREA)
+
+
 def draw_checklist(img, steps, current_step):
     """Bottom-left panel listing steps with status — 'Step 1: gate1 -
     COMPLETE', 'Step 2: m - CURRENT', 'Step 3: a - pending', etc.
@@ -837,6 +874,10 @@ def main():
                              "Overrides whatever the sequence.json says, for all steps.")
     parser.add_argument("--overlap-threshold", type=float,
                         help="Override the sequence's overlap_threshold (0-1) without editing the JSON.")
+    parser.add_argument("--max-height", type=int,
+                        help="Cap the preview window height in pixels. By default the window is "
+                             "sized to fit your screen; use this if the auto-detected size is wrong "
+                             "(multi-monitor, scaling) and the step checklist still runs off-screen.")
     parser.add_argument("--diagnose", action="store_true",
                         help="Don't open a window — scan the whole video and print, per step, the peak "
                              "overlap %% each required class reaches, whether they ever match together, "
@@ -891,6 +932,18 @@ def main():
 
     window = f'Sequence Viewer — {sequence.get("name", "sequence")}'
     paused = False
+
+    # Size the preview to the screen. WINDOW_NORMAL lets the user resize it;
+    # without it OpenCV pins the window to the frame's native resolution and
+    # anything taller than the desktop loses its bottom edge off-screen.
+    if args.max_height:
+        max_w, max_h = 10 ** 6, args.max_height
+    else:
+        screen_w, screen_h = _screen_size()
+        # Leave room for window chrome and the OS taskbar.
+        max_w, max_h = int(screen_w * 0.95), int(screen_h * 0.88)
+    cv2.namedWindow(window, cv2.WINDOW_NORMAL)
+
     print("Controls: q/Esc = quit, r = reset progress, p = pause/resume")
 
     while True:
@@ -915,7 +968,12 @@ def main():
                 synced = state.synced_polygons.get(step_index)
                 if synced is not None:
                     draw_target = {**target, "region_coords": synced}
-            display = draw_overlay(frame, detections, draw_target, status,
+            # Scale to the screen BEFORE drawing: detections and regions are
+            # stored normalized, so every overlay lands correctly at any
+            # size, and the checklist text stays a fixed readable size
+            # instead of shrinking with the picture.
+            display = _fit_for_display(frame, max_w, max_h)
+            display = draw_overlay(display, detections, draw_target, status,
                                     detail=state.last_detail, threshold_pct=state.overlap_threshold * 100.0,
                                     basis=basis_label)
             display = draw_checklist(display, steps, state.current_step)
