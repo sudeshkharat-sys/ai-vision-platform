@@ -352,50 +352,56 @@ PLATE_CLASS_NAME = "PLATE"  # region box that marks the whole plate/text area
 def _yolo_predict_raw(project_id: str, img: np.ndarray, conf: float):
     """
     Load (and cache) the project's trained YOLO model and run inference.
-    Returns the raw ultralytics results, or None if no seed model exists.
-    Shared by _yolo_char_boxes and _yolo_plate_region so both read from the
-    one model + one forward pass' worth of caching logic.
+    Returns the raw ultralytics results, or None if the project has no
+    trained detection model. Shared by _yolo_char_boxes and
+    _yolo_plate_region so both read from the one model + one forward
+    pass' worth of caching logic.
+
+    Prefers main_best.pt over seed_best.pt (see services/det_model.py) so
+    auto-annotate keeps improving as the project moves past its seed batch,
+    the same main->seed preference the rest of the pipeline uses.
     """
-    model_path = settings.model_dir.resolve() / project_id / "seed_best.pt"
-    if not model_path.exists():
+    from ..services.det_model import resolve_det_model_path, det_model_uses_preprocess
+
+    model_path = resolve_det_model_path(project_id)
+    if model_path is None:
         return None
 
     mtime = model_path.stat().st_mtime
-    cached = _YOLO_CACHE.get(project_id)
+    cache_key = (project_id, model_path.name)
+    cached = _YOLO_CACHE.get(cache_key)
     if cached and cached[0] == mtime:
         model = cached[1]
     else:
         from ultralytics import YOLO  # lazy — heavy import
         model = YOLO(str(model_path))
-        _YOLO_CACHE[project_id] = (mtime, model)
+        _YOLO_CACHE[cache_key] = (mtime, model)
 
     # Training can be run with preprocess on OR off (CLAHE+gamma+unsharp
     # baked into every training image, or not) -- feeding this model
     # whichever one it DIDN'T train on is a train/inference mismatch either
-    # way. seed_meta.json records what the model this project currently
-    # has actually used, written next to seed_best.pt at the end of
-    # train_seed_model. Missing file (older model saved before this was
-    # tracked) defaults to True, matching the training default of the time.
+    # way. Each trainer writes a sidecar meta next to its weights recording
+    # what it actually used; det_model_uses_preprocess reads the one
+    # belonging to the weights file we resolved above.
     from ..tasks.training import clahe_gamma_sharpen
-    seed_meta_path = model_path.parent / "seed_meta.json"
-    use_clahe = True
-    if seed_meta_path.exists():
-        try:
-            use_clahe = bool(json.loads(seed_meta_path.read_text()).get("preprocess", True))
-        except Exception:
-            use_clahe = True
-    if use_clahe:
+    if det_model_uses_preprocess(model_path):
         img = clahe_gamma_sharpen(img)
 
     return model.predict(img, conf=conf, verbose=False)
 
 
-def _yolo_char_boxes(project_id: str, img: np.ndarray, conf: float = 0.25):
+def _yolo_char_boxes_labeled(project_id: str, img: np.ndarray, conf: float = 0.25):
     """
-    Detect character boxes with the project's trained YOLO model
-    (seed_best.pt). Returns (x, y, w, h) pixel boxes in reading order,
-    or None when the project has no trained YOLO model — callers fall
-    back to classical segmentation.
+    Detect character boxes with the project's trained YOLO model.
+    Returns (x, y, w, h, label, confidence) tuples in reading order, or
+    None when the project has no trained YOLO model — callers fall back
+    to classical segmentation.
+
+    The detector is trained per-character-class, so every detection
+    already carries the character's identity. Keeping that label here is
+    what lets auto-annotate write finished box+label annotations straight
+    from the detector, with no second classifier pass to re-derive a
+    class the detector had already predicted.
 
     A LEARNED detector is the fix for reflective/engraved surfaces:
     thresholding sees reflections as characters and misses real ones,
@@ -417,10 +423,23 @@ def _yolo_char_boxes(project_id: str, img: np.ndarray, conf: float = 0.25):
             w, h = x2 - x1, y2 - y1
             if w < 2 or h < 2:
                 continue
-            boxes.append((int(x1), int(y1), int(round(w)), int(round(h))))
+            boxes.append((int(x1), int(y1), int(round(w)), int(round(h)),
+                          label, float(b.conf[0])))
     if not boxes:
         return None
+    # _sort_boxes_reading_order only reads indices 0-3, so the label and
+    # confidence ride along untouched.
     return _sort_boxes_reading_order(boxes)
+
+
+def _yolo_char_boxes(project_id: str, img: np.ndarray, conf: float = 0.25):
+    """Geometry-only view of :func:`_yolo_char_boxes_labeled` — (x, y, w, h)
+    pixel boxes in reading order, for callers that classify the crops
+    themselves rather than using the detector's own labels."""
+    labeled = _yolo_char_boxes_labeled(project_id, img, conf)
+    if labeled is None:
+        return None
+    return [(x, y, w, h) for x, y, w, h, _label, _conf in labeled]
 
 
 def _yolo_plate_region(project_id: str, img: np.ndarray, conf: float = 0.25):
@@ -1592,15 +1611,30 @@ async def ocr_auto_annotate(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Use the trained OCR model to pre-label pending photos: segment each
-    plate into characters, predict each character, and store the boxes
-    as 'auto' annotations for human review/correction. The OCR
-    equivalent of YOLO's seed-model auto-annotate — labeling gets
+    Pre-label pending photos with the project's trained annotation models
+    and store the results as 'auto' annotations for human review — the
+    OCR equivalent of YOLO's seed-model auto-annotate, so labeling gets
     faster after every training cycle.
+
+    Which model does the work follows the requested shape:
+
+    * "segment"        — the segmentation model's predicted mask outlines.
+    * "bbox"/"polygon" — the detection model (main -> seed). It is trained
+      per-character-class, so each detection already carries both the box
+      and the character, and its labels are written straight through.
+
+    The character classifier is only a fallback for the case where the
+    project has no trained detector at all and boxes come from classical
+    segmentation, which produces geometry with no label attached. Training
+    an OCR model is NOT a prerequisite for auto-annotating: OCR training
+    consumes these annotations, it does not produce them.
     """
     await get_owned_project(project_id, current_user, db)
     req = body or OcrAutoLabelRequest()
 
+    from ..services.det_model import resolve_det_model_path
+
+    model = classes = img_size = None
     if req.shape == "segment":
         from ..services.seg_model import resolve_seg_model_path
         if resolve_seg_model_path(project_id) is None:
@@ -1609,8 +1643,17 @@ async def ocr_auto_annotate(
                 detail="No trained segmentation model found. Train the segmentation "
                        "model (seed or main) first, or use shape=bbox/polygon instead.",
             )
-    else:
-        model, classes, img_size = _load_project_model(project_id)
+    elif resolve_det_model_path(project_id) is None:
+        # No detector — classical segmentation finds boxes but cannot name
+        # them, so a trained character classifier is the only way to label.
+        try:
+            model, classes, img_size = _load_project_model(project_id)
+        except HTTPException:
+            raise HTTPException(
+                status_code=404,
+                detail="No trained detection model found. Train the seed (or main) "
+                       "model first so auto-annotate can label characters.",
+            )
 
     q = select(Image).where(Image.project_id == project_id, Image.status == "pending")
     if req.image_ids:
@@ -1669,35 +1712,54 @@ async def ocr_auto_annotate(
                     ))
                     added += 1
         else:
-            boxes = _yolo_char_boxes(project_id, img)
-            if boxes is None:
+            detected = _yolo_char_boxes_labeled(project_id, img)
+
+            if detected is not None:
+                # The detector already predicted the character for every box
+                # it found — write box + label straight through.
+                for (x, y, w, h, label, conf) in detected:
+                    if conf < req.min_conf:
+                        continue
+                    bbox = [(x + w / 2) / W, (y + h / 2) / H, w / W, h / H]
+                    db.add(Annotation(
+                        image_id=img_row.id,
+                        class_name=label,
+                        bbox=bbox,
+                        annotation_type="polygon" if req.shape == "polygon" else "bbox",
+                        points=_bbox_to_points(bbox) if req.shape == "polygon" else None,
+                        source="auto",
+                    ))
+                    added += 1
+            else:
+                # No detector: classical segmentation gives unlabeled
+                # geometry, so the character classifier names each crop.
                 boxes, _region = _segment_with_plate_hint(project_id, img, gray)
-            crops, kept = [], []
-            for (x, y, w, h) in boxes:
-                bbox = [(x + w / 2) / W, (y + h / 2) / H, w / W, h / H]
-                crop = _extract_char_crop(img, bbox, img_size)
-                if crop is not None:
-                    crops.append(crop)
-                    kept.append(bbox)
-            if not crops:
-                continue
-
-            batch = np.stack(crops).astype(np.float32)[..., None] / 255.0
-            probs = model.predict(batch, verbose=0)
-
-            for bbox, p in zip(kept, probs):
-                idx = int(p.argmax())
-                if float(p[idx]) < req.min_conf:
+                crops, kept = [], []
+                for (x, y, w, h) in boxes:
+                    bbox = [(x + w / 2) / W, (y + h / 2) / H, w / W, h / H]
+                    crop = _extract_char_crop(img, bbox, img_size)
+                    if crop is not None:
+                        crops.append(crop)
+                        kept.append(bbox)
+                if not crops:
                     continue
-                db.add(Annotation(
-                    image_id=img_row.id,
-                    class_name=classes[idx],
-                    bbox=bbox,
-                    annotation_type="polygon" if req.shape == "polygon" else "bbox",
-                    points=_bbox_to_points(bbox) if req.shape == "polygon" else None,
-                    source="auto",
-                ))
-                added += 1
+
+                batch = np.stack(crops).astype(np.float32)[..., None] / 255.0
+                probs = model.predict(batch, verbose=0)
+
+                for bbox, p in zip(kept, probs):
+                    idx = int(p.argmax())
+                    if float(p[idx]) < req.min_conf:
+                        continue
+                    db.add(Annotation(
+                        image_id=img_row.id,
+                        class_name=classes[idx],
+                        bbox=bbox,
+                        annotation_type="polygon" if req.shape == "polygon" else "bbox",
+                        points=_bbox_to_points(bbox) if req.shape == "polygon" else None,
+                        source="auto",
+                    ))
+                    added += 1
 
         if added:
             img_row.status = "annotated"
@@ -1711,15 +1773,15 @@ async def ocr_auto_annotate(
 
 # ── Active Learning (OCR) ───────────────────────────────────────
 # Same idea as the YOLO active-learning module (score_unlabeled_images /
-# suggest_for_review in tasks/active_learning.py) but scoring the trained
-# character classifier instead of a detector: characters the model is least
-# sure about mean that photo is the most useful one for a human to label
-# next. Runs synchronously (classifying small crops is cheap) rather than
-# as a Celery job — no queue/polling needed for a first pass.
+# suggest_for_review in tasks/active_learning.py): whichever model would do
+# the auto-annotating scores the pending photos, and the ones it is least
+# sure about are the most useful for a human to label next. Runs
+# synchronously (scoring is cheap) rather than as a Celery job — no
+# queue/polling needed for a first pass.
 
 class OcrSuggestReviewRequest(BaseModel):
     budget: int = 10  # 0 = return every scored pending image
-    shape: str = "bbox"  # "bbox" | "polygon" -> character classifier, "segment" -> seg model
+    shape: str = "bbox"  # "bbox" | "polygon" -> detector, "segment" -> seg model
 
 
 @router.post("/active-learning/suggest/{project_id}")
@@ -1731,14 +1793,19 @@ async def ocr_suggest_for_review(
 ):
     """Rank pending images by model uncertainty — most useful to label first.
 
-    Mirrors ocr_auto_annotate's shape branching: "segment" scores the trained
-    segmentation model's per-detection confidence, everything else scores the
-    trained character classifier.
+    Scores with whichever model ocr_auto_annotate would use for the same
+    shape: the segmentation model for "segment", the detection model for
+    "bbox"/"polygon", and the character classifier only as the fallback
+    for a project with no trained detector.
     """
     await get_owned_project(project_id, current_user, db)
     req = body or OcrSuggestReviewRequest()
 
+    from ..services.det_model import resolve_det_model_path
+
+    model = classes = img_size = None
     use_seg = req.shape == "segment"
+    use_det = not use_seg and resolve_det_model_path(project_id) is not None
     if use_seg:
         from ..services.seg_model import resolve_seg_model_path
         if resolve_seg_model_path(project_id) is None:
@@ -1747,8 +1814,15 @@ async def ocr_suggest_for_review(
                 detail="No trained segmentation model found. Train the segmentation "
                        "model (seed or main) first, or use shape=bbox/polygon instead.",
             )
-    else:
-        model, classes, img_size = _load_project_model(project_id)
+    elif not use_det:
+        try:
+            model, classes, img_size = _load_project_model(project_id)
+        except HTTPException:
+            raise HTTPException(
+                status_code=404,
+                detail="No trained detection model found. Train the seed (or main) "
+                       "model first so pending photos can be scored.",
+            )
 
     result = await db.execute(
         select(Image).where(Image.project_id == project_id, Image.status == "pending")
@@ -1805,9 +1879,34 @@ async def ocr_suggest_for_review(
             })
             continue
 
-        boxes = _yolo_char_boxes(project_id, img)
-        if boxes is None:
-            boxes, _region = _segment_with_plate_hint(project_id, img, gray)
+        if use_det:
+            detected = _yolo_char_boxes_labeled(project_id, img, conf=0.0)
+            confs = [c for *_box, _label, c in detected] if detected else []
+
+            if not confs:
+                scored.append({
+                    "image_id": img_row.id,
+                    "filename": img_row.filename,
+                    "char_count": 0,
+                    "avg_confidence": 0.0,
+                    "min_confidence": 0.0,
+                    "reason": "No characters detected — the detector may be struggling on this photo",
+                })
+                continue
+
+            avg_conf = float(np.mean(confs))
+            min_conf = float(np.min(confs))
+            scored.append({
+                "image_id": img_row.id,
+                "filename": img_row.filename,
+                "char_count": len(confs),
+                "avg_confidence": avg_conf,
+                "min_confidence": min_conf,
+                "reason": f"{len(confs)} chars — lowest confidence {min_conf:.0%}, avg {avg_conf:.0%}",
+            })
+            continue
+
+        boxes, _region = _segment_with_plate_hint(project_id, img, gray)
 
         crops = []
         for (x, y, w, h) in boxes:

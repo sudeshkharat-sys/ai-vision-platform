@@ -969,6 +969,10 @@ def train_main_model(
     target_path = settings.model_dir / project_id / "main_best.pt"
     target_path.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy(best_model_path, target_path)
+    # Same contract as seed_meta.json above: record whether THIS model was
+    # trained on CLAHE+gamma+sharpen images so inference can match it.
+    (target_path.parent / "main_meta.json").write_text(
+        json.dumps({"preprocess": bool(preprocess)}))
     shutil.rmtree(dataset_path)
 
     final_metrics = epoch_history[-1] if epoch_history else {}

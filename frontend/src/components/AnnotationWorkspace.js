@@ -875,7 +875,7 @@ Do you want to proceed?`;
         } catch (e) {
             setError(e.response?.data?.detail || (shapeForMode === 'segment'
                 ? 'Auto-labeling failed. Train a segmentation model first.'
-                : 'Auto-labeling failed. Train an OCR model first.'));
+                : 'Auto-labeling failed. Train the seed (or main) model first.'));
         } finally {
             setOcrAutoLabeling(false);
         }
@@ -1440,14 +1440,14 @@ Do you want to proceed?`;
                             className="btn-action btn-action-secondary"
                             onClick={handleOcrAutoLabel}
                             disabled={ocrAutoLabeling || images.filter(img => img.status === 'pending').length === 0}
-                            title={`Use the trained ${drawMode === 'segment' ? 'segmentation model' : 'OCR model'} to pre-label pending photos as ${drawMode === 'segment' ? 'segmentation masks' : drawMode === 'polyline' ? 'polylines' : 'boxes'} (current canvas tool) — review and correct after`}
+                            title={`Use the trained ${drawMode === 'segment' ? 'segmentation model' : 'detection model'} to pre-label pending photos as ${drawMode === 'segment' ? 'segmentation masks' : drawMode === 'polyline' ? 'polylines' : 'boxes'} (current canvas tool) — review and correct after`}
                         >
                             <Sparkles size={14} /> {ocrAutoLabeling ? 'Labeling…' : `Auto-Label Characters (${drawMode === 'segment' ? 'Segment' : drawMode === 'polyline' ? 'Polyline' : 'Box'})`}
                         </button>
                         <button
                             className="btn-action btn-action-al"
                             onClick={() => setShowOcrActiveLearningPanel(true)}
-                            title="Rank pending photos by how uncertain the trained OCR model is, so you label the hardest ones first"
+                            title="Rank pending photos by how uncertain the trained annotation model is, so you label the hardest ones first"
                         >
                             <Brain size={14} /> Active Learning (OCR)
                         </button>

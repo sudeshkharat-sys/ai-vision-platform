@@ -29,7 +29,7 @@ const OcrActiveLearningPanel = ({ project, drawMode, onClose, onAnnotateImages }
         } catch (e) {
             setError(e.response?.data?.detail || (shape === 'segment'
                 ? 'Scoring failed. Train the segmentation model first.'
-                : 'Scoring failed. Train the OCR model first.'));
+                : 'Scoring failed. Train the seed (or main) model first.'));
         } finally {
             setLoading(false);
         }
@@ -43,7 +43,7 @@ const OcrActiveLearningPanel = ({ project, drawMode, onClose, onAnnotateImages }
                         <span className="alp-header-icon"><Brain size={20} /></span>
                         <div>
                             <h2 className="alp-title">Active Learning</h2>
-                            <p className="alp-subtitle">{project.name} — {shape === 'segment' ? 'Segmentation masks' : 'OCR characters'}</p>
+                            <p className="alp-subtitle">{project.name} — {shape === 'segment' ? 'Segmentation masks' : 'Character boxes'}</p>
                         </div>
                     </div>
                     <button className="alp-close" onClick={onClose}><X size={18} /></button>
@@ -53,7 +53,7 @@ const OcrActiveLearningPanel = ({ project, drawMode, onClose, onAnnotateImages }
                     <section className="alp-section">
                         <p className="alp-section-title">Suggest Images to Review</p>
                         <p className="alp-mode-desc" style={{ marginBottom: 14 }}>
-                            Ranks pending photos by how uncertain the trained {shape === 'segment' ? 'segmentation' : 'OCR'} model is about
+                            Ranks pending photos by how uncertain the trained {shape === 'segment' ? 'segmentation' : 'detection'} model is about
                             their characters (lowest confidence first, no-detection photos worst)
                             so you label the hardest ones instead of guessing which to do next.
                             Uses the {shape === 'segment' ? 'Segment' : shape === 'polygon' ? 'Polyline' : 'Box'} tool currently selected on the canvas.
