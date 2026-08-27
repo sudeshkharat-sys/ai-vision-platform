@@ -710,9 +710,13 @@ def train_crnn_model(
             if im is not None:
                 X.append(im); Y.append(text); made_em += 1
 
-    # synthetic rendered lines over the FULL charset (font variety)
-    for _ in range(synthetic_lines):
-        text = _random_string(rng)
+    # synthetic rendered lines over the FULL charset (font variety).
+    # Half are biased toward the confusion pairs (4/6, 0/8, ...) — this
+    # bias used to live only in the dot-peen renderer, so a project that
+    # disables dot-peen synthesis (smooth printed/badge plates, exactly
+    # where 4-vs-6 misreads happen) lost the oversampling entirely.
+    for i in range(synthetic_lines):
+        text = _confusable_string(rng, max_len=10) if i % 2 == 0 else _random_string(rng)
         X.append(_render_synthetic_line(text, rng)); Y.append(text)
 
     # dot-peen rendered lines — the actual engraving style of the engine
