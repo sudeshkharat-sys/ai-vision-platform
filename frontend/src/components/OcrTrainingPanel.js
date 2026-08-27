@@ -58,6 +58,11 @@ const OcrTrainingPanel = ({ project, onClose }) => {
     const [taskId, setTaskId]     = useState(null);
     const [testing, setTesting]   = useState(false);
     const [testResult, setTestResult] = useState(null);
+    // Closed vocabulary for CRNN reads: when the plate can only say one of
+    // a few known values (badge plates: 4, 6, 10, 11, ...), listing them
+    // here makes the decoder score each candidate's exact CTC probability
+    // and pick the best — a misread outside the list becomes impossible.
+    const [allowedValues, setAllowedValues] = useState('');
     const [evaluating, setEvaluating] = useState(false);
     const [evalResult, setEvalResult] = useState(null);
     const [running, setRunning]   = useState(false);
@@ -186,8 +191,10 @@ const OcrTrainingPanel = ({ project, onClose }) => {
         try {
             const form = new FormData();
             form.append('file', f);
+            const lex = engine === 'crnn' && allowedValues.trim()
+                ? `&allowed_values=${encodeURIComponent(allowedValues.trim())}` : '';
             const res = await axios.post(
-                `${API_URL}/ocr/predict/${project.id}?engine=${engine}`, form, {
+                `${API_URL}/ocr/predict/${project.id}?engine=${engine}${lex}`, form, {
                 headers: { 'Content-Type': 'multipart/form-data' },
             });
             setTestResult(res.data);
@@ -201,8 +208,12 @@ const OcrTrainingPanel = ({ project, onClose }) => {
     const evaluateOnTrainingData = async () => {
         setEvaluating(true); setEvalResult(null); setError(null);
         try {
+            const params = { engine };
+            if (engine === 'crnn' && allowedValues.trim()) {
+                params.allowed_values = allowedValues.trim();
+            }
             const res = await axios.get(
-                `${API_URL}/ocr/evaluate-on-training/${project.id}`, { params: { engine } });
+                `${API_URL}/ocr/evaluate-on-training/${project.id}`, { params });
             setEvalResult(res.data);
         } catch (err) {
             setError(err.response?.data?.detail || 'Evaluation failed.');
@@ -778,6 +789,17 @@ const OcrTrainingPanel = ({ project, onClose }) => {
                                     Upload a plate photo — YOLO locates the text area(s) and the CRNN
                                     reads each line. Use a photo it was NOT trained on.
                                 </p>
+                                <label className="ocr-hint" style={{ display: 'block', marginBottom: 8 }}>
+                                    Known values (optional, comma-separated — e.g.{' '}
+                                    <b>4, 6, 10, 11, 44, 66</b>). When set, the reader picks the
+                                    best-matching value from this list instead of guessing character
+                                    by character — misreads outside the list become impossible.
+                                    Applies to both tests below.
+                                    <input type="text" value={allowedValues}
+                                        placeholder="4, 6, 10, 11"
+                                        style={{ display: 'block', width: '100%', marginTop: 4 }}
+                                        onChange={e => setAllowedValues(e.target.value)} />
+                                </label>
                                 <label className={`ocr-btn-test ${testing ? 'busy' : ''}`}>
                                     {testing
                                         ? <><span className="ocr-spinner" /> Reading…</>
