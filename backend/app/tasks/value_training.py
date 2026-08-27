@@ -42,9 +42,31 @@ import numpy as np
 import redis as redis_lib
 
 
+def _plate_region_bbox(anns, iw, ih):
+    """Pixel (x1,y1,x2,y2) of this image's "plate"/region annotation (a
+    multi-character label like "plate" or "badge"), or None. A box drawn
+    once around the whole badge, unlike per-character boxes, doesn't move
+    when detection misses or hallucinates one character -- exactly the
+    stability a WHOLE-IMAGE classifier needs, since a crop built from
+    character-box extents changes width whenever a box is missed or a
+    stray glare/reflection box fires, and a classifier will happily learn
+    "wider crop" as a proxy for "more digits" and get fooled by it."""
+    for ann in anns:
+        name = str(ann.get("class_name", "")).strip().lower()
+        if name in ("plate", "badge", "region", "serial", "serial_region") and ann.get("bbox"):
+            xc, yc, w, h = ann["bbox"]
+            x1, y1 = (xc - w / 2) * iw, (yc - h / 2) * ih
+            x2, y2 = (xc + w / 2) * iw, (yc + h / 2) * ih
+            if x2 - x1 >= 4 and y2 - y1 >= 4:
+                return x1, y1, x2, y2
+    return None
+
+
 def _line_crops_for_project(img_rows, anns_by_image, progress=None):
-    """Cut every annotated text line the same way CRNN training does:
-    de-skew around the character cluster, group into rows, pad, crop.
+    """Cut every annotated text line. Prefers the image's whole "plate"
+    region box (stable width, immune to per-character detection noise)
+    over the character-box-extent crop; falls back to the extent crop
+    only when no region box was annotated for that image.
     Returns list of (normalized uint8 image, value string, image_id)."""
     crops = []
     total = len(img_rows)
@@ -57,8 +79,22 @@ def _line_crops_for_project(img_rows, anns_by_image, progress=None):
             continue
         ih, iw = img.shape[:2]
         gray_full = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        chars = _anns_to_chars(anns_by_image.get(img_row["id"], []), iw, ih)
+        anns = anns_by_image.get(img_row["id"], [])
+        chars = _anns_to_chars(anns, iw, ih)
         if not chars:
+            continue
+
+        region = _plate_region_bbox(anns, iw, ih)
+        if region is not None:
+            rx1, ry1, rx2, ry2 = region
+            text = "".join(str(c[0]).strip().upper()
+                           for c in sorted(chars, key=lambda c: c[1]))
+            if text:
+                x1, y1 = max(0, int(rx1)), max(0, int(ry1))
+                x2, y2 = min(iw, int(rx2)), min(ih, int(ry2))
+                crops.append((_normalize_line(gray_full[y1:y2, x1:x2]), text, img_row["id"]))
+            if progress and ((idx + 1) % 5 == 0 or idx + 1 == total):
+                progress(idx + 1, total, len(crops))
             continue
 
         line_src = gray_full

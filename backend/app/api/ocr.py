@@ -1341,16 +1341,30 @@ def _load_value_model(project_id: str):
 def _predict_with_value(project_id: str, img: np.ndarray, gray: np.ndarray):
     """Read a closed-vocabulary plate by classifying each whole line crop
     into one of the project's labeled values — no character-by-character
-    decoding, so phantom/dropped digits are structurally impossible. Line
-    regions come from the same YOLO boxes the CRNN path uses; crops are
-    normalized with the CRNN's _normalize_line so train/infer match."""
+    decoding, so phantom/dropped digits are structurally impossible.
+
+    Region priority: the trained "plate" region box FIRST — a single
+    stable detection whose width doesn't move when a character detector
+    hallucinates or misses a box — falling back to character-box row
+    grouping only when no plate region model exists. Building the crop
+    from character-box extents (the CRNN's approach) makes width a proxy
+    for "how many characters", and this classifier can and does use
+    width as a real feature — so one missed/extra character-box directly
+    swings it toward the wrong value's width band ("10"->"1100" when a
+    stray glare box widened the row; "6"->"11" when detection split one
+    glyph into two boxes). Training uses the same region source (see
+    value_training._plate_region_bbox) so train/infer crops match."""
     from ..tasks.crnn_training import _normalize_line
 
     model, labels = _load_value_model(project_id)
 
-    boxes = _yolo_char_boxes(project_id, img)
+    plate_first = _yolo_plate_region(project_id, img)
     line_regions = []
     region_source = "full_frame"
+    if plate_first:
+        region_source = "yolo_plate"
+        line_regions = [plate_first]
+    boxes = None if plate_first else _yolo_char_boxes(project_id, img)
     if boxes:
         region_source = "yolo_chars"
         med_h = float(np.median([b[3] for b in boxes]))
