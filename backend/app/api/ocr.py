@@ -1103,6 +1103,67 @@ def _greedy_decode_steps(probs, blank_index, charset, allowed_indices=None):
     return out
 
 
+def _ctc_log_prob(probs, seq, blank):
+    """Exact CTC log-probability of the label sequence `seq` (class
+    indices) under the (T, C) softmax matrix `probs` — the standard CTC
+    forward algorithm in log space.
+
+    This is what makes a closed-vocabulary read robust: instead of
+    trusting the greedy per-timestep argmax (which invents duplicates
+    like "4"->"44", drops faint characters like "66"->"6", and swaps
+    one-notch lookalikes like "4"->"0" whenever a single frame flickers),
+    every candidate value is scored against the WHOLE probability matrix,
+    and impossible outputs are never candidates at all."""
+    lp = np.log(np.maximum(probs, 1e-12))
+    ext = [blank]
+    for s in seq:
+        ext += [s, blank]
+    S, T = len(ext), lp.shape[0]
+    NEG = -1e30
+    a = np.full(S, NEG)
+    a[0] = lp[0, ext[0]]
+    if S > 1:
+        a[1] = lp[0, ext[1]]
+    for t in range(1, T):
+        na = np.full(S, NEG)
+        for s in range(S):
+            v = a[s]
+            if s > 0:
+                v = np.logaddexp(v, a[s - 1])
+            if s > 1 and ext[s] != blank and ext[s] != ext[s - 2]:
+                v = np.logaddexp(v, a[s - 2])
+            na[s] = v + lp[t, ext[s]]
+        a = na
+    out = a[S - 1]
+    if S > 1:
+        out = np.logaddexp(out, a[S - 2])
+    return float(out)
+
+
+def _best_lexicon_value(probs, values, charset, blank):
+    """Pick the candidate string with the highest exact CTC probability.
+    Returns (value, per-char-normalized confidence, scored list) or None
+    when no candidate is encodable in the charset."""
+    idx = {c: i for i, c in enumerate(charset)}
+    scored = []
+    for v in values:
+        if not v or any(c not in idx for c in v):
+            continue
+        seq = [idx[c] for c in v]
+        # CTC needs a frame per character plus one per adjacent repeat
+        need = len(seq) + sum(1 for a, b in zip(seq, seq[1:]) if a == b)
+        if need > probs.shape[0]:
+            continue
+        scored.append((v, _ctc_log_prob(probs, seq, blank)))
+    if not scored:
+        return None
+    scored.sort(key=lambda kv: -kv[1])
+    best_v, best_lp = scored[0]
+    conf = float(np.exp(best_lp / max(1, len(best_v))))
+    return best_v, round(conf, 4), [
+        {"value": v, "log_prob": round(s, 2)} for v, s in scored[:5]]
+
+
 def _pattern_allowed(spec_ch, charset):
     """Character-class for one pattern position: L=letter, D=digit, ?=any,
     anything else is a literal."""
@@ -1223,7 +1284,7 @@ def _decode_line_both_ways(model, crop, normalize, blank_index, charset, allowed
 
 
 def _predict_with_crnn(project_id: str, img: np.ndarray, gray: np.ndarray,
-                       pattern: str = None):
+                       pattern: str = None, allowed_values: list = None):
     """
     Read text with the CRNN line recognizer. Uses the project's trained YOLO
     model to locate the text region(s) — exactly the pipeline the user
@@ -1369,6 +1430,8 @@ def _predict_with_crnn(project_id: str, img: np.ndarray, gray: np.ndarray,
 
     results, text_lines = [], []
     pattern_applied, pattern_mismatch = False, False
+    lexicon = [str(v).strip().upper() for v in (allowed_values or []) if str(v).strip()]
+    lexicon_used, lexicon_scores = False, None
     for (x, y, w, h) in line_regions:
         crop = gray[y:y + h, x:x + w]
         if crop.size == 0:
@@ -1376,7 +1439,17 @@ def _predict_with_crnn(project_id: str, img: np.ndarray, gray: np.ndarray,
         emits, probs, conf = _decode_line_both_ways(
             model, crop, _normalize_line, BLANK_INDEX, charset, allowed_indices)
         line_text = "".join(e[0] for e in emits)
-        if pattern:
+        if lexicon:
+            # Closed-vocabulary read: the plate can only say one of a few
+            # known values, so score each candidate's exact CTC probability
+            # against this line's whole softmax and keep the best — a
+            # greedy misread like "44"/"06"/"" for a plate that can only
+            # say "4"/"6"/"10"/"11" is simply not among the candidates.
+            picked = _best_lexicon_value(probs, lexicon, charset, BLANK_INDEX)
+            if picked is not None:
+                line_text, conf, lexicon_scores = picked
+                lexicon_used = True
+        if pattern and not lexicon_used:
             fixed = _apply_pattern(emits, probs, pattern.strip().upper(), charset)
             if fixed is None:
                 pattern_mismatch = True
@@ -1401,6 +1474,8 @@ def _predict_with_crnn(project_id: str, img: np.ndarray, gray: np.ndarray,
             "pattern": pattern or None,
             "pattern_applied": pattern_applied,
             "pattern_mismatch": pattern_mismatch,
+            "lexicon_used": lexicon_used,
+            "lexicon_scores": lexicon_scores,
             "restricted_to": sorted(allowed_chars) if allowed_chars else None}
 
 
@@ -1409,6 +1484,7 @@ async def evaluate_on_training_data(
     project_id: str,
     engine: str = "crnn",
     pattern: str = None,
+    allowed_values: str = None,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -1436,6 +1512,8 @@ async def evaluate_on_training_data(
     if proj is None:
         raise HTTPException(status_code=404, detail="Project not found")
     anns_by_image = _group_annotations(ann_rows)
+    values_list = [v.strip() for v in allowed_values.split(",") if v.strip()] \
+        if allowed_values else None
 
     results = []
     for img_row in img_rows:
@@ -1458,7 +1536,7 @@ async def evaluate_on_training_data(
 
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         try:
-            pred = _predict_with_crnn(project_id, img, gray, pattern)
+            pred = _predict_with_crnn(project_id, img, gray, pattern, values_list)
         except HTTPException:
             raise
         except Exception as e:
@@ -1490,6 +1568,7 @@ async def predict_ocr(
     file: UploadFile = File(...),
     engine: str = "cnn",
     pattern: str = None,
+    allowed_values: str = None,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -1525,7 +1604,9 @@ async def predict_ocr(
     if engine == "tesseract":
         return _predict_with_tesseract(project_id, img, gray)
     if engine == "crnn":
-        return _predict_with_crnn(project_id, img, gray, pattern)
+        values_list = [v.strip() for v in allowed_values.split(",") if v.strip()] \
+            if allowed_values else None
+        return _predict_with_crnn(project_id, img, gray, pattern, values_list)
     if engine == "seg":
         return _predict_with_seg(project_id, img, gray)
 
