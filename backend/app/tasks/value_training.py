@@ -133,6 +133,70 @@ def _line_crops_for_project(img_rows, anns_by_image, progress=None):
     return crops
 
 
+def _jitter_geometry(img_u8: np.ndarray, rng: random.Random) -> np.ndarray:
+    """Small random rotation/scale/translation of a real crop.
+
+    A closed-vocabulary classifier trained on only a handful of real
+    photos per value has nothing to learn from except those exact
+    pixels -- without geometric variety it just as easily keys off the
+    badge's fixed position/size/tilt in the frame (or the background
+    behind it) as off the digit shape itself, and that spurious cue
+    disappears on any new photo. `_augment_line` alone only varies
+    brightness/contrast/blur/noise/horizontal shift, never the crop's
+    scale or rotation, so this fills that gap."""
+    h, w = img_u8.shape
+    angle = rng.uniform(-6, 6)
+    scale = rng.uniform(0.85, 1.15)
+    tx = rng.uniform(-0.05, 0.05) * w
+    ty = rng.uniform(-0.08, 0.08) * h
+    bg = int(np.median(np.concatenate([img_u8[:, 0], img_u8[:, -1], img_u8[0, :], img_u8[-1, :]])))
+    M = cv2.getRotationMatrix2D((w / 2, h / 2), angle, scale)
+    M[0, 2] += tx
+    M[1, 2] += ty
+    return cv2.warpAffine(img_u8, M, (w, h), flags=cv2.INTER_LINEAR,
+                          borderMode=cv2.BORDER_CONSTANT, borderValue=bg)
+
+
+_VALUE_FONTS = [
+    cv2.FONT_HERSHEY_SIMPLEX, cv2.FONT_HERSHEY_DUPLEX,
+    cv2.FONT_HERSHEY_COMPLEX, cv2.FONT_HERSHEY_TRIPLEX,
+    cv2.FONT_HERSHEY_PLAIN,
+]
+
+
+def _render_synthetic_value(text: str, rng: random.Random) -> np.ndarray:
+    """Render one of the project's own known values as printed/embossed
+    text on a synthetic background, into the same IMG_H x IMG_W canvas
+    real crops use.
+
+    Real badge photos for a closed value set (a handful of cars, each
+    photographed once or twice) are scarce enough that the classifier
+    can memorize backgrounds instead of digit shapes -- this generator
+    gives it many independent looks at the ACTUAL characters in varied
+    fonts/sizes/contrast/background so it has something forcing it to
+    key off the glyph. It never invents new values; text always comes
+    from the project's own labeled classes, so it can't teach the model
+    a class it doesn't have."""
+    bg = rng.randint(60, 200)
+    canvas = np.full((IMG_H * 2, IMG_W * 2), bg, dtype=np.uint8)
+    noise = np.random.default_rng(rng.randrange(1 << 30)).normal(
+        0, rng.uniform(2, 10), canvas.shape)
+    canvas = np.clip(canvas.astype(np.float32) + noise, 0, 255).astype(np.uint8)
+
+    font = rng.choice(_VALUE_FONTS)
+    thickness = rng.randint(1, 3)
+    delta = rng.randint(50, 120) * (1 if rng.random() < 0.5 else -1)
+    color = int(np.clip(bg + delta, 0, 255))
+    fscale = rng.uniform(1.6, 2.6)
+    (tw, th), _ = cv2.getTextSize(text, font, fscale, thickness)
+    org = (max(4, (IMG_W * 2 - tw) // 2 + rng.randint(-15, 15)),
+           (IMG_H * 2 + th) // 2 + rng.randint(-10, 10))
+    cv2.putText(canvas, text, org, font, fscale, color, thickness, cv2.LINE_AA)
+
+    g = cv2.resize(canvas, (IMG_W, IMG_H), interpolation=cv2.INTER_AREA)
+    return _jitter_geometry(_normalize_line(g), rng)
+
+
 def _build_value_cnn(tf, n_classes: int):
     """Small CNN over the CRNN's 32x256 line canvas -> value class."""
     layers = tf.keras.layers
@@ -166,6 +230,7 @@ def train_value_model(
     batch_size: int = 32,
     learning_rate: float = 1e-3,
     val_ratio: float = 0.2,
+    synthetic_per_class: int = 150,
 ):
     """Train the whole-value classifier and export ocr_value.tflite +
     value_labels.txt. Classes = the distinct line texts actually labeled
@@ -226,8 +291,32 @@ def train_value_model(
             x_tr.append(im.astype(np.float32) / 255.0)
             y_tr.append(cls_index[value])
             for _ in range(copies):
-                x_tr.append(_augment_line(im, rng).astype(np.float32) / 255.0)
+                # Geometry jitter (rotate/scale/translate) BEFORE the
+                # existing brightness/blur/glare/shift augmentation --
+                # without it, every copy of a real photo shares the exact
+                # same badge position/size/tilt, so the model can pass
+                # training by keying on frame geometry alone instead of
+                # the digit shape, then fails on any new photo where the
+                # badge sits slightly differently in frame.
+                jittered = _jitter_geometry(im, rng)
+                x_tr.append(_augment_line(jittered, rng).astype(np.float32) / 255.0)
                 y_tr.append(cls_index[value])
+
+    # Synthetic rendered digits for each of the project's OWN known
+    # values -- real photos per value are often just a handful of cars,
+    # which is not enough variety for the CNN to learn "what a 4 looks
+    # like" instead of "what THIS car's badge photo looks like". This
+    # never introduces a class the project doesn't have (see
+    # _render_synthetic_value), so it only ever reinforces the real
+    # labels with cheap extra variety.
+    made_synthetic = 0
+    if synthetic_per_class > 0:
+        for value in classes:
+            for _ in range(synthetic_per_class):
+                im = _render_synthetic_value(value, rng)
+                x_tr.append(im.astype(np.float32) / 255.0)
+                y_tr.append(cls_index[value])
+                made_synthetic += 1
 
     x_train = np.stack(x_tr)[..., None]
     y_train = np.array(y_tr, dtype=np.int64)
@@ -302,6 +391,13 @@ def train_value_model(
     per_class_acc = {c: round(s["correct"] / s["total"], 4) for c, s in per_class.items()}
     val_accuracy = float((preds == y_val).mean())
 
+    # Real photos are the only ground truth for what THIS project's badges
+    # actually look like; synthetic/augmented copies only multiply what's
+    # already there. A class with very few real photos is still likely to
+    # generalize poorly no matter how much augmentation runs on top of it,
+    # so surface that plainly instead of a silent low accuracy number.
+    low_data_classes = sorted(c for c, n in raw_counts.items() if n < 3)
+
     out_dir = settings.model_dir / project_id / "ocr_value"
     out_dir.mkdir(parents=True, exist_ok=True)
     model.save(str(out_dir / "ocr_value.keras"))
@@ -327,7 +423,10 @@ def train_value_model(
         "top_confusions": [{"pair": p, "count": c} for p, c in
                            sorted(confusions.items(), key=lambda kv: -kv[1])[:10]],
         "augment_copies": augment_copies,
+        "synthetic_per_class": synthetic_per_class,
+        "synthetic_lines_made": made_synthetic,
         "epochs_run": len(epoch_hist),
+        "low_data_classes": low_data_classes,
     }
     (out_dir / "value_meta.json").write_text(json.dumps(meta, indent=2))
 
@@ -340,4 +439,11 @@ def train_value_model(
         "raw_counts": raw_counts, "history": epoch_hist,
         "split": {"train": int(len(x_train)), "val": int(len(x_val))},
         "tflite_size_kb": round(tflite_path.stat().st_size / 1024, 1),
+        "low_data_classes": low_data_classes,
+        "warning": (
+            f"Classes with fewer than 3 real photos: {low_data_classes}. "
+            "Label more photos for these values -- synthetic/augmented "
+            "copies help but can't replace real examples of this "
+            "project's actual badges."
+        ) if low_data_classes else None,
     }

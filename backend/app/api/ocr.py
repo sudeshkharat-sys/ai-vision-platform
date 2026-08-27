@@ -154,6 +154,7 @@ class TrainValueRequest(BaseModel):
     batch_size: int = 32
     learning_rate: float = 1e-3
     val_ratio: float = 0.2
+    synthetic_per_class: int = 150
 
 
 @router.post("/train-value/{project_id}")
@@ -177,6 +178,7 @@ async def start_value_training(
         project_id, epochs=req.epochs, augment_copies=req.augment_copies,
         hard_image_ids=req.hard_image_ids, batch_size=req.batch_size,
         learning_rate=req.learning_rate, val_ratio=req.val_ratio,
+        synthetic_per_class=req.synthetic_per_class,
     )
     return {"task_id": task.id, "status": "queued"}
 
