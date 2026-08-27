@@ -126,6 +126,7 @@ const OcrTrainingPanel = ({ project, onClose }) => {
     useEffect(() => {
         const JOB_TYPE_TO_ENGINE = {
             ocr_crnn_training: 'crnn', ocr_tesseract_training: 'tesseract', ocr_training: 'cnn',
+            ocr_value_training: 'value',
         };
         axios.get(`${API_URL}/pipeline/jobs/${project.id}`)
             .then(res => {
@@ -146,7 +147,12 @@ const OcrTrainingPanel = ({ project, onClose }) => {
     const startTraining = async (hardImageIds) => {
         setError(null); setResult(null); setMeta(null);
         try {
-            const res = engine === 'crnn'
+            const res = engine === 'value'
+                ? await axios.post(`${API_URL}/ocr/train-value/${project.id}`, {
+                    epochs: crnnEpochs,
+                    ...(hardImageIds?.length ? { hard_image_ids: hardImageIds } : {}),
+                })
+                : engine === 'crnn'
                 ? await axios.post(`${API_URL}/ocr/train-crnn/${project.id}`, {
                     epochs: crnnEpochs,
                     emnist_lines: useEmnist ? 3000 : 0,
@@ -169,7 +175,8 @@ const OcrTrainingPanel = ({ project, onClose }) => {
             axios.post(`${API_URL}/pipeline/jobs`, {
                 task_id: res.data.task_id,
                 project_id: project.id,
-                job_type: engine === 'crnn' ? 'ocr_crnn_training'
+                job_type: engine === 'value' ? 'ocr_value_training'
+                    : engine === 'crnn' ? 'ocr_crnn_training'
                     : engine === 'tesseract' ? 'ocr_tesseract_training' : 'ocr_training',
             }).catch(() => {});
             pollTask(res.data.task_id);
@@ -328,6 +335,19 @@ const OcrTrainingPanel = ({ project, onClose }) => {
                                     <p>A real OCR: reads a whole cropped line at once (YOLO gives the
                                        text area, this reads it). Knows all 0–9/A–Z out of the box and
                                        fine-tunes on your engraved font. Exports to TFLite for Flutter.</p>
+                                </div>
+                            </label>
+                            <label className={`ocr-engine-card ${engine === 'value' ? 'selected' : ''}`}>
+                                <input type="radio" name="ocr-engine" value="value"
+                                    checked={engine === 'value'} disabled={running}
+                                    onChange={() => { setEngine('value'); setResult(null); setTestResult(null); }} />
+                                <div>
+                                    <b>Value classifier (.tflite) — for badge / known-value plates</b>
+                                    <p>Not OCR: classifies the whole cropped line directly into one of
+                                       the values labeled in this project (e.g. 4, 6, 10, 11). No
+                                       character-by-character reading, so phantom or dropped digits are
+                                       impossible. The most robust choice when the plate can only say a
+                                       few known values and labeled photos are scarce.</p>
                                 </div>
                             </label>
                             <label className={`ocr-engine-card ${engine === 'tesseract' ? 'selected' : ''}`}>
@@ -730,6 +750,77 @@ const OcrTrainingPanel = ({ project, onClose }) => {
                     )}
 
                     {/* ── CRNN results / trained model ──────────── */}
+                    {engine === 'value' && (
+                        <div className="ocr-section">
+                            <h3>Value classifier — test</h3>
+                            <div className="ocr-test">
+                                <p className="ocr-hint">
+                                    Classifies the whole located line into one of this project's
+                                    labeled values. Train it first (button above), then test here.
+                                </p>
+                                <label className={`ocr-btn-test ${testing ? 'busy' : ''}`}>
+                                    {testing
+                                        ? <><span className="ocr-spinner" /> Reading…</>
+                                        : <>📷 Choose test image</>}
+                                    <input type="file" accept="image/*" hidden
+                                        disabled={testing} onChange={handleTestImage} />
+                                </label>
+                                {testResult && (
+                                    <div className="ocr-test-result">
+                                        <div className="ocr-test-text">
+                                            <small>Classified value:</small>
+                                            <span>{testResult.text || '(nothing)'}</span>
+                                        </div>
+                                        {testResult.characters?.[0]?.top_values && (
+                                            <small className="ocr-hint">
+                                                {testResult.characters[0].top_values.map(t =>
+                                                    `${t.value}: ${(t.prob * 100).toFixed(1)}%`).join('  ·  ')}
+                                            </small>
+                                        )}
+                                        {testResult.preview && (
+                                            <img className="ocr-test-preview" src={testResult.preview}
+                                                alt="classified line" />
+                                        )}
+                                    </div>
+                                )}
+                                <button className={`ocr-btn-test ${evaluating ? 'busy' : ''}`}
+                                    onClick={evaluateOnTrainingData} disabled={evaluating}>
+                                    {evaluating
+                                        ? <><span className="ocr-spinner" /> Evaluating…</>
+                                        : <>▶ Test on training data</>}
+                                </button>
+                                {evalResult && (
+                                    <div className="ocr-test-result">
+                                        <div className="ocr-test-text">
+                                            <small>{evalResult.correct}/{evalResult.total} images exact match</small>
+                                            <span>{pct(evalResult.accuracy)}</span>
+                                        </div>
+                                        {evalResult.results.some(r => !r.correct) && (
+                                            <button className="ocr-btn-test" disabled={running}
+                                                onClick={() => startTraining(
+                                                    evalResult.results.filter(r => !r.correct).map(r => r.image_id))}>
+                                                ↻ Retrain focused on {evalResult.results.filter(r => !r.correct).length} failures
+                                            </button>
+                                        )}
+                                        <div className="ocr-eval-list">
+                                            {evalResult.results.map(r => (
+                                                <div key={r.image_id}
+                                                    className={`ocr-eval-row ${r.correct ? 'ok' : 'bad'}`}>
+                                                    <span className="ocr-eval-status">{r.correct ? '✓' : '✗'}</span>
+                                                    <span className="ocr-eval-file">{r.filename}</span>
+                                                    <span className="ocr-eval-truth">{r.truth}</span>
+                                                    {!r.correct && (
+                                                        <span className="ocr-eval-pred">→ {r.predicted || '(nothing)'}</span>
+                                                    )}
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    )}
+
                     {engine === 'crnn' && (result?.engine === 'crnn' || modelInfo?.crnn?.has_model) && (
                         <div className="ocr-section">
                             <h3>

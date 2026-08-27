@@ -147,6 +147,40 @@ async def start_crnn_training(
     return {"task_id": task.id, "status": "queued"}
 
 
+class TrainValueRequest(BaseModel):
+    epochs: int = 40
+    augment_copies: int = 40
+    hard_image_ids: Optional[List[str]] = None
+    batch_size: int = 32
+    learning_rate: float = 1e-3
+    val_ratio: float = 0.2
+
+
+@router.post("/train-value/{project_id}")
+async def start_value_training(
+    project_id: str,
+    body: TrainValueRequest = None,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Queue whole-value classifier training — for plates that can only say
+    one of a few known values (badge plates: "4"/"6"/"10"/"11"). Instead
+    of reading character by character, classifies the whole line crop
+    into one of the values labeled in this project. Far more robust than
+    OCR when the value set is closed and real photos are scarce.
+    """
+    await get_owned_project(project_id, current_user, db)
+    from ..tasks.value_training import train_value_model
+    req = body or TrainValueRequest()
+    task = train_value_model.delay(
+        project_id, epochs=req.epochs, augment_copies=req.augment_copies,
+        hard_image_ids=req.hard_image_ids, batch_size=req.batch_size,
+        learning_rate=req.learning_rate, val_ratio=req.val_ratio,
+    )
+    return {"task_id": task.id, "status": "queued"}
+
+
 @router.get("/dataset-stats/{project_id}")
 async def get_ocr_dataset_stats(
     project_id: str,
@@ -1283,6 +1317,100 @@ def _decode_line_both_ways(model, crop, normalize, blank_index, charset, allowed
     return emits, probs, (round(conf, 3) if emits else None)
 
 
+_VALUE_CACHE = {}
+
+
+def _load_value_model(project_id: str):
+    value_dir = settings.model_dir / project_id / "ocr_value"
+    keras_path = value_dir / "ocr_value.keras"
+    if not keras_path.exists():
+        raise HTTPException(status_code=404,
+                            detail="No trained value classifier — train one first "
+                                   "(engine=value).")
+    mtime = keras_path.stat().st_mtime
+    cached = _VALUE_CACHE.get(project_id)
+    if cached and cached[0] == mtime:
+        return cached[1], cached[2]
+    import tensorflow as tf
+    model = tf.keras.models.load_model(str(keras_path))
+    labels = (value_dir / "value_labels.txt").read_text().split()
+    _VALUE_CACHE[project_id] = (mtime, model, labels)
+    return model, labels
+
+
+def _predict_with_value(project_id: str, img: np.ndarray, gray: np.ndarray):
+    """Read a closed-vocabulary plate by classifying each whole line crop
+    into one of the project's labeled values — no character-by-character
+    decoding, so phantom/dropped digits are structurally impossible. Line
+    regions come from the same YOLO boxes the CRNN path uses; crops are
+    normalized with the CRNN's _normalize_line so train/infer match."""
+    from ..tasks.crnn_training import _normalize_line
+
+    model, labels = _load_value_model(project_id)
+
+    boxes = _yolo_char_boxes(project_id, img)
+    line_regions = []
+    region_source = "full_frame"
+    if boxes:
+        region_source = "yolo_chars"
+        med_h = float(np.median([b[3] for b in boxes]))
+        med_w = float(np.median([b[2] for b in boxes]))
+        rows = []
+        for b in sorted(boxes, key=lambda b: b[1] + b[3] / 2):
+            cy = b[1] + b[3] / 2
+            for row in rows:
+                ry = np.mean([x[1] + x[3] / 2 for x in row])
+                if abs(cy - ry) < med_h * 0.6:
+                    row.append(b)
+                    break
+            else:
+                rows.append([b])
+        rows.sort(key=lambda r: np.mean([b[1] for b in r]))
+        for row in rows:
+            x1 = max(0, int(round(min(b[0] for b in row) - med_w * 0.5)))
+            y1 = max(0, int(round(min(b[1] for b in row) - 4)))
+            x2 = min(gray.shape[1], int(round(max(b[0] + b[2] for b in row) + med_w * 0.5)))
+            y2 = min(gray.shape[0], int(round(max(b[1] + b[3] for b in row) + 4)))
+            if x2 - x1 >= 4 and y2 - y1 >= 4:
+                line_regions.append((x1, y1, x2 - x1, y2 - y1))
+    if not line_regions:
+        plate = _yolo_plate_region(project_id, img)
+        if plate:
+            region_source = "yolo_plate"
+            line_regions = [plate]
+        else:
+            line_regions = [(0, 0, gray.shape[1], gray.shape[0])]
+
+    results, text_lines = [], []
+    for (x, y, w, h) in line_regions:
+        crop = gray[y:y + h, x:x + w]
+        if crop.size == 0:
+            continue
+        norm = _normalize_line(crop).astype(np.float32) / 255.0
+        probs = model.predict(norm[None, ..., None], verbose=0)[0]
+        order = np.argsort(-probs)
+        value = labels[int(order[0])]
+        conf = round(float(probs[order[0]]), 4)
+        text_lines.append(value)
+        results.append({
+            "char": value, "confidence": conf, "box": [x, y, w, h],
+            "top_values": [{"value": labels[int(i)],
+                            "prob": round(float(probs[int(i)]), 4)}
+                           for i in order[:3]],
+        })
+        color = (74, 222, 128)
+        cv2.rectangle(img, (x, y), (x + w, y + h), color, 2)
+        cv2.putText(img, value, (x, max(18, y - 6)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2, cv2.LINE_AA)
+
+    ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 85])
+    preview = "data:image/jpeg;base64," + base64.b64encode(buf.tobytes()).decode() if ok else None
+    return {"text": "".join(text_lines), "characters": results, "preview": preview,
+            "num_found": len(text_lines), "engine": "value",
+            "detector": "yolo" if region_source != "full_frame" else "full_frame",
+            "region_source": region_source, "known_values": labels}
+
+
 def _predict_with_crnn(project_id: str, img: np.ndarray, gray: np.ndarray,
                        pattern: str = None, allowed_values: list = None):
     """
@@ -1497,9 +1625,9 @@ async def evaluate_on_training_data(
     straight at the images the model still gets wrong.
     """
     await get_owned_project(project_id, current_user, db)
-    if engine != "crnn":
+    if engine not in ("crnn", "value"):
         raise HTTPException(status_code=400,
-                            detail="evaluate-on-training currently supports engine=crnn only")
+                            detail="evaluate-on-training supports engine=crnn or engine=value")
 
     from ..tasks.training import _fetch_training_data, _group_annotations
     from ..tasks.tesseract_training import _boxes_to_lines
@@ -1536,7 +1664,8 @@ async def evaluate_on_training_data(
 
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         try:
-            pred = _predict_with_crnn(project_id, img, gray, pattern, values_list)
+            pred = (_predict_with_value(project_id, img, gray) if engine == "value"
+                    else _predict_with_crnn(project_id, img, gray, pattern, values_list))
         except HTTPException:
             raise
         except Exception as e:
@@ -1607,6 +1736,8 @@ async def predict_ocr(
         values_list = [v.strip() for v in allowed_values.split(",") if v.strip()] \
             if allowed_values else None
         return _predict_with_crnn(project_id, img, gray, pattern, values_list)
+    if engine == "value":
+        return _predict_with_value(project_id, img, gray)
     if engine == "seg":
         return _predict_with_seg(project_id, img, gray)
 

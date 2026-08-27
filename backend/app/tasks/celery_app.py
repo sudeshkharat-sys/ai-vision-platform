@@ -14,6 +14,7 @@ celery_app = Celery(
         "app.tasks.ocr_training",
         "app.tasks.tesseract_training",
         "app.tasks.crnn_training",
+        "app.tasks.value_training",
         "app.tasks.sequence_run",
     ],
 )
