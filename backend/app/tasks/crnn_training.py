@@ -59,6 +59,26 @@ MIN_LINE_LEN = 1
 
 # ── Line-image normalization ──────────────────────────────────────
 
+def _looks_dotpeen(g: np.ndarray) -> bool:
+    """True when the strokes are made of many small disconnected dots
+    (dot-peen engraving), False for continuous printed/embossed strokes
+    (e.g. badge plates like "S4"/"S11"). Decides whether the dot-fusing
+    closing below should run at all: closing a SMOOTH bold glyph with a
+    big kernel fills the open notch of a "4" and turns it into a "6"/"9",
+    which is exactly the misread it was meant to prevent on dotted text."""
+    _, bw = cv2.threshold(g, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    n, _, stats, _ = cv2.connectedComponentsWithStats(bw, 8)
+    if n - 1 < 12:          # a dotted line has dozens of dots; print has few blobs
+        return False
+    areas = stats[1:, cv2.CC_STAT_AREA].astype(np.float64)
+    dot_area_max = (g.shape[0] / 6.0) ** 2      # dots are small vs line height
+    small = areas < dot_area_max
+    # Most components must be dot-sized AND carry most of the ink — a smooth
+    # glyph with a few noise specks has many small blobs but its ink lives
+    # in a handful of large stroke components.
+    return small.mean() > 0.6 and areas[small].sum() > areas.sum() * 0.5
+
+
 def _normalize_line(gray: np.ndarray) -> np.ndarray:
     """Contrast-enhance and letterbox a line crop into a fixed IMG_H x IMG_W
     grayscale canvas (dark text on light background, aspect preserved).
@@ -82,8 +102,10 @@ def _normalize_line(gray: np.ndarray) -> np.ndarray:
     # large. Kernel ~1/12 of line height sits between typical dot pitch and
     # inter-character gap, so dots of one stroke merge without bridging into
     # the neighboring character. Solid engraved/printed strokes pass through
-    # unchanged. Skipped for crops already at model scale (nothing to save).
-    if g.shape[0] > IMG_H * 2:
+    # unchanged. Skipped for crops already at model scale (nothing to save)
+    # and for continuous-stroke text (badge/printed plates), where closing
+    # with a big kernel seals the open top of a "4" into a "6"/"9".
+    if g.shape[0] > IMG_H * 2 and _looks_dotpeen(g):
         k = max(3, (g.shape[0] // 12) | 1)
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
         g = 255 - cv2.morphologyEx(255 - g, cv2.MORPH_CLOSE, kernel)
