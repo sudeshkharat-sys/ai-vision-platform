@@ -461,9 +461,40 @@ def _yolo_char_boxes_labeled(project_id: str, img: np.ndarray, conf: float = 0.2
                           label, float(b.conf[0])))
     if not boxes:
         return None
+    boxes = _dedupe_cross_class_boxes(boxes)
     # _sort_boxes_reading_order only reads indices 0-3, so the label and
     # confidence ride along untouched.
     return _sort_boxes_reading_order(boxes)
+
+
+def _dedupe_cross_class_boxes(boxes, iou_thresh: float = 0.4):
+    """Drop the weaker box whenever two detections of DIFFERENT classes
+    heavily overlap — a real, single stroke that the detector is unsure
+    about (a "6" whose curve also looks a little like a "1" or an "8")
+    can fire two boxes on the exact same character, one per candidate
+    class. YOLO's own NMS never catches this: it only suppresses
+    duplicates WITHIN one class, since here each character is trained as
+    its own separate class. Left unfiltered, one physical glyph gets
+    reported as two boxes/two characters downstream -- both in the
+    line's decoded text and in the crop width used by the value
+    classifier."""
+    def iou(a, b):
+        ax1, ay1, ax2, ay2 = a[0], a[1], a[0] + a[2], a[1] + a[3]
+        bx1, by1, bx2, by2 = b[0], b[1], b[0] + b[2], b[1] + b[3]
+        ix1, iy1 = max(ax1, bx1), max(ay1, by1)
+        ix2, iy2 = min(ax2, bx2), min(ay2, by2)
+        iw, ih = max(0, ix2 - ix1), max(0, iy2 - iy1)
+        inter = iw * ih
+        if inter <= 0:
+            return 0.0
+        union = a[2] * a[3] + b[2] * b[3] - inter
+        return inter / union if union > 0 else 0.0
+
+    kept = []
+    for b in sorted(boxes, key=lambda b: -b[5]):  # most confident first
+        if all(iou(b, k) < iou_thresh for k in kept):
+            kept.append(b)
+    return kept
 
 
 def _yolo_char_boxes(project_id: str, img: np.ndarray, conf: float = 0.25):
