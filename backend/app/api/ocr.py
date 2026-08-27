@@ -1171,7 +1171,7 @@ def _collapse_near_duplicates(emits, probs):
     return out
 
 
-def _trim_weak_edges(emits, probs, min_keep=3):
+def _trim_weak_edges(emits, probs, min_keep=2):
     """Drop leading/trailing emitted characters whose confidence is far
     below the line's own median -- real characters in a clean read score
     similarly to each other, while a character conjured from background
@@ -1179,7 +1179,10 @@ def _trim_weak_edges(emits, probs, min_keep=3):
     scores much lower. Confirmed against real data: the dominant failure
     mode was the correct serial with 1-4 such characters glued onto one or
     both ends (e.g. "YYT4G55160" -> "5YYT4G55160"). Never trims below
-    min_keep characters, so a short genuine read can't be trimmed away."""
+    min_keep characters, so a short genuine read can't be trimmed away.
+    min_keep is 2, not 3: badge-style plates genuinely read 1-2 characters
+    ("11", "4"), and at 3 a phantom glued onto "11" ("110") sat exactly at
+    the floor where trimming was forbidden to remove it."""
     if len(emits) <= min_keep:
         return emits
     confs = [float(probs[t, i]) for (_, i, t) in emits]
@@ -1340,7 +1343,14 @@ def _predict_with_crnn(project_id: str, img: np.ndarray, gray: np.ndarray,
                 # suspiciously narrow next to the detected plate box --
                 # i.e. the detector likely missed several characters --
                 # instead of doing it for every row unconditionally.
-                if (py - med_h <= row_cy <= py + ph + med_h) and row_w < pw * 0.7:
+                # Guarded to rows that already carry several characters: a
+                # 1-2 character row (badge plates like "S4"/"11") is
+                # NORMALLY far narrower than its plate box, whose width is
+                # mostly logo and chrome frame -- widening those crops fed
+                # the stylized "S" swoosh and frame edge to the CRNN, which
+                # read them as extra characters ("4" -> "64", "11" -> "110").
+                if (len(row) >= 4 and py - med_h <= row_cy <= py + ph + med_h
+                        and row_w < pw * 0.7):
                     x1 = min(x1, px)
                     x2 = max(x2, px + pw)
             x1 = max(0, int(round(x1)))
