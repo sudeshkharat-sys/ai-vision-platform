@@ -302,6 +302,42 @@ def _polygon_tight_bbox(ann):
     return [(x1 + x2) / 2, (y1 + y2) / 2, x2 - x1, y2 - y1]
 
 
+_REGION_CLASS_NAMES = {"plate", "badge", "region", "serial", "serial_region"}
+
+
+def _class_agnostic_view(classes, anns_by_image):
+    """Collapse every non-region character class (0-9, A-Z, ...) into one
+    generic "char" class, keeping any plate/badge/region class distinct.
+
+    The normal detector has to solve two problems in one shot: WHERE is
+    a character, and WHICH of 36 characters is it. On tightly-spaced or
+    touching engraved characters, that second problem is what causes
+    missed/merged boxes -- the model spends its capacity discriminating
+    identity instead of nailing tight glyph boundaries. A class-agnostic
+    detector only has to answer "is there a character stroke here",
+    which is a strictly easier localization task and, on crowded text,
+    tends to produce tighter and more complete boxes. Character IDENTITY
+    still comes from elsewhere (the per-character CNN classifier, or the
+    CRNN reading the assembled line) -- this detector's only job is to
+    find the boxes.
+
+    Returns (new_classes, new_anns_by_image); does not mutate the inputs,
+    so a caller can build both the normal and class-agnostic datasets
+    from the same fetched annotations."""
+    has_region = any(str(c).strip().lower() in _REGION_CLASS_NAMES for c in classes)
+    new_classes = (["plate"] if has_region else []) + ["char"]
+    new_anns_by_image = {}
+    for img_id, anns in anns_by_image.items():
+        new_anns = []
+        for ann in anns:
+            name = str(ann.get("class_name", "")).strip().lower()
+            new_ann = dict(ann)
+            new_ann["class_name"] = "plate" if name in _REGION_CLASS_NAMES else "char"
+            new_anns.append(new_ann)
+        new_anns_by_image[img_id] = new_anns
+    return new_classes, new_anns_by_image
+
+
 def _oversample_rare_images(train_imgs, anns_by_image, classes, max_dup=6):
     """
     Duplicate whole training images that contain under-represented single-
@@ -686,6 +722,7 @@ def train_seed_model(
     aug_scale: float = 0.4,
     aug_mixup: float = 0.0,
     aug_copy_paste: float = 0.05,
+    class_agnostic: bool = False,
 ):
     """
     Quick seed-training on manually annotated images.
@@ -697,6 +734,18 @@ def train_seed_model(
     2. Dataset   — build YOLO directory on disk
     3. Training  — YOLO model.train()
     4. Cleanup   — copy seed_best.pt, remove temp dataset
+
+    class_agnostic=True trains a SEPARATE localization-only detector
+    (saved as seed_char_only_best.pt, doesn't touch/overwrite the normal
+    per-character seed_best.pt) where every character class is collapsed
+    to one generic "char" label (see _class_agnostic_view). Use it when
+    the normal per-character detector misses/merges boxes on tightly
+    packed or touching text (dot-peen, engraved plates) -- a detector
+    that only has to find character strokes, not identify which of 36
+    characters each one is, tends to get tighter/more complete boxes.
+    Character identity for those boxes still comes from elsewhere (the
+    per-character CNN classifier, or the CRNN reading the assembled
+    line) -- this model's only job is finding them.
     """
     db = StateDBConnector()
 
@@ -727,9 +776,17 @@ def train_seed_model(
         aug_flipud = 0.0
         aug_degrees = min(aug_degrees, 3.0)
 
+    # Collapse to a single "char" class AFTER the flip/rotation decision
+    # above (which needs the real per-character classes to detect a char
+    # project) but BEFORE dataset build, so the detector itself never
+    # sees character identity.
+    if class_agnostic:
+        classes, anns_by_image = _class_agnostic_view(classes, anns_by_image)
+
     # ── Phase 2: Build dataset ───────────────────────────────────
     dataset_path, n_train, n_val, n_test = _build_yolo_dataset(
-        img_rows, anns_by_image, classes, project_id,
+        img_rows, anns_by_image, classes,
+        f"{project_id}_char_only" if class_agnostic else project_id,
         preprocess=preprocess, imgsz=imgsz, task=self,
     )
 
@@ -799,7 +856,7 @@ def train_seed_model(
         copy_paste=aug_copy_paste,
         # ------------------------------------------------------------------
         project=str(settings.model_dir / project_id),
-        name="seed_model",
+        name="seed_model_char_only" if class_agnostic else "seed_model",
         verbose=False,
         workers=0,           # Celery workers are daemonic — cannot spawn DataLoader subprocesses
     )
@@ -816,14 +873,16 @@ def train_seed_model(
 
     # ── Phase 4: Persist + cleanup ───────────────────────────────
     best_model_path = results.save_dir / "weights" / "best.pt"
-    target_path = settings.model_dir / project_id / "seed_best.pt"
+    weights_name = "seed_char_only_best.pt" if class_agnostic else "seed_best.pt"
+    meta_name = "seed_char_only_meta.json" if class_agnostic else "seed_meta.json"
+    target_path = settings.model_dir / project_id / weights_name
     target_path.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy(best_model_path, target_path)
     # Remember whether THIS model was trained on CLAHE+gamma+sharpen images
     # so inference (ocr.py::_yolo_predict_raw) can apply the exact same
     # preprocessing this model actually learned from -- training toggling
     # preprocess on/off between runs must not leave inference guessing.
-    (target_path.parent / "seed_meta.json").write_text(
+    (target_path.parent / meta_name).write_text(
         json.dumps({"preprocess": bool(preprocess)}))
     shutil.rmtree(dataset_path)
 
@@ -837,6 +896,8 @@ def train_seed_model(
         "history":    epoch_history,
         "split":      {"train": n_train, "val": n_val, "test": n_test},
         "char_project": is_char_project,
+        "class_agnostic": class_agnostic,
+        "classes": classes,
     }
 
 
