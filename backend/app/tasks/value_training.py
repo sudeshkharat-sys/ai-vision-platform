@@ -87,6 +87,35 @@ def _direct_value_bbox(anns):
     return None
 
 
+def _dedupe_char_boxes(chars, iou_thresh: float = 0.5):
+    """Collapse duplicate annotations of the SAME physical character --
+    two overlapping boxes with the same label, from double-drawing one
+    box or from manual + auto-annotate both adding a box for it -- into
+    one. Without this, a clean "4"/"6"/"10"/"11" badge whose digit(s)
+    each got annotated twice trains the value classifier on a doubled
+    label ("4"->"44", "10"->"1100"): every character really is there
+    twice in the annotation data, this isn't a stray-box problem, it's a
+    duplicate-box problem, and region-filtering alone can't fix it since
+    both copies sit inside the region too."""
+    def iou(a, b):
+        ax1, ay1, ax2, ay2 = a[1], a[2], a[3], a[4]
+        bx1, by1, bx2, by2 = b[1], b[2], b[3], b[4]
+        ix1, iy1 = max(ax1, bx1), max(ay1, by1)
+        ix2, iy2 = min(ax2, bx2), min(ay2, by2)
+        iw_, ih_ = max(0, ix2 - ix1), max(0, iy2 - iy1)
+        inter = iw_ * ih_
+        if inter <= 0:
+            return 0.0
+        union = (ax2 - ax1) * (ay2 - ay1) + (bx2 - bx1) * (by2 - by1) - inter
+        return inter / union if union > 0 else 0.0
+
+    kept = []
+    for c in chars:
+        if not any(iou(c, k) >= iou_thresh for k in kept):
+            kept.append(c)
+    return kept
+
+
 def _line_crops_for_project(img_rows, anns_by_image, progress=None, focus_color=None):
     """Cut every annotated text line. Prefers the image's whole "plate"
     region box (stable width, immune to per-character detection noise)
@@ -121,7 +150,7 @@ def _line_crops_for_project(img_rows, anns_by_image, progress=None, focus_color=
                 progress(idx + 1, total, len(crops))
             continue
 
-        chars = _anns_to_chars(anns, iw, ih)
+        chars = _dedupe_char_boxes(_anns_to_chars(anns, iw, ih))
         if not chars:
             continue
 
