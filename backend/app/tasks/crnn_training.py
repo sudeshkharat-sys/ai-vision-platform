@@ -79,25 +79,41 @@ def _looks_dotpeen(g: np.ndarray) -> bool:
     return small.mean() > 0.6 and areas[small].sum() > areas.sum() * 0.5
 
 
-def _color_aware_gray(img_bgr: np.ndarray) -> np.ndarray:
-    """Grayscale conversion that keeps strongly-colored text (red, blue,
-    yellow, any ink/paint color -- not just red) visible instead of
-    blending it into a metal/painted background's similar gray level.
+_HUE_BY_COLOR = {
+    # OpenCV hue is 0-179 (degrees / 2). Red wraps around 0/180.
+    "red": 0, "orange": 15, "yellow": 30, "green": 60,
+    "cyan": 90, "blue": 120, "purple": 140, "magenta": 150, "pink": 165,
+}
+
+
+def _color_aware_gray(img_bgr: np.ndarray, focus_color: str = None,
+                      hue_tolerance: float = 15.0) -> np.ndarray:
+    """Grayscale conversion that keeps strongly-colored text visible
+    instead of blending it into a metal/painted background's similar
+    gray level.
 
     Plain BGR2GRAY weights R/G/B roughly equally, so a saturated colored
     "4" can land at nearly the same gray level as the metal around it --
     the digit all but disappears before the classifier ever sees it.
     This instead measures per-pixel colorfulness two ways -- HSV
     saturation (how "colored" vs. neutral a pixel is) and chroma
-    (max channel minus min channel, which is large for ANY strong hue,
-    not just red) -- and, only where a pixel is clearly colored
-    (paint/ink, not glare/metal), swaps in the chroma value stretched to
-    the full 0-255 range, so the glyph stays high-contrast against a
-    low-saturation background regardless of what color the text is.
+    (max channel minus min channel, which is large for ANY strong hue) --
+    and, only where a pixel is clearly colored (paint/ink, not glare/
+    metal), swaps in the chroma value stretched to the full 0-255 range,
+    so the glyph stays high-contrast against a low-saturation background.
     Neutral pixels keep ordinary grayscale, so this never makes an
-    already-neutral (dot-peen, embossed, black-on-white) crop worse, and
-    there's nothing project-specific to configure -- it adapts to
-    whatever ink color is in each photo automatically."""
+    already-neutral (dot-peen, embossed, black-on-white) crop worse.
+
+    focus_color (e.g. "red") narrows "colored" to pixels near that hue
+    only. Left at None (the default), any saturated pixel counts,
+    adapting automatically to whatever ink color is in the photo -- the
+    right choice for most projects. Set it when the badge is on a
+    REFLECTIVE surface: glare/specular highlights on chrome/polished
+    metal often carry their own rainbow-ish color fringing (not just
+    plain white), which the hue-agnostic version would treat as "colored
+    text" right alongside your actual red/blue/whatever digit. Locking
+    to the badge's own known color ignores that fringing instead of
+    getting confused by it."""
     gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY).astype(np.float32)
     if img_bgr.ndim != 3 or img_bgr.shape[2] != 3:
         return gray.astype(np.uint8)
@@ -108,6 +124,13 @@ def _color_aware_gray(img_bgr: np.ndarray) -> np.ndarray:
     b, g, r = cv2.split(img_bgr.astype(np.float32))
     chroma = np.maximum(np.maximum(r, g), b) - np.minimum(np.minimum(r, g), b)
     colored = sat > 60
+
+    if focus_color:
+        target = _HUE_BY_COLOR.get(str(focus_color).strip().lower())
+        if target is not None:
+            hue = hsv[..., 0].astype(np.float32)
+            diff = np.minimum(np.abs(hue - target), 180 - np.abs(hue - target))
+            colored = colored & (diff <= hue_tolerance)
 
     out = gray.copy()
     if colored.any():

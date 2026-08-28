@@ -87,12 +87,16 @@ def _direct_value_bbox(anns):
     return None
 
 
-def _line_crops_for_project(img_rows, anns_by_image, progress=None):
+def _line_crops_for_project(img_rows, anns_by_image, progress=None, focus_color=None):
     """Cut every annotated text line. Prefers the image's whole "plate"
     region box (stable width, immune to per-character detection noise)
     over the character-box-extent crop; falls back to the extent crop
     only when no region box was annotated for that image.
-    Returns list of (normalized uint8 image, value string, image_id)."""
+    Returns list of (normalized uint8 image, value string, image_id).
+
+    focus_color: see _color_aware_gray -- narrows the color-contrast
+    boost to one hue, for badges on reflective surfaces where glare
+    fringing in other colors would otherwise get treated as text too."""
     crops = []
     total = len(img_rows)
     for idx, img_row in enumerate(img_rows):
@@ -103,7 +107,7 @@ def _line_crops_for_project(img_rows, anns_by_image, progress=None):
         if img is None:
             continue
         ih, iw = img.shape[:2]
-        gray_full = _color_aware_gray(img)
+        gray_full = _color_aware_gray(img, focus_color=focus_color)
         anns = anns_by_image.get(img_row["id"], [])
 
         direct = _direct_value_bbox(anns)
@@ -268,10 +272,17 @@ def train_value_model(
     learning_rate: float = 1e-3,
     val_ratio: float = 0.2,
     synthetic_per_class: int = 150,
+    focus_color: str = None,
 ):
     """Train the whole-value classifier and export ocr_value.tflite +
     value_labels.txt. Classes = the distinct line texts actually labeled
-    in this project (e.g. "4", "6", "10", "11")."""
+    in this project (e.g. "4", "6", "10", "11").
+
+    focus_color (e.g. "red"): set this when badges sit on a reflective
+    surface whose glare carries its own color fringing, which the
+    default hue-agnostic color boost would otherwise mistake for text.
+    Saved into value_meta.json so inference (ocr.py::_predict_with_value)
+    picks up the same setting automatically -- nothing to pass per call."""
     import tensorflow as tf
     from ..connectors.statedb_connector import StateDBConnector
 
@@ -301,7 +312,7 @@ def train_value_model(
         except Exception:
             pass
 
-    crops = _line_crops_for_project(img_rows, anns_by_image, progress)
+    crops = _line_crops_for_project(img_rows, anns_by_image, progress, focus_color=focus_color)
     by_value = defaultdict(list)
     for im, text, img_id in crops:
         by_value[text].append((im, img_id))
@@ -464,6 +475,7 @@ def train_value_model(
         "synthetic_lines_made": made_synthetic,
         "epochs_run": len(epoch_hist),
         "low_data_classes": low_data_classes,
+        "focus_color": focus_color,
     }
     (out_dir / "value_meta.json").write_text(json.dumps(meta, indent=2))
 

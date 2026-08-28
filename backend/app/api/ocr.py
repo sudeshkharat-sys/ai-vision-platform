@@ -155,6 +155,12 @@ class TrainValueRequest(BaseModel):
     learning_rate: float = 1e-3
     val_ratio: float = 0.2
     synthetic_per_class: int = 150
+    # Narrow the color-contrast boost to one hue (e.g. "red") -- set this
+    # when badges sit on a reflective surface whose glare carries its own
+    # color fringing, which would otherwise get boosted right alongside
+    # the actual text. Left None, any saturated color counts (works for
+    # non-reflective badges of any ink color, no per-project setup).
+    focus_color: Optional[str] = None
 
 
 @router.post("/train-value/{project_id}")
@@ -178,7 +184,7 @@ async def start_value_training(
         project_id, epochs=req.epochs, augment_copies=req.augment_copies,
         hard_image_ids=req.hard_image_ids, batch_size=req.batch_size,
         learning_rate=req.learning_rate, val_ratio=req.val_ratio,
-        synthetic_per_class=req.synthetic_per_class,
+        synthetic_per_class=req.synthetic_per_class, focus_color=req.focus_color,
     )
     return {"task_id": task.id, "status": "queued"}
 
@@ -1459,12 +1465,23 @@ def _load_value_model(project_id: str):
     mtime = keras_path.stat().st_mtime
     cached = _VALUE_CACHE.get(project_id)
     if cached and cached[0] == mtime:
-        return cached[1], cached[2]
+        return cached[1], cached[2], cached[3]
     import tensorflow as tf
     model = tf.keras.models.load_model(str(keras_path))
     labels = (value_dir / "value_labels.txt").read_text().split()
-    _VALUE_CACHE[project_id] = (mtime, model, labels)
-    return model, labels
+    # focus_color travels with the trained model (set at train time,
+    # saved to value_meta.json) rather than being passed per-predict-call
+    # -- inference always matches whatever the model was actually
+    # trained on, with nothing for a caller to remember to pass.
+    focus_color = None
+    meta_path = value_dir / "value_meta.json"
+    if meta_path.exists():
+        try:
+            focus_color = json.loads(meta_path.read_text()).get("focus_color")
+        except Exception:
+            pass
+    _VALUE_CACHE[project_id] = (mtime, model, labels, focus_color)
+    return model, labels, focus_color
 
 
 def _predict_with_value(project_id: str, img: np.ndarray, gray: np.ndarray):
@@ -1485,8 +1502,8 @@ def _predict_with_value(project_id: str, img: np.ndarray, gray: np.ndarray):
     value_training._plate_region_bbox) so train/infer crops match."""
     from ..tasks.crnn_training import _normalize_line, _color_aware_gray
 
-    model, labels = _load_value_model(project_id)
-    gray = _color_aware_gray(img)
+    model, labels, focus_color = _load_value_model(project_id)
+    gray = _color_aware_gray(img, focus_color=focus_color)
 
     plate_first = _yolo_plate_region(project_id, img)
     line_regions = []
