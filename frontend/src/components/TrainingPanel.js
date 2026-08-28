@@ -204,6 +204,7 @@ const TrainingPanel = ({ project, onClose }) => {
     const [augScale, setAugScale]       = useState(0.4);
     const [augMixup, setAugMixup]       = useState(0.0);
     const [augCopyPaste, setAugCopyPaste] = useState(0.05);
+    const [classAgnostic, setClassAgnostic] = useState(false);
     const [showAugSettings, setShowAugSettings] = useState(false);
     const [clahePreview, setClahePreview] = useState(null);   // { original, enhanced, filename }
     const [previewLoading, setPreviewLoading] = useState(false);
@@ -515,6 +516,7 @@ const TrainingPanel = ({ project, onClose }) => {
                 aug_hsv_v: next.augHsvV, aug_hsv_h: next.augHsvH, aug_hsv_s: next.augHsvS,
                 aug_degrees: next.augDegrees, aug_translate: next.augTranslate, aug_scale: next.augScale,
                 aug_mixup: next.augMixup, aug_copy_paste: next.augCopyPaste,
+                class_agnostic: next.classAgnostic,
                 ...(next.customWeights ? { custom_weights: next.customWeights } : {}),
             });
             const taskId = res.data.task_id;
@@ -579,7 +581,7 @@ const TrainingPanel = ({ project, onClose }) => {
                 logs: ['📋  Job queued — waiting for a free slot…'],
                 epochMeta: null, result: null, error: null, startedAt: new Date(),
             };
-            queueRef.current.push({ jobId: placeholder.id, projectId: project.id, modelName: activeModelName, epochs, preprocess, imgsz, batch, customWeights: modelSource === 'upload' ? selectedWeight : null, augFliplr, augFlipud, augMosaic, augHsvV, augHsvH, augHsvS, augDegrees, augTranslate, augScale, augMixup, augCopyPaste });
+            queueRef.current.push({ jobId: placeholder.id, projectId: project.id, modelName: activeModelName, epochs, preprocess, imgsz, batch, customWeights: modelSource === 'upload' ? selectedWeight : null, augFliplr, augFlipud, augMosaic, augHsvV, augHsvH, augHsvS, augDegrees, augTranslate, augScale, augMixup, augCopyPaste, classAgnostic });
             setJobs(prev => [...prev, placeholder]);
             setActiveJobId(placeholder.id);
             setLaunching(false);
@@ -595,6 +597,7 @@ const TrainingPanel = ({ project, onClose }) => {
                 aug_hsv_v: augHsvV, aug_hsv_h: augHsvH, aug_hsv_s: augHsvS,
                 aug_degrees: augDegrees, aug_translate: augTranslate, aug_scale: augScale,
                 aug_mixup: augMixup, aug_copy_paste: augCopyPaste,
+                class_agnostic: classAgnostic,
                 ...(modelSource === 'upload' && selectedWeight ? { custom_weights: selectedWeight } : {}),
             });
             const taskId = res.data.task_id;
@@ -987,6 +990,17 @@ const TrainingPanel = ({ project, onClose }) => {
                                                 <span style={{ fontSize: 12, color: '#555' }}>Brightness (hsv_v): <strong>{augHsvV}</strong> <span title="Makes images brighter or darker during training. Raise this if your part has reflections or glare." style={{ cursor: 'help', color: '#aaa', fontSize: 11 }}>ⓘ</span></span>
                                                 <input type="range" min={0.0} max={0.6} step={0.05} value={augHsvV} onChange={e => setAugHsvV(parseFloat(e.target.value))} style={{ width: '100%', marginTop: 4 }} />
                                                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: '#999' }}><span>0.0 (off)</span><span>0.4 (default)</span><span>0.6 (max)</span></div>
+                                            </div>
+
+                                            {/* ── Detector mode ── */}
+                                            <p style={{ fontSize: 11, fontWeight: 600, color: '#888', margin: '0 0 8px', textTransform: 'uppercase', letterSpacing: 0.5 }}>Detector mode</p>
+                                            <div style={{ marginBottom: 14 }}>
+                                                <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#555', cursor: 'pointer' }}>
+                                                    <input type="checkbox" checked={classAgnostic}
+                                                        onChange={e => setClassAgnostic(e.target.checked)} />
+                                                    Class-agnostic (box-only) detector
+                                                    <span title="Trains a SEPARATE detector (seed_char_only_best.pt) that only finds character boxes, without trying to identify WHICH character each one is. On tightly-spaced or touching engraved characters, this tends to find tighter/more complete boxes than the normal per-character detector, because it only has one job instead of two. Character identity still comes from the CRNN/value classifier/CNN reading the boxes it finds. Does not replace or overwrite your normal seed_best.pt." style={{ cursor: 'help', color: '#aaa', fontSize: 11 }}>ⓘ</span>
+                                                </label>
                                             </div>
 
                                             {/* ── Geometry ── */}
