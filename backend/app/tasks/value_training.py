@@ -42,6 +42,9 @@ import numpy as np
 import redis as redis_lib
 
 
+_REGION_CLASS_NAMES = {"plate", "badge", "region", "serial", "serial_region"}
+
+
 def _plate_region_bbox(anns, iw, ih):
     """Pixel (x1,y1,x2,y2) of this image's "plate"/region annotation (a
     multi-character label like "plate" or "badge"), or None. A box drawn
@@ -53,12 +56,34 @@ def _plate_region_bbox(anns, iw, ih):
     "wider crop" as a proxy for "more digits" and get fooled by it."""
     for ann in anns:
         name = str(ann.get("class_name", "")).strip().lower()
-        if name in ("plate", "badge", "region", "serial", "serial_region") and ann.get("bbox"):
+        if name in _REGION_CLASS_NAMES and ann.get("bbox"):
             xc, yc, w, h = ann["bbox"]
             x1, y1 = (xc - w / 2) * iw, (yc - h / 2) * ih
             x2, y2 = (xc + w / 2) * iw, (yc + h / 2) * ih
             if x2 - x1 >= 4 and y2 - y1 >= 4:
                 return x1, y1, x2, y2
+    return None
+
+
+def _direct_value_bbox(anns):
+    """A single box drawn around the WHOLE badge and labeled with the
+    value itself ("10", "11", "4", "6" -- not a single character) --
+    the simpler alternative to per-character boxes + a region box.
+    _anns_to_chars silently drops any annotation whose label isn't
+    exactly one character (it assumes multi-char labels are region boxes
+    like "plate"), so without this, an image annotated only this way
+    contributes ZERO training crops -- not an error, just silently
+    skipped. Returns (bbox, text) for the first such annotation found, or
+    None. Region-class names (plate/badge/region/...) are excluded even
+    though they're also multi-character, since those mark an AREA, not a
+    value to classify."""
+    for ann in anns:
+        if not ann.get("bbox"):
+            continue
+        label = str(ann["class_name"]).strip().upper()
+        if len(label) <= 1 or label.lower() in _REGION_CLASS_NAMES:
+            continue
+        return ann["bbox"], label
     return None
 
 
@@ -80,6 +105,18 @@ def _line_crops_for_project(img_rows, anns_by_image, progress=None):
         ih, iw = img.shape[:2]
         gray_full = _color_aware_gray(img)
         anns = anns_by_image.get(img_row["id"], [])
+
+        direct = _direct_value_bbox(anns)
+        if direct is not None:
+            (xc, yc, w, h), text = direct
+            x1, y1 = max(0, int((xc - w / 2) * iw)), max(0, int((yc - h / 2) * ih))
+            x2, y2 = min(iw, int((xc + w / 2) * iw)), min(ih, int((yc + h / 2) * ih))
+            if x2 - x1 >= 4 and y2 - y1 >= 4:
+                crops.append((_normalize_line(gray_full[y1:y2, x1:x2]), text, img_row["id"]))
+            if progress and ((idx + 1) % 5 == 0 or idx + 1 == total):
+                progress(idx + 1, total, len(crops))
+            continue
+
         chars = _anns_to_chars(anns, iw, ih)
         if not chars:
             continue
