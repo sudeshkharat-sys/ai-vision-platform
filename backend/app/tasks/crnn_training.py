@@ -80,36 +80,40 @@ def _looks_dotpeen(g: np.ndarray) -> bool:
 
 
 def _color_aware_gray(img_bgr: np.ndarray) -> np.ndarray:
-    """Grayscale conversion that keeps strongly-colored text (e.g. red
-    digits on a silver/chrome badge) visible instead of blending it into
-    the metal background's mid-gray value.
+    """Grayscale conversion that keeps strongly-colored text (red, blue,
+    yellow, any ink/paint color -- not just red) visible instead of
+    blending it into a metal/painted background's similar gray level.
 
-    Plain BGR2GRAY weights R/G/B roughly equally, so a saturated red "4"
-    on brushed steel can land at nearly the same gray level as the metal
-    around it -- the digit all but disappears before the classifier ever
-    sees it. This instead measures per-pixel colorfulness (HSV
-    saturation) and, only where a pixel is clearly colored (paint/ink,
-    not glare/metal), swaps in the color-channel contrast (how far red
-    exceeds green/blue) stretched to the full 0-255 range, so the glyph
-    stays high-contrast against a low-saturation background. Neutral
-    pixels keep ordinary grayscale, so this never makes an
-    already-neutral (dot-peen, embossed, black-on-white) crop worse."""
+    Plain BGR2GRAY weights R/G/B roughly equally, so a saturated colored
+    "4" can land at nearly the same gray level as the metal around it --
+    the digit all but disappears before the classifier ever sees it.
+    This instead measures per-pixel colorfulness two ways -- HSV
+    saturation (how "colored" vs. neutral a pixel is) and chroma
+    (max channel minus min channel, which is large for ANY strong hue,
+    not just red) -- and, only where a pixel is clearly colored
+    (paint/ink, not glare/metal), swaps in the chroma value stretched to
+    the full 0-255 range, so the glyph stays high-contrast against a
+    low-saturation background regardless of what color the text is.
+    Neutral pixels keep ordinary grayscale, so this never makes an
+    already-neutral (dot-peen, embossed, black-on-white) crop worse, and
+    there's nothing project-specific to configure -- it adapts to
+    whatever ink color is in each photo automatically."""
     gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY).astype(np.float32)
     if img_bgr.ndim != 3 or img_bgr.shape[2] != 3:
         return gray.astype(np.uint8)
 
-    b, g, r = cv2.split(img_bgr.astype(np.float32))
     hsv = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2HSV)
     sat = hsv[..., 1].astype(np.float32)
 
-    redness = np.clip(r - np.maximum(g, b), 0, 255)
+    b, g, r = cv2.split(img_bgr.astype(np.float32))
+    chroma = np.maximum(np.maximum(r, g), b) - np.minimum(np.minimum(r, g), b)
     colored = sat > 60
 
     out = gray.copy()
     if colored.any():
-        r_min, r_max = float(redness[colored].min()), float(redness[colored].max())
-        if r_max > r_min:
-            stretched = (redness - r_min) / (r_max - r_min) * 255.0
+        c_min, c_max = float(chroma[colored].min()), float(chroma[colored].max())
+        if c_max > c_min:
+            stretched = (chroma - c_min) / (c_max - c_min) * 255.0
             out[colored] = np.clip(stretched[colored], 0, 255)
     return out.astype(np.uint8)
 
