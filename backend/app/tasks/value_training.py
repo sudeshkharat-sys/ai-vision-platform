@@ -128,8 +128,21 @@ def _line_crops_for_project(img_rows, anns_by_image, progress=None, focus_color=
         region = _plate_region_bbox(anns, iw, ih)
         if region is not None:
             rx1, ry1, rx2, ry2 = region
+            # Only characters whose center actually falls INSIDE this
+            # region box belong to its value -- `chars` is every
+            # character annotation in the WHOLE photo, so a photo with
+            # any stray/extra box elsewhere in frame (a second partially
+            # -visible badge, a leftover annotation, digits on another
+            # part of the car) would otherwise get concatenated into
+            # this crop's label too, silently mislabeling a clean "10"
+            # photo as "110" or worse -- corrupting the class the model
+            # is trained on, not just the crop's pixels.
+            in_region = [
+                c for c in chars
+                if rx1 <= (c[1] + c[3]) / 2 <= rx2 and ry1 <= (c[2] + c[4]) / 2 <= ry2
+            ]
             text = "".join(str(c[0]).strip().upper()
-                           for c in sorted(chars, key=lambda c: c[1]))
+                           for c in sorted(in_region, key=lambda c: c[1]))
             if text:
                 x1, y1 = max(0, int(rx1)), max(0, int(ry1))
                 x2, y2 = min(iw, int(rx2)), min(ih, int(ry2))
