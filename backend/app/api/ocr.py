@@ -1326,10 +1326,32 @@ def _trim_weak_edges(emits, probs, min_keep=2):
     return emits[start:end]
 
 
+_FLIP_MARGIN = 0.20  # how much more confident the 180° read must be to win
+_MIN_TRUSTED_CONF = 0.35  # below this, a "confident" read is not trustworthy
+
+
 def _decode_line_both_ways(model, crop, normalize, blank_index, charset, allowed_indices=None):
     """Read a line crop at 0° and 180° and keep the more confident read —
     a serial detected as 'vertical' is upright after one 90° rotation and
-    upside-down after the other, and box geometry can't tell those apart."""
+    upside-down after the other, and box geometry can't tell those apart.
+
+    A CRNN fed a genuinely upside-down crop doesn't refuse to answer — it
+    still emits a full, seemingly-confident string, because CTC models
+    are not calibrated against out-of-distribution input. Symmetric-ish
+    glyphs (8, H, 0, X) look nearly identical either way and don't anchor
+    the comparison, so a small confidence edge for the WRONG orientation
+    is common, not rare -- and once the wrong orientation wins, every
+    character is now upside-down (a 9 reads as 6, order reverses), which
+    produces a fully scrambled string, not a soft misread of one or two
+    characters. Two guards against that:
+      1. The flipped read must beat the unflipped read by a real margin
+         (_FLIP_MARGIN), not just a token 0.05 penalty -- ties and
+         near-ties go to the unflipped read, which is the physically
+         normal orientation for a mounted/photographed plate.
+      2. Whichever read wins, if its confidence never clears
+         _MIN_TRUSTED_CONF the result is flagged low_confidence so a
+         caller can treat it as "uncertain" instead of a wrong answer
+         presented with the same confidence as a correct one."""
     best = None
     for flipped in (False, True):
         c = cv2.rotate(crop, cv2.ROTATE_180) if flipped else crop
@@ -1338,8 +1360,8 @@ def _decode_line_both_ways(model, crop, normalize, blank_index, charset, allowed
         emits = _greedy_decode_steps(probs, blank_index, charset, allowed_indices)
         confs = [float(probs[t, i]) for (_, i, t) in emits]
         conf = sum(confs) / len(confs) if confs else 0.0
-        # prefer the unflipped read unless the flip is clearly better
-        score = conf if not flipped else conf - 0.05
+        # prefer the unflipped read unless the flip is clearly, substantially better
+        score = conf if not flipped else conf - _FLIP_MARGIN
         if best is None or (emits and score > best[0]):
             best = (score, emits, probs, conf)
     _, emits, probs, _ = best
@@ -1635,8 +1657,10 @@ def _predict_with_crnn(project_id: str, img: np.ndarray, gray: np.ndarray,
             else:
                 pattern_applied = True
         text_lines.append(line_text)
-        results.append({"char": line_text, "confidence": conf, "box": [x, y, w, h]})
-        color = (74, 222, 128)
+        low_confidence = conf is None or conf < _MIN_TRUSTED_CONF
+        results.append({"char": line_text, "confidence": conf, "box": [x, y, w, h],
+                         "low_confidence": low_confidence})
+        color = (74, 222, 128) if not low_confidence else (0, 165, 255)
         cv2.rectangle(img, (x, y), (x + w, y + h), color, 2)
         cv2.putText(img, line_text, (x, max(18, y - 6)),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2, cv2.LINE_AA)
@@ -1652,6 +1676,7 @@ def _predict_with_crnn(project_id: str, img: np.ndarray, gray: np.ndarray,
             "pattern_mismatch": pattern_mismatch,
             "lexicon_used": lexicon_used,
             "lexicon_scores": lexicon_scores,
+            "low_confidence": any(r.get("low_confidence") for r in results),
             "restricted_to": sorted(allowed_chars) if allowed_chars else None}
 
 

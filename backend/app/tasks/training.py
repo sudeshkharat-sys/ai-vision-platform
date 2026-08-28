@@ -272,8 +272,34 @@ def _write_split(dataset_path, split_name, split_imgs, anns_by_image, classes,
             for ann in anns_by_image.get(img["id"], []):
                 if ann["bbox"] and ann["class_name"] in classes:
                     cls_idx = classes.index(ann["class_name"])
-                    bbox = ann["bbox"]
+                    bbox = _polygon_tight_bbox(ann) or ann["bbox"]
                     f.write(f"{cls_idx} {bbox[0]} {bbox[1]} {bbox[2]} {bbox[3]}\n")
+
+
+def _polygon_tight_bbox(ann):
+    """When an annotation was traced as a polygon (annotation_type ==
+    'polygon'), return the tight axis-aligned box (xc, yc, w, h) —
+    normalized 0-1, same space as ann["bbox"] — around its own vertices
+    instead of the looser box the tool auto-drew. A tilted/curved
+    character on a beveled engraved edge, traced by hand, sits inside a
+    materially smaller box than its axis-aligned bounding rectangle would
+    otherwise be assigned; on tightly-packed characters that slack is
+    exactly what makes neighboring boxes overlap and confuses row
+    grouping downstream. Returns None (caller falls back to ann["bbox"])
+    when there's no usable polygon, so this only ever tightens a box, it
+    never invents one."""
+    if ann.get("annotation_type") != "polygon":
+        return None
+    points = ann.get("points")
+    if not points or len(points) < 3:
+        return None
+    xs = [p[0] for p in points]
+    ys = [p[1] for p in points]
+    x1, x2 = min(xs), max(xs)
+    y1, y2 = min(ys), max(ys)
+    if x2 <= x1 or y2 <= y1:
+        return None
+    return [(x1 + x2) / 2, (y1 + y2) / 2, x2 - x1, y2 - y1]
 
 
 def _oversample_rare_images(train_imgs, anns_by_image, classes, max_dup=6):
