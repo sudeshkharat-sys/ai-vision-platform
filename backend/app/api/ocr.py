@@ -385,23 +385,13 @@ def _sort_boxes_reading_order(boxes):
 PLATE_CLASS_NAME = "PLATE"  # region box that marks the whole plate/text area
 
 
-def _yolo_predict_raw(project_id: str, img: np.ndarray, conf: float):
-    """
-    Load (and cache) the project's trained YOLO model and run inference.
-    Returns the raw ultralytics results, or None if the project has no
-    trained detection model. Shared by _yolo_char_boxes and
-    _yolo_plate_region so both read from the one model + one forward
-    pass' worth of caching logic.
-
-    Prefers main_best.pt over seed_best.pt (see services/det_model.py) so
-    auto-annotate keeps improving as the project moves past its seed batch,
-    the same main->seed preference the rest of the pipeline uses.
-    """
-    from ..services.det_model import resolve_det_model_path, det_model_uses_preprocess
-
-    model_path = resolve_det_model_path(project_id)
-    if model_path is None:
-        return None
+def _yolo_predict_from_path(model_path, project_id: str, img: np.ndarray, conf: float):
+    """Load (and cache) the YOLO weights at model_path and run inference.
+    Shared by _yolo_predict_raw and _yolo_predict_raw_char_only so both
+    read from the one caching/preprocessing-match logic, keyed by the
+    actual weights file so two different detectors for the same project
+    (per-character vs class-agnostic) each get their own cache entry."""
+    from ..services.det_model import det_model_uses_preprocess
 
     mtime = model_path.stat().st_mtime
     cache_key = (project_id, model_path.name)
@@ -424,6 +414,39 @@ def _yolo_predict_raw(project_id: str, img: np.ndarray, conf: float):
         img = clahe_gamma_sharpen(img)
 
     return model.predict(img, conf=conf, verbose=False)
+
+
+def _yolo_predict_raw(project_id: str, img: np.ndarray, conf: float):
+    """
+    Load (and cache) the project's trained YOLO model and run inference.
+    Returns the raw ultralytics results, or None if the project has no
+    trained detection model. Shared by _yolo_char_boxes and
+    _yolo_plate_region so both read from the one model + one forward
+    pass' worth of caching logic.
+
+    Prefers main_best.pt over seed_best.pt (see services/det_model.py) so
+    auto-annotate keeps improving as the project moves past its seed batch,
+    the same main->seed preference the rest of the pipeline uses.
+    """
+    from ..services.det_model import resolve_det_model_path
+
+    model_path = resolve_det_model_path(project_id)
+    if model_path is None:
+        return None
+    return _yolo_predict_from_path(model_path, project_id, img, conf)
+
+
+def _yolo_predict_raw_char_only(project_id: str, img: np.ndarray, conf: float):
+    """Same as _yolo_predict_raw but for the class-agnostic localization-
+    only detector (seed_char_only_best.pt), if one has been trained.
+    Returns None when the project has no such model — callers fall back
+    to the per-character detector's own boxes."""
+    from ..services.det_model import resolve_char_only_det_model_path
+
+    model_path = resolve_char_only_det_model_path(project_id)
+    if model_path is None:
+        return None
+    return _yolo_predict_from_path(model_path, project_id, img, conf)
 
 
 def _yolo_char_boxes_labeled(project_id: str, img: np.ndarray, conf: float = 0.25):
@@ -499,10 +522,61 @@ def _dedupe_cross_class_boxes(boxes, iou_thresh: float = 0.4):
     return kept
 
 
+def _yolo_char_only_boxes(project_id: str, img: np.ndarray, conf: float = 0.25):
+    """Boxes from the class-agnostic localization-only detector
+    (seed_char_only_best.pt), if the project has trained one — (x, y, w,
+    h) in reading order, no label (every box is the generic "char"
+    class, so there's no identity to carry). Returns None when no such
+    model exists yet."""
+    results = _yolo_predict_raw_char_only(project_id, img, conf)
+    if results is None:
+        return None
+    boxes = []
+    for r in results:
+        for b in r.boxes:
+            x1, y1, x2, y2 = (float(v) for v in b.xyxy[0])
+            w, h = x2 - x1, y2 - y1
+            if w < 2 or h < 2:
+                continue
+            boxes.append((int(x1), int(y1), int(round(w)), int(round(h)), float(b.conf[0])))
+    if not boxes:
+        return None
+    # Same overlap cleanup as the labeled path, minus the class check
+    # (there's only one class here, so any heavy overlap is a duplicate).
+    kept = []
+    for b in sorted(boxes, key=lambda b: -b[4]):
+        def iou(a, c):
+            ax1, ay1, ax2, ay2 = a[0], a[1], a[0] + a[2], a[1] + a[3]
+            cx1, cy1, cx2, cy2 = c[0], c[1], c[0] + c[2], c[1] + c[3]
+            ix1, iy1 = max(ax1, cx1), max(ay1, cy1)
+            ix2, iy2 = min(ax2, cx2), min(ay2, cy2)
+            iw, ih = max(0, ix2 - ix1), max(0, iy2 - iy1)
+            inter = iw * ih
+            if inter <= 0:
+                return 0.0
+            union = a[2] * a[3] + c[2] * c[3] - inter
+            return inter / union if union > 0 else 0.0
+        if all(iou(b, k) < 0.4 for k in kept):
+            kept.append(b)
+    return _sort_boxes_reading_order([(x, y, w, h) for x, y, w, h, _c in kept])
+
+
 def _yolo_char_boxes(project_id: str, img: np.ndarray, conf: float = 0.25):
-    """Geometry-only view of :func:`_yolo_char_boxes_labeled` — (x, y, w, h)
-    pixel boxes in reading order, for callers that classify the crops
-    themselves rather than using the detector's own labels."""
+    """Geometry-only character boxes in reading order, for callers (CRNN,
+    value classifier) that only need WHERE the characters are, not the
+    detector's own guess at WHICH character each is.
+
+    Prefers the class-agnostic localization-only detector when the
+    project has trained one — a detector that only has to find character
+    strokes, not discriminate 36 classes, tends to produce tighter and
+    more complete boxes on tightly-packed/touching text (the exact
+    failure mode that causes garbled reads on engraved plates). Falls
+    back to the per-character detector's own boxes when no class-
+    agnostic model exists yet, so this is a strict improvement, never a
+    regression, for a project that hasn't trained one."""
+    char_only = _yolo_char_only_boxes(project_id, img, conf)
+    if char_only is not None:
+        return char_only
     labeled = _yolo_char_boxes_labeled(project_id, img, conf)
     if labeled is None:
         return None

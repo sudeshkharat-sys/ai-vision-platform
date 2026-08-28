@@ -24,6 +24,7 @@ from ..config import settings
 _META_FOR = {
     "main_best.pt": "main_meta.json",
     "seed_best.pt": "seed_meta.json",
+    "seed_char_only_best.pt": "seed_char_only_meta.json",
 }
 
 
@@ -34,6 +35,16 @@ def resolve_det_model_path(project_id: str) -> Path | None:
         if path.exists():
             return path
     return None
+
+
+def resolve_char_only_det_model_path(project_id: str) -> Path | None:
+    """The class-agnostic localization-only detector (train_seed_model
+    with class_agnostic=True), if one has been trained for this project.
+    Its boxes carry no character identity (every box is class "char") --
+    only use it where a caller needs geometry, never where it needs the
+    detector's own label (auto-annotate)."""
+    path = settings.model_dir.resolve() / project_id / "seed_char_only_best.pt"
+    return path if path.exists() else None
 
 
 def det_model_uses_preprocess(model_path: Path) -> bool:
