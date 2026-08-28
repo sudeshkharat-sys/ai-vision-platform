@@ -196,8 +196,12 @@ async def get_ocr_dataset_stats(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Per-character counts for the OCR dataset (single-character labels only),
-    so the UI can show class balance before training.
+    Per-class counts for the OCR dataset -- single characters (0-9, A-Z)
+    AND whole-value labels (a badge annotated as one box labeled "10"),
+    so the UI can show class balance before training regardless of which
+    annotation style was used. Region/area markers (plate/badge/region/
+    serial/serial_region) are excluded -- those describe an AREA, not a
+    class the model is meant to predict.
     """
     await get_owned_project(project_id, current_user, db)
 
@@ -213,10 +217,11 @@ async def get_ocr_dataset_stats(
         .where(Annotation.image_id.in_(image_ids))
         .group_by(Annotation.class_name)
     )
+    _region_names = {"PLATE", "BADGE", "REGION", "SERIAL", "SERIAL_REGION"}
     char_counts = {}
     for name, count in ann_q.fetchall():
         label = str(name).strip().upper()
-        if len(label) == 1:
+        if label and label not in _region_names:
             char_counts[label] = char_counts.get(label, 0) + count
 
     return {
