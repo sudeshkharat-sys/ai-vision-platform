@@ -128,6 +128,7 @@ class TrainSeedRequest(BaseModel):
     aug_scale: float = 0.4
     aug_mixup: float = 0.0
     aug_copy_paste: float = 0.05
+    class_agnostic: bool = False
 
 
 @router.post("/train-seed/{project_id}")
@@ -143,7 +144,7 @@ async def start_seed_training(
         project_id, req.model_name, req.epochs, req.imgsz, req.preprocess, req.batch,
         req.custom_weights, req.aug_fliplr, req.aug_flipud, req.aug_mosaic, req.aug_hsv_v,
         req.aug_hsv_h, req.aug_hsv_s, req.aug_degrees, req.aug_translate,
-        req.aug_scale, req.aug_mixup, req.aug_copy_paste,
+        req.aug_scale, req.aug_mixup, req.aug_copy_paste, req.class_agnostic,
     )
     return {"task_id": task.id, "status": "queued"}
 
