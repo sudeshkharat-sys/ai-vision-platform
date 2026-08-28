@@ -26,7 +26,7 @@ from .training import _fetch_training_data, _group_annotations, _safe_float
 from .tesseract_training import _anns_to_chars, _group_chars_into_lines
 from .crnn_training import (
     IMG_H, IMG_W, LINE_PAD_W_FRAC, LINE_PAD_H_PX,
-    _normalize_line, _augment_line, _estimate_text_angle,
+    _normalize_line, _augment_line, _estimate_text_angle, _color_aware_gray,
 )
 from ..config import settings
 
@@ -78,7 +78,7 @@ def _line_crops_for_project(img_rows, anns_by_image, progress=None):
         if img is None:
             continue
         ih, iw = img.shape[:2]
-        gray_full = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        gray_full = _color_aware_gray(img)
         anns = anns_by_image.get(img_row["id"], [])
         chars = _anns_to_chars(anns, iw, ih)
         if not chars:

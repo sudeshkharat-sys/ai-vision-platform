@@ -79,6 +79,41 @@ def _looks_dotpeen(g: np.ndarray) -> bool:
     return small.mean() > 0.6 and areas[small].sum() > areas.sum() * 0.5
 
 
+def _color_aware_gray(img_bgr: np.ndarray) -> np.ndarray:
+    """Grayscale conversion that keeps strongly-colored text (e.g. red
+    digits on a silver/chrome badge) visible instead of blending it into
+    the metal background's mid-gray value.
+
+    Plain BGR2GRAY weights R/G/B roughly equally, so a saturated red "4"
+    on brushed steel can land at nearly the same gray level as the metal
+    around it -- the digit all but disappears before the classifier ever
+    sees it. This instead measures per-pixel colorfulness (HSV
+    saturation) and, only where a pixel is clearly colored (paint/ink,
+    not glare/metal), swaps in the color-channel contrast (how far red
+    exceeds green/blue) stretched to the full 0-255 range, so the glyph
+    stays high-contrast against a low-saturation background. Neutral
+    pixels keep ordinary grayscale, so this never makes an
+    already-neutral (dot-peen, embossed, black-on-white) crop worse."""
+    gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY).astype(np.float32)
+    if img_bgr.ndim != 3 or img_bgr.shape[2] != 3:
+        return gray.astype(np.uint8)
+
+    b, g, r = cv2.split(img_bgr.astype(np.float32))
+    hsv = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2HSV)
+    sat = hsv[..., 1].astype(np.float32)
+
+    redness = np.clip(r - np.maximum(g, b), 0, 255)
+    colored = sat > 60
+
+    out = gray.copy()
+    if colored.any():
+        r_min, r_max = float(redness[colored].min()), float(redness[colored].max())
+        if r_max > r_min:
+            stretched = (redness - r_min) / (r_max - r_min) * 255.0
+            out[colored] = np.clip(stretched[colored], 0, 255)
+    return out.astype(np.uint8)
+
+
 def _normalize_line(gray: np.ndarray) -> np.ndarray:
     """Contrast-enhance and letterbox a line crop into a fixed IMG_H x IMG_W
     grayscale canvas (dark text on light background, aspect preserved).

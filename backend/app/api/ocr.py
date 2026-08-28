@@ -1387,9 +1387,10 @@ def _predict_with_value(project_id: str, img: np.ndarray, gray: np.ndarray):
     stray glare box widened the row; "6"->"11" when detection split one
     glyph into two boxes). Training uses the same region source (see
     value_training._plate_region_bbox) so train/infer crops match."""
-    from ..tasks.crnn_training import _normalize_line
+    from ..tasks.crnn_training import _normalize_line, _color_aware_gray
 
     model, labels = _load_value_model(project_id)
+    gray = _color_aware_gray(img)
 
     plate_first = _yolo_plate_region(project_id, img)
     line_regions = []
