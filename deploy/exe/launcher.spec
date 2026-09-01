@@ -39,6 +39,40 @@ if _platstdlib_dir and os.path.isdir(_platstdlib_dir) and _platstdlib_dir != _st
 binaries  = []
 hiddenimports = []
 
+# ---------------------------------------------------------------------------
+# OpenSSL DLL fix — some bundled packages (e.g. cryptography, pulled in via
+# celery/redis) ship their own copy of libssl-3.dll / libcrypto-3.dll. When
+# PyInstaller's dependency collection picks up both copies, whichever one
+# lands in the TOC first wins the shared filename, and if it's the wrong
+# (mismatched) build the interpreter's own _ssl.pyd fails at runtime with
+# "DLL load failed while importing _ssl: The specified procedure could not
+# be found." Force the *interpreter's own* OpenSSL DLLs to the front of the
+# binaries list so they always win the name collision, regardless of what
+# any other collected package also ships under the same filename.
+# ---------------------------------------------------------------------------
+_conda_prefix = Path(sys.base_prefix)
+_ssl_dll_dirs = [_conda_prefix / "DLLs", _conda_prefix / "Library" / "bin", _conda_prefix]
+_ssl_dll_names = [
+    "libssl-3.dll", "libcrypto-3.dll",
+    "libssl-3-x64.dll", "libcrypto-3-x64.dll",
+    "libssl-1_1.dll", "libcrypto-1_1.dll",
+    "libssl-1_1-x64.dll", "libcrypto-1_1-x64.dll",
+]
+_seen_ssl_dlls = set()
+for _dll_name in _ssl_dll_names:
+    if _dll_name in _seen_ssl_dlls:
+        continue
+    for _dll_dir in _ssl_dll_dirs:
+        _dll_path = _dll_dir / _dll_name
+        if _dll_path.exists():
+            binaries.insert(0, (str(_dll_path), "."))
+            _seen_ssl_dlls.add(_dll_name)
+            break
+if not _seen_ssl_dlls:
+    print("WARNING: Could not locate the interpreter's own OpenSSL DLLs "
+          "(libssl/libcrypto) under the Python prefix — the built EXE may "
+          "hit 'DLL load failed while importing _ssl' at runtime.")
+
 # Explicitly collect all encodings submodules (Conda stdlib fix)
 hiddenimports += collect_submodules("encodings")
 
