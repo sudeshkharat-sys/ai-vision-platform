@@ -1,1 +1,162 @@
-QGVjaG8gb2ZmCnNldGxvY2FsIEVuYWJsZURlbGF5ZWRFeHBhbnNpb24KCmVjaG8gPT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PQplY2hvICBBSSBWaXNpb24gUGxhdGZvcm0gLSBXaW5kb3dzIEVYRSBCdWlsZCBTY3JpcHQKZWNobyA9PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09CgotOiBSZXNvbHZlIHJlcG8gcm9vdCAodHdvIGxldmVscyB1cCBmcm9tIGRlcGxveVxleGUpCnNldCAiREVQTE9ZX0RJUj0lfmRwMCIKcHVzaGQgIiV+ZHAwLi5cLi4iCnNldCAiUkVQT19ST09UPSVDRCUiCnBvcGQKCmVjaG8gW0RFQlVHXSBERVBMT1lfRElSID0gJURFUExPWV9ESVIlCmVjaG8gW0RFQlVHXSBSRVBPX1JPT1QgID0gJVJFUE9fUk9PVCUKCjo6IC0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0KOjogU3RlcCAxIC0gQ2hlY2sgUHl0aG9uCjo6IC0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0KZWNobyAuCmVjaG8gWzEvNl0gQ2hlY2tpbmcgUHl0aG9uLi4uCnB5dGhvbiAtLXZlcnNpb24gPm51bCAyPiYxCmlmIGVycm9ybGV2ZWwgMSAoCiAgICBlY2hvIFtFUlJPUl0gUHl0aG9uIG5vdCBmb3VuZC4gSW5zdGFsbCBQeXRob24gMy4xMSBmcm9tIGh0dHBzOi8vd3d3LnB5dGhvbi5vcmcvZG93bmxvYWRzLwogICAgZXhpdCAvYiAxCikKcHl0aG9uIC0tdmVyc2lvbgoKOjogLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLQo6OiBTdGVwIDIgLSBDaGVjayBOb2RlCjo6IC0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0KZWNobyAuCmVjaG8gWzIvNl0gQ2hlY2tpbmcgTm9kZS5qcyAvIG5wbS4uLgpub2RlIC0tdmVyc2lvbiA+bnVsIDI+JjEKaWYgZXJyb3JsZXZlbCAxICgKICAgIGVjaG8gW0VSUk9SXSBOb2RlLmpzIG5vdCBmb3VuZC4gSW5zdGFsbCBmcm9tIGh0dHBzOi8vbm9kZWpzLm9yZy8KICAgIGV4aXQgL2IgMQopCm5vZGUgLS12ZXJzaW9uCmNhbGwgbnBtIC0tdmVyc2lvbgoKOjogLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLQo6OiBTdGVwIDMgLSBCdWlsZCBSZWFjdCBmcm9udGVuZAo6OiAtLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tCmVjaG8gLgplY2hvIFszLzZdIEJ1aWxkaW5nIFJlYWN0IGZyb250ZW5kLi4uCmNkIC9kICIlUkVQT19ST09UJVxmcm9udGVuZCIKCmlmIG5vdCBleGlzdCBub2RlX21vZHVsZXMgKAogICAgZWNobyAgICAgIEluc3RhbGxpbmcgbnBtIHBhY2thZ2VzLi4uCiAgICBjYWxsIG5wbSBpbnN0YWxsIC0tbGVnYWN5LXBlZXItZGVwcwogICAgaWYgZXJyb3JsZXZlbCAxICggZWNobyBbRVJST1JdIG5wbSBpbnN0YWxsIGZhaWxlZC4gJiBleGl0IC9iIDEgKQopCgpzZXQgUkVBQ1RfQVBQX0FQSV9VUkw9aHR0cDovL2xvY2FsaG9zdDo4MDAwL2FwaS92MQpzZXQgUkVBQ1RfQVBQX0JBU0VfVVJMPWh0dHA6Ly9sb2NhbGhvc3Q6ODAwMApjYWxsIG5wbSBydW4gYnVpbGQKaWYgZXJyb3JsZXZlbCAxICggZWNobyBbRVJST1JdIFJlYWN0IGJ1aWxkIGZhaWxlZC4gJiBleGl0IC9iIDEgKQplY2hvICAgICAgRnJvbnRlbmQgYnVpbHQgc3VjY2Vzc2Z1bGx5LgoKOjogLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLQo6OiBTdGVwIDQgLSBJbnN0YWxsIFB5dGhvbiBidWlsZCBkZXBlbmRlbmNpZXMKOjogLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLQplY2hvIC4KZWNobyBbNC82XSBJbnN0YWxsaW5nIFB5dGhvbiBidWlsZCBkZXBlbmRlbmNpZXMuLi4KY2QgL2QgIiVSRVBPX1JPT1QlIgpwaXAgaW5zdGFsbCBweWluc3RhbGxlciBeCiAgICBmYXN0YXBpIHV2aWNvcm5bc3RhbmRhcmRdIHNxbGFsY2hlbXlbYXN5bmNpb10gYXN5bmNwZyBwc3ljb3BnMi1iaW5hcnkgXgogICAgY2VsZXJ5W3JlZGlzXSByZWRpcyB0cmFuc2Zvcm1lcnMgc2VudGVuY2VwaWVjZSBwcm90b2J1ZiB1bHRyYWx5dGljcyBeCiAgICBQaWxsb3cgc3VwZXJ2aXNpb24gb3BlbmN2LXB5dGhvbi1oZWFkbGVzcyBweWFtbCBweXRob24tZG90ZW52IF4KICAgIHB5ZGFudGljIHB5ZGFudGljLXNldHRpbmdzIHBhc3NsaWJbYmNyeXB0XSBweXRob24tam9zZVtjcnlwdG9ncmFwaHldIF4KICAgIHB5dGhvbi1tdWx0aXBhcnQgd2Vic29ja2V0cyBsb2d1cnUKaWYgZXJyb3JsZXZlbCAxICggZWNobyBbRVJST1JdIHBpcCBpbnN0YWxsIGZhaWxlZC4gJiBleGl0IC9iIDEgKQoKOjogLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLQo6OiBTdGVwIDUgLSBDaGVjayBmb3IgcG9ydGFibGUgYmluYXJpZXMKOjogLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLQplY2hvIC4KZWNobyBbNS82XSBDaGVja2luZyBwb3J0YWJsZSBzZXJ2aWNlIGJpbmFyaWVzLi4uCgo6OiBBbHdheXMgY2QgYmFjayB0byBERVBMT1lfRElSIGJlZm9yZSBmaWxlIGNoZWNrcyBzbyByZWxhdGl2ZSBsb2dpYyBpcyBjb3JyZWN0CmNkIC9kICIlREVQTE9ZX0RJUiUiCgppZiBleGlzdCAicmVzb3VyY2VzXHBvc3RncmVzXGJpblxwZ19jdGwuZXhlIiAoCiAgICBlY2hvICAgICAgUG9zdGdyZVNRTCBiaW5hcmllcyBmb3VuZC4KKSBlbHNlICgKICAgIGVjaG8gLgogICAgZWNobyBbV0FSTklOR10gUG9ydGFibGUgUG9zdGdyZVNRTCBOT1QgZm91bmQuCiAgICBlY2hvICAgICAgICAgIEV4cGVjdGVkOiAlREVQTE9ZX0RJUiVyZXNvdXJjZXNccG9zdGdyZXNcYmluXHBnX2N0bC5leGUKICAgIGVjaG8gLgogICAgZWNobyAgIERvd25sb2FkIHRoZSBiaW5hcnkgWklQIGZyb206CiAgICBlY2hvICAgaHR0cHM6Ly93d3cuZW50ZXJwcmlzZWRiLmNvbS9kb3dubG9hZC1wb3N0Z3Jlc3FsLWJpbmFyaWVzCiAgICBlY2hvICAgRXh0cmFjdCBiaW5cIGxpYlwgc2hhcmVcIGludG86IGRlcGxveVxleGVccmVzb3VyY2VzXHBvc3RncmVzXAogICAgZWNobyAuCiAgICBzZXQgL3AgQ09OVElOVUU9IkNvbnRpbnVlIGJ1aWxkIHdpdGhvdXQgUG9zdGdyZVNRTCBiaW5hcmllcz8gW3kvTl06ICIKICAgIGlmIC9pICIhQ09OVElOVUUhIiBuZXEgInkiIGV4aXQgL2IgMQopCgppZiBleGlzdCAicmVzb3VyY2VzXHJlZGlzXHJlZGlzLXNlcnZlci5leGUiICgKICAgIGVjaG8gICAgICBSZWRpcyBiaW5hcnkgZm91bmQuCikgZWxzZSAoCiAgICBlY2hvIC4KICAgIGVjaG8gW1dBUk5JTkddIFBvcnRhYmxlIFJlZGlzIE5PVCBmb3VuZC4KICAgIGVjaG8gICAgICAgICAgRXhwZWN0ZWQ6ICVERVBMT1lfRElSJXJlc291cmNlc1xyZWRpc1xyZWRpcy1zZXJ2ZXIuZXhlCiAgICBlY2hvIC4KICAgIGVjaG8gICBEb3dubG9hZCBmcm9tOiBodHRwczovL2dpdGh1Yi5jb20vbWljcm9zb2Z0YXJjaGl2ZS9yZWRpcy9yZWxlYXNlcwogICAgZWNobyAgIFBsYWNlIHJlZGlzLXNlcnZlci5leGUgYW5kIHJlZGlzLWNsaS5leGUgaW46IGRlcGxveVxleGVccmVzb3VyY2VzXHJlZGlzXAogICAgZWNobyAuCiAgICBzZXQgL3AgQ09OVElOVUU9IkNvbnRpbnVlIGJ1aWxkIHdpdGhvdXQgUmVkaXMgYmluYXJ5PyBbeS9OXTogIgogICAgaWYgL2kgIiFDT05USU5VRSEiIG5lcSAieSIgZXhpdCAvYiAxCikKCjo6IC0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0KOjogU3RlcCA2IC0gUnVuIFB5SW5zdGFsbGVyCjo6IC0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0KZWNobyAuCmVjaG8gWzYvNl0gUnVubmluZyBQeUluc3RhbGxlci4uLgpjZCAvZCAiJURFUExPWV9ESVIlIgoKOjogUGljayBhIGJ1aWxkL291dHB1dCBkcml2ZSB0aGF0IGtlZXBzIHRoaXMgYnVpbGQgYXdheSBmcm9tIGFuIGV4aXN0aW5nCjo6IGluc3RhbGw6IHByZWZlciBFOlwgKGZyZXNoIHRlc3QgZHJpdmUpIGFuZCBvbmx5IGZhbGwgYmFjayB0byBEOlwgaWYKOjogRTpcIGlzbid0IGF2YWlsYWJsZS4gVGhpcyBhdm9pZHMgY2xvYmJlcmluZyBhbiBvbGQgZXhlIGxpdmluZyBvbiBEOlwuCmlmIGV4aXN0ICJFOlwiICgKICAgIHNldCAiQlVJTERfRFJJVkU9RToiCikgZWxzZSAoCiAgICBzZXQgIkJVSUxEX0RSSVZFPUQ6IgopCmVjaG8gICAgICBVc2luZyBidWlsZCBkcml2ZTogJUJVSUxEX0RSSVZFJQoKOjogQnVpbGQgb24gYSBub24tQzogZHJpdmUgdG8gYXZvaWQgQzogc3BhY2UgaXNzdWVzIGFuZCBEZWZlbmRlciBmaWxlIGxvY2tzLgo6OiBPdXRwdXQgZ29lcyBzdHJhaWdodCB0byA8ZHJpdmU+XEFJVmlzaW9uLUFwcCAtLSBubyB4Y29weSBuZWVkZWQuCnNldCAiUFlJX1RFTVA9JUJVSUxEX0RSSVZFJVxhaXZpc2lvbi1idWlsZC10ZW1wIgpzZXQgIlBZSV9XT1JLPSVQWUlfVEVNUCVcd29yayIKc2V0ICJQWUlfRElTVD0lQlVJTERfRFJJVkUlXEFJVmlzaW9uLUFwcCIKCmVjaG8gICAgICBQeUluc3RhbGxlciB0ZW1wIDogJVBZSV9XT1JLJQplY2hvICAgICAgRmluYWwgb3V0cHV0ICAgICA6ICVQWUlfRElTVCVcQUlWaXNpb25cYWl2aXNpb24uZXhlCgpweXRob24gLW0gUHlJbnN0YWxsZXIgbGF1bmNoZXIuc3BlYyAtLW5vY29uZmlybSBeCiAgICAtLXdvcmtwYXRoICIlUFlJX1dPUkslIiBeCiAgICAtLWRpc3RwYXRoICIlUFlJX0RJU1QlIgppZiBlcnJvcmxldmVsIDEgKCBlY2hvIFtFUlJPUl0gUHlJbnN0YWxsZXIgZmFpbGVkLiAmIGV4aXQgL2IgMSApCgo6OiAtLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tCjo6IERvbmUKOjogLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tCmVjaG8gLgplY2hvID09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT0KZWNobyAgQlVJTEQgQ09NUExFVEUKZWNobyAgT3V0cHV0OiAlUFlJX0RJU1QlXEFJVmlzaW9uXGFpdmlzaW9uLmV4ZQplY2hvID09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT0KZWNobyAuCmVjaG8gVG8gcnVuOgplY2hvICAgY2QgJVBZSV9ESVNUJVxBSVZpc2lvbgplY2hvICAgYWl2aXNpb24uZXhlCmVjaG8gLgplY2hvIE9uIGZpcnN0IGxhdW5jaCwgdGhlIGFwcCB3aWxsOgplY2hvICAgLSBJbml0aWFsaXplIHRoZSBQb3N0Z3JlU1FMIGRhdGFiYXNlCmVjaG8gICAtIFN0YXJ0IGFsbCBzZXJ2aWNlcwplY2hvICAgLSBPcGVuIHlvdXIgYnJvd3NlciBhdCBodHRwOi8vbG9jYWxob3N0OjgwMDAKCmVuZGxvY2Fs
+@echo off
+setlocal EnableDelayedExpansion
+
+echo ============================================================
+echo  AI Vision Platform - Windows EXE Build Script
+echo ============================================================
+
+:: Resolve repo root (two levels up from deploy\exe)
+set "DEPLOY_DIR=%~dp0"
+pushd "%~dp0..\.."
+set "REPO_ROOT=%CD%"
+popd
+
+echo [DEBUG] DEPLOY_DIR = %DEPLOY_DIR%
+echo [DEBUG] REPO_ROOT  = %REPO_ROOT%
+
+:: --------------------------------------------------------------------------
+:: Step 1 - Check Python
+:: --------------------------------------------------------------------------
+echo.
+echo [1/6] Checking Python...
+python --version >nul 2>&1
+if errorlevel 1 (
+    echo [ERROR] Python not found. Install Python 3.11 from https://www.python.org/downloads/
+    exit /b 1
+)
+python --version
+
+:: --------------------------------------------------------------------------
+:: Step 2 - Check Node
+:: --------------------------------------------------------------------------
+echo.
+echo [2/6] Checking Node.js / npm...
+node --version >nul 2>&1
+if errorlevel 1 (
+    echo [ERROR] Node.js not found. Install from https://nodejs.org/
+    exit /b 1
+)
+node --version
+call npm --version
+
+:: --------------------------------------------------------------------------
+:: Step 3 - Build React frontend
+:: --------------------------------------------------------------------------
+echo.
+echo [3/6] Building React frontend...
+cd /d "%REPO_ROOT%\frontend"
+
+if not exist node_modules (
+    echo      Installing npm packages...
+    call npm install --legacy-peer-deps
+    if errorlevel 1 ( echo [ERROR] npm install failed. & exit /b 1 )
+)
+
+set REACT_APP_API_URL=http://localhost:8000/api/v1
+set REACT_APP_BASE_URL=http://localhost:8000
+call npm run build
+if errorlevel 1 ( echo [ERROR] React build failed. & exit /b 1 )
+echo      Frontend built successfully.
+
+:: --------------------------------------------------------------------------
+:: Step 4 - Install Python build dependencies
+:: --------------------------------------------------------------------------
+echo.
+echo [4/6] Installing Python build dependencies...
+cd /d "%REPO_ROOT%"
+pip install pyinstaller ^
+    fastapi uvicorn[standard] sqlalchemy[asyncio] asyncpg psycopg2-binary ^
+    celery[redis] redis transformers sentencepiece protobuf ultralytics ^
+    Pillow supervision opencv-python-headless pyyaml python-dotenv ^
+    pydantic pydantic-settings passlib[bcrypt] python-jose[cryptography] ^
+    python-multipart websockets loguru
+if errorlevel 1 ( echo [ERROR] pip install failed. & exit /b 1 )
+
+:: --------------------------------------------------------------------------
+:: Step 5 - Check for portable binaries
+:: --------------------------------------------------------------------------
+echo.
+echo [5/6] Checking portable service binaries...
+
+:: Always cd back to DEPLOY_DIR before file checks so relative logic is correct
+cd /d "%DEPLOY_DIR%"
+
+if exist "resources\postgres\bin\pg_ctl.exe" (
+    echo      PostgreSQL binaries found.
+) else (
+    echo.
+    echo [WARNING] Portable PostgreSQL NOT found.
+    echo          Expected: %DEPLOY_DIR%resources\postgres\bin\pg_ctl.exe
+    echo.
+    echo   Download the binary ZIP from:
+    echo   https://www.enterprisedb.com/download-postgresql-binaries
+    echo   Extract bin\ lib\ share\ into: deploy\exe\resources\postgres\
+    echo.
+    set /p CONTINUE="Continue build without PostgreSQL binaries? [y/N]: "
+    if /i "!CONTINUE!" neq "y" exit /b 1
+)
+
+if exist "resources\redis\redis-server.exe" (
+    echo      Redis binary found.
+) else (
+    echo.
+    echo [WARNING] Portable Redis NOT found.
+    echo          Expected: %DEPLOY_DIR%resources\redis\redis-server.exe
+    echo.
+    echo   Download from: https://github.com/microsoftarchive/redis/releases
+    echo   Place redis-server.exe and redis-cli.exe in: deploy\exe\resources\redis\
+    echo.
+    set /p CONTINUE="Continue build without Redis binary? [y/N]: "
+    if /i "!CONTINUE!" neq "y" exit /b 1
+)
+
+:: --------------------------------------------------------------------------
+:: Step 6 - Run PyInstaller
+:: --------------------------------------------------------------------------
+echo.
+echo [6/6] Running PyInstaller...
+cd /d "%DEPLOY_DIR%"
+
+:: Pick a build/output drive that keeps this build away from an existing
+:: install: prefer E:\ (fresh test drive) and only fall back to D:\ if
+:: E:\ isn't available. This avoids clobbering an old exe living on D:\.
+if exist "E:\" (
+    set "BUILD_DRIVE=E:"
+) else (
+    set "BUILD_DRIVE=D:"
+)
+echo      Using build drive: %BUILD_DRIVE%
+
+:: Build on a non-C: drive to avoid C: space issues and Defender file locks.
+:: Output goes straight to <drive>\AIVision-App — no xcopy needed.
+set "PYI_TEMP=%BUILD_DRIVE%\aivision-build-temp"
+set "PYI_WORK=%PYI_TEMP%\work"
+set "PYI_DIST=%BUILD_DRIVE%\AIVision-App"
+
+echo      PyInstaller temp : %PYI_WORK%
+echo      Final output     : %PYI_DIST%\AIVision\aivision.exe
+
+python -m PyInstaller launcher.spec --noconfirm ^
+    --workpath "%PYI_WORK%" ^
+    --distpath "%PYI_DIST%"
+if errorlevel 1 ( echo [ERROR] PyInstaller failed. & exit /b 1 )
+
+:: --------------------------------------------------------------------------
+:: Done
+:: --------------------------------------------------------------------------
+echo.
+echo ============================================================
+echo  BUILD COMPLETE
+echo  Output: %PYI_DIST%\AIVision\aivision.exe
+echo ============================================================
+echo.
+echo To run:
+echo   cd %PYI_DIST%\AIVision
+echo   aivision.exe
+echo.
+echo On first launch, the app will:
+echo   - Initialize the PostgreSQL database
+echo   - Start all services
+echo   - Open your browser at http://localhost:8000
+
+endlocal
