@@ -20,6 +20,7 @@ from .training import _fetch_training_data, _group_annotations, _safe_float
 from ..config import settings
 
 import json
+import logging
 import math
 import random
 import shutil
@@ -30,6 +31,8 @@ from pathlib import Path
 import cv2
 import numpy as np
 import redis as redis_lib
+
+logger = logging.getLogger(__name__)
 
 
 # ── Character-crop extraction ─────────────────────────────────────
@@ -458,6 +461,7 @@ def train_ocr_model(
     # ── Phase 2: crop every labeled character ────────────────────
     crops_by_class: dict[str, list] = defaultdict(list)
     total_imgs = len(img_rows)
+    skipped_multichar: dict[str, int] = defaultdict(int)
     for idx, img_row in enumerate(img_rows):
         real_path = Path(".") / img_row["filepath"].lstrip("/")
         if not real_path.exists():
@@ -472,6 +476,7 @@ def train_ocr_model(
             if len(label) != 1:
                 # Only single-character labels belong to the OCR classifier;
                 # boxes like "plate" or "serial_region" are skipped.
+                skipped_multichar[label] += 1
                 continue
             crop = _extract_char_crop(img, ann["bbox"], img_size)
             if crop is not None:
@@ -486,6 +491,14 @@ def train_ocr_model(
                 })
             except Exception:
                 pass
+
+    if skipped_multichar:
+        total_skipped = sum(skipped_multichar.values())
+        logger.warning(
+            "OCR training [project %s]: skipped %d annotation(s) with multi-char "
+            "labels (not valid single-char classes): %s",
+            project_id, total_skipped, dict(skipped_multichar),
+        )
 
     crops_by_class = {c: v for c, v in crops_by_class.items() if v}
     if len(crops_by_class) < 2:
