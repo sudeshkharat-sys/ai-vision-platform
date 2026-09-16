@@ -537,15 +537,27 @@ def _dedupe_cross_class_boxes(boxes, iou_thresh: float = 0.4):
 def _yolo_char_only_boxes(project_id: str, img: np.ndarray, conf: float = 0.25):
     """Boxes from the class-agnostic localization-only detector
     (seed_char_only_best.pt), if the project has trained one — (x, y, w,
-    h) in reading order, no label (every box is the generic "char"
+    h) in reading order, no label (every "char" box is the generic
     class, so there's no identity to carry). Returns None when no such
-    model exists yet."""
+    model exists yet.
+
+    When the project has a region annotation, this detector was trained
+    with TWO classes, not one -- "plate" (the whole-badge outline) and
+    "char" (each individual glyph); see _class_agnostic_view. Without
+    filtering to "char" here, the plate's own box gets treated as a
+    character crop and fed to the OCR classifier, which has no real
+    glyph to read and just guesses -- showing up as a bogus extra
+    character (e.g. "6" or "G") mixed into an otherwise-correct read."""
     results = _yolo_predict_raw_char_only(project_id, img, conf)
     if results is None:
         return None
     boxes = []
     for r in results:
+        names = r.names or {}
         for b in r.boxes:
+            cls_id = int(b.cls[0])
+            if str(names.get(cls_id, "")).strip().lower() != "char":
+                continue
             x1, y1, x2, y2 = (float(v) for v in b.xyxy[0])
             w, h = x2 - x1, y2 - y1
             if w < 2 or h < 2:
@@ -554,7 +566,9 @@ def _yolo_char_only_boxes(project_id: str, img: np.ndarray, conf: float = 0.25):
     if not boxes:
         return None
     # Same overlap cleanup as the labeled path, minus the class check
-    # (there's only one class here, so any heavy overlap is a duplicate).
+    # (every remaining box here is the "char" class, so any heavy
+    # overlap between two of them is a duplicate, not a plate-vs-char
+    # collision -- that was filtered out above).
     kept = []
     for b in sorted(boxes, key=lambda b: -b[4]):
         def iou(a, c):
