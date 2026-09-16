@@ -460,6 +460,7 @@ async def get_model_status(
     main_path = settings.model_dir / project_id / "main_best.pt"
     seg_seed_path = settings.model_dir / project_id / "seg_seed_best.pt"
     seg_main_path = settings.model_dir / project_id / "seg_main_best.pt"
+    char_only_path = settings.model_dir / project_id / "seed_char_only_best.pt"
     return {
         "has_seed_model":  seed_path.exists(),
         "model_path":      str(seed_path) if seed_path.exists() else None,
@@ -470,6 +471,8 @@ async def get_model_status(
         "seg_seed_model_path": str(seg_seed_path) if seg_seed_path.exists() else None,
         "has_seg_main_model": seg_main_path.exists(),
         "seg_main_model_path": str(seg_main_path) if seg_main_path.exists() else None,
+        "has_char_only_model": char_only_path.exists(),
+        "char_only_model_path": str(char_only_path) if char_only_path.exists() else None,
     }
 
 
@@ -487,6 +490,7 @@ async def get_model_details(
     seg_seed_path = settings.model_dir / project_id / "seg_seed_best.pt"
     seg_main_path = settings.model_dir / project_id / "seg_main_best.pt"
     seg_legacy_path = settings.model_dir / project_id / "seg_best.pt"  # pre seed/main split
+    char_only_path = settings.model_dir / project_id / "seed_char_only_best.pt"
 
     def file_info(path):
         if not path.exists():
@@ -525,6 +529,9 @@ async def get_model_details(
         # Legacy single-stage seg model, from before the seed/main split — still
         # used as a fallback by auto-annotate/OCR if neither of the above exist.
         "seg":      file_info(seg_legacy_path),
+        # Class-agnostic localization-only detector (all char boxes share one
+        # generic "char" class); trained via train-seed with class_agnostic=True.
+        "char_only": file_info(char_only_path),
     }
 
 
