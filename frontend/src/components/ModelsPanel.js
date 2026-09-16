@@ -146,6 +146,15 @@ function ModelCard({ type, data, onTrain, onDownload, downloading }) {
             sparkColor: '#5b21b6',
             trainLabel: <><Target size={14} /> Train Segment Main</>,
         },
+        char_only: {
+            label: 'Char-Only (Class-Agnostic)',
+            desc: 'Localization-only detector -- finds character boxes without guessing identity, for tight/touching engraved text',
+            icon: <Leaf size={20} />,
+            accent: ['#0891b2', '#22d3ee'],
+            light: 'rgba(8,145,178,0.08)',
+            sparkColor: '#0891b2',
+            trainLabel: <><Leaf size={14} /> Train Seed (Class-Agnostic)</>,
+        },
     }[type];
 
     const exists  = data?.exists;
@@ -547,6 +556,13 @@ const ModelsPanel = ({ project, onClose, onGoToTrain }) => {
                                 type="seg_main"
                                 data={details.seg_main}
                                 onTrain={handleTrain}
+                                onDownload={handleDownload}
+                                downloading={downloading}
+                            />
+                            <ModelCard
+                                type="char_only"
+                                data={details.char_only}
+                                onTrain={() => handleTrain('seed')}
                                 onDownload={handleDownload}
                                 downloading={downloading}
                             />
