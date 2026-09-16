@@ -545,10 +545,14 @@ async def download_model(
     """Stream the trained model weights file as a download."""
     await get_owned_project(project_id, current_user, db)
 
-    if model_type not in ("seed", "main", "seg", "seg_seed", "seg_main"):
-        raise HTTPException(status_code=400, detail="model_type must be 'seed', 'main', 'seg', 'seg_seed', or 'seg_main'")
+    valid_types = ("seed", "main", "seg", "seg_seed", "seg_main", "char_only")
+    if model_type not in valid_types:
+        raise HTTPException(status_code=400, detail=f"model_type must be one of {valid_types}")
 
-    filename = f"{model_type}_best.pt"
+    # char_only's weights file doesn't follow the "{model_type}_best.pt"
+    # convention (it's seed_char_only_best.pt, written by train_seed_model
+    # with class_agnostic=True, alongside -- not instead of -- seed_best.pt).
+    filename = "seed_char_only_best.pt" if model_type == "char_only" else f"{model_type}_best.pt"
     path = settings.model_dir / project_id / filename
     if not path.exists():
         raise HTTPException(status_code=404, detail=f"{model_type} model not found for this project")
