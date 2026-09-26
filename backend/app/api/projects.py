@@ -180,6 +180,8 @@ async def duplicate_project(
                     class_name=ann.class_name,
                     bbox=list(ann.bbox) if ann.bbox else None,
                     source=ann.source,
+                    annotation_type=ann.annotation_type,
+                    points=list(ann.points) if ann.points else None,
                 ))
 
     await db.commit()
