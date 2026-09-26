@@ -1229,9 +1229,15 @@ def train_seg_model(
 
     best_model_path = results.save_dir / "weights" / "best.pt"
     target_filename = "seg_seed_best.pt" if model_type == "seed" else "seg_main_best.pt"
+    meta_filename = "seg_seed_meta.json" if model_type == "seed" else "seg_main_meta.json"
     target_path = settings.model_dir / project_id / target_filename
     target_path.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy(best_model_path, target_path)
+    # Remember whether THIS model was trained on CLAHE+gamma+sharpen images
+    # so auto-annotate applies the exact same preprocessing this model
+    # actually learned from -- same contract as seed_meta.json/main_meta.json.
+    (target_path.parent / meta_filename).write_text(
+        json.dumps({"preprocess": bool(preprocess)}))
     shutil.rmtree(dataset_path)
 
     final_metrics = epoch_history[-1] if epoch_history else {}

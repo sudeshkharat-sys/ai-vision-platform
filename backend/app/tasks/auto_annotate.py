@@ -6,6 +6,7 @@ from ..connectors.statedb_connector import StateDBConnector
 import uuid
 import json
 import os
+import cv2
 import numpy as np
 
 
@@ -129,18 +130,24 @@ def auto_annotate_remaining(self, project_id: str, image_ids: list = None,
     # ── 1. Load the right model for the requested shape ──────────────
     is_segment = shape == "segment"
     if is_segment:
-        from ..services.seg_model import resolve_seg_model_path
+        from ..services.seg_model import resolve_seg_model_path, seg_model_uses_preprocess
         model_path = resolve_seg_model_path(project_id)
         if model_path is None:
             return {"error": "No trained segmentation model found. Train the segmentation "
                               "model (seed or main) first, or use shape=bbox/polygon instead."}
+        model_uses_preprocess = seg_model_uses_preprocess(model_path)
     else:
         model_path = settings.model_dir.resolve() / project_id / "seed_best.pt"
         if not model_path.exists():
             return {"error": "Seed model not found. Train the seed model first."}
+        from ..services.det_model import det_model_uses_preprocess
+        model_uses_preprocess = det_model_uses_preprocess(model_path)
 
     model = YOLO(str(model_path))
     class_map = model.names  # {cls_idx: 'class_name', ...}
+
+    if model_uses_preprocess:
+        from .training import clahe_gamma_sharpen
 
     # ── 2. Fetch images to annotate ─────────────────────────────────
     with db.get_session() as conn:
@@ -231,10 +238,19 @@ def auto_annotate_remaining(self, project_id: str, image_ids: list = None,
                 },
             )
 
-            # Run YOLO prediction (with optional TTA for robustness)
+            # Run YOLO prediction (with optional TTA for robustness).
+            # Feed the SAME CLAHE+gamma+sharpen enhanced pixels the model was
+            # trained on when its meta says preprocess=True -- predicting on
+            # raw pixels for a model trained on enhanced ones silently
+            # starves detection even though the model looks fine in training.
             try:
+                predict_input = str(real_path)
+                if model_uses_preprocess:
+                    img = cv2.imread(str(real_path))
+                    if img is not None:
+                        predict_input = clahe_gamma_sharpen(img)
                 results = model.predict(
-                    str(real_path), conf=conf, verbose=False,
+                    predict_input, conf=conf, verbose=False,
                     augment=use_tta,
                 )
             except Exception:
@@ -263,7 +279,7 @@ def auto_annotate_remaining(self, project_id: str, image_ids: list = None,
                             "class_name":      class_name,
                             "bbox":            xywhn,
                             "conf":            box_conf,
-                            "annotation_type": "polygon",
+                            "annotation_type": "segment",
                             "bbox_json":       json.dumps(xywhn),
                             "points_json":     json.dumps(points),
                         })
