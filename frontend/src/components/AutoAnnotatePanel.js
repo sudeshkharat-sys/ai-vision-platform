@@ -397,7 +397,10 @@ const AutoAnnotatePanel = ({ project, onClose, onAnnotationsUpdated }) => {
 
     // ── Launch job ────────────────────────────────────────────
     const handleStart = async () => {
-        if (!modelStatus?.has_seed_model) return;
+        const hasModel = shape === 'segment'
+            ? (modelStatus?.has_seg_seed_model || modelStatus?.has_seg_main_model)
+            : modelStatus?.has_seed_model;
+        if (!hasModel) return;
         if (selectedIds.size === 0) return;
         setLaunching(true);
         setView('jobs');
@@ -435,7 +438,13 @@ const AutoAnnotatePanel = ({ project, onClose, onAnnotationsUpdated }) => {
     // ── Derived ───────────────────────────────────────────────
     const activeJob  = jobs.find(j => j.id === activeJobId) || jobs[jobs.length - 1] || null;
     const anyRunning = jobs.some(j => j.status === 'PENDING' || j.status === 'STARTED');
-    const canStart   = modelStatus?.has_seed_model && selectedIds.size > 0 && !launching;
+    // 'segment' needs a trained segmentation model (seed or main); 'bbox'/'polygon'
+    // both run on the plain detector -- checking has_seed_model regardless of shape
+    // left the button disabled for a project that only has a seg model trained.
+    const hasModelForShape = shape === 'segment'
+        ? (modelStatus?.has_seg_seed_model || modelStatus?.has_seg_main_model)
+        : modelStatus?.has_seed_model;
+    const canStart   = hasModelForShape && selectedIds.size > 0 && !launching;
 
     return (
         <div className="aap-overlay" onClick={onClose}>
@@ -472,9 +481,25 @@ const AutoAnnotatePanel = ({ project, onClose, onAnnotationsUpdated }) => {
                         <>
                             {/* Model status */}
                             <section className="aap-section">
-                                <p className="aap-section-title">Seed Model</p>
+                                <p className="aap-section-title">{shape === 'segment' ? 'Segmentation Model' : 'Seed Model'}</p>
                                 {modelStatus == null ? (
                                     <div className="aap-loading"><div className="aap-spinner" /><span>Checking…</span></div>
+                                ) : shape === 'segment' ? (
+                                    hasModelForShape ? (
+                                        <div className="aap-model-ok">
+                                            <span className="aap-model-dot aap-model-dot--green" />
+                                            <span>Segmentation model ready</span>
+                                            <span className="aap-model-path">
+                                                {modelStatus.seg_main_model_path || modelStatus.seg_seed_model_path}
+                                            </span>
+                                        </div>
+                                    ) : (
+                                        <div className="aap-model-missing">
+                                            <span className="aap-model-dot aap-model-dot--red" />
+                                            <span>No segmentation model found</span>
+                                            <p className="aap-model-hint">Train it first using <strong>Train Segmentation Model</strong>.</p>
+                                        </div>
+                                    )
                                 ) : modelStatus.has_seed_model ? (
                                     <div className="aap-model-ok">
                                         <span className="aap-model-dot aap-model-dot--green" />
