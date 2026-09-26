@@ -3,7 +3,7 @@ import axios from 'axios';
 import './ProjectList.css';
 
 import { API_URL } from '../config';
-import { FolderOpen, Tag, Plus, X, Trash2, AlertTriangle, ArrowRight, Calendar, Grid3X3, Sparkles, DatabaseZap, Copy } from 'lucide-react';
+import { FolderOpen, Tag, Plus, X, Trash2, AlertTriangle, ArrowRight, Calendar, Grid3X3, Sparkles, DatabaseZap, Copy, Wand2 } from 'lucide-react';
 import logoImg from '../logo.png';
 
 /* ── Per-project gradient palette ─────────────────────────────── */
@@ -138,7 +138,7 @@ function DeleteModal({ project, onConfirm, onFlush, onCancel, deleting }) {
 }
 
 /* ── Project Card ─────────────────────────────────────────────── */
-function ProjectCard({ project, index, onClick, onDelete, onDuplicate, duplicating }) {
+function ProjectCard({ project, index, onClick, onDelete, onDuplicate, duplicating, onConvert, converting }) {
     const palette = CARD_PALETTES[index % CARD_PALETTES.length];
     const initials = project.name
         .split(' ')
@@ -158,6 +158,11 @@ function ProjectCard({ project, index, onClick, onDelete, onDuplicate, duplicati
     const handleDuplicateClick = (e) => {
         e.stopPropagation();  // Don't open the project
         onDuplicate(project);
+    };
+
+    const handleConvertClick = (e) => {
+        e.stopPropagation();  // Don't open the project
+        onConvert(project);
     };
 
     return (
@@ -235,6 +240,17 @@ function ProjectCard({ project, index, onClick, onDelete, onDuplicate, duplicati
 
                 {/* Copy + Delete buttons — in footer, visible on card hover */}
                 <div className="pl-card-footer-actions">
+                    {project.project_type !== 'combined' && (
+                        <button
+                            className="pl-card-copy-btn"
+                            onClick={handleConvertClick}
+                            disabled={converting}
+                            title="Convert to Combined (Detect + OCR + Segment) -- keeps images/annotations"
+                            aria-label="Convert to Combined"
+                        >
+                            <Wand2 size={13} />
+                        </button>
+                    )}
                     <button
                         className="pl-card-copy-btn"
                         onClick={handleDuplicateClick}
@@ -270,7 +286,6 @@ const ProjectList = ({ onProjectSelect, user }) => {
     const [showForm, setShowForm]           = useState(false);
     const [newName, setNewName]             = useState('');
     const [newClasses, setNewClasses]       = useState('');
-    const [newType, setNewType]             = useState('detection');
 
     // Delete state
     const [deleteTarget, setDeleteTarget]   = useState(null);  // project object to delete
@@ -296,13 +311,12 @@ const ProjectList = ({ onProjectSelect, user }) => {
         axios.post(`${API_URL}/projects`, {
             name: newName.trim(),
             classes: newClasses.split(',').map(c => c.trim()).filter(Boolean),
-            project_type: newType,
+            project_type: 'combined',
         })
             .then(res => {
                 setProjects(prev => [...prev, res.data]);
                 setNewName('');
                 setNewClasses('');
-                setNewType('detection');
                 setShowForm(false);
             })
             .catch(() => setError('Failed to create project. Please try again.'))
@@ -355,6 +369,21 @@ const ProjectList = ({ onProjectSelect, user }) => {
             setError(`Failed to copy "${project.name}". Please try again.`);
         } finally {
             setDuplicatingId(null);
+        }
+    };
+
+    // Converts an older 'detection'-only project to 'combined' so it gets
+    // the OCR + Segment tools too, without losing its images/annotations.
+    const [convertingId, setConvertingId] = useState(null);
+    const handleConvertToCombined = async (project) => {
+        setConvertingId(project.id);
+        try {
+            const res = await axios.patch(`${API_URL}/projects/${project.id}`, { project_type: 'combined' });
+            setProjects(prev => prev.map(p => p.id === project.id ? res.data : p));
+        } catch {
+            setError(`Failed to convert "${project.name}" to combined. Please try again.`);
+        } finally {
+            setConvertingId(null);
         }
     };
 
@@ -471,36 +500,13 @@ const ProjectList = ({ onProjectSelect, user }) => {
                                 />
                             </div>
                             <div className="pl-create-field">
-                                <label className="pl-create-label">Project Type</label>
-                                <div className="pl-type-toggle">
-                                    <button
-                                        type="button"
-                                        className={`pl-type-btn ${newType === 'detection' ? 'active' : ''}`}
-                                        onClick={() => setNewType('detection')}
-                                    >
-                                        Object Detection
-                                        <span>Find parts/objects with YOLO boxes</span>
-                                    </button>
-                                    <button
-                                        type="button"
-                                        className={`pl-type-btn ${newType === 'combined' ? 'active' : ''}`}
-                                        onClick={() => setNewType('combined')}
-                                    >
-                                        OCR / Combined (Detect + OCR + Segment)
-                                        <span>Label engraved letters/digits, and optionally add YOLO detection and instance segmentation</span>
-                                    </button>
-                                </div>
-                            </div>
-                            <div className="pl-create-field">
                                 <label className="pl-create-label">Classes <span className="pl-create-opt">(optional, comma-separated)</span></label>
                                 <input
                                     className="pl-create-input"
                                     value={newClasses}
                                     onChange={e => setNewClasses(e.target.value)}
                                     onKeyDown={handleKeyDown}
-                                    placeholder={newType === 'combined'
-                                        ? 'Leave empty to auto-fill 0-9 and A-Z'
-                                        : 'e.g. car, truck, bus, person'}
+                                    placeholder="Leave empty to auto-fill 0-9 and A-Z"
                                 />
                             </div>
                             <div className="pl-create-actions">
@@ -561,6 +567,8 @@ const ProjectList = ({ onProjectSelect, user }) => {
                                         onDelete={handleDeleteRequest}
                                         onDuplicate={handleDuplicate}
                                         duplicating={duplicatingId === p.id}
+                                        onConvert={handleConvertToCombined}
+                                        converting={convertingId === p.id}
                                     />
                                 </div>
                             ))}

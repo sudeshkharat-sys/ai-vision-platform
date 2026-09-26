@@ -136,3 +136,13 @@ async def init_db() -> None:
         await conn.execute(text(
             "UPDATE projects SET project_type = 'combined' WHERE project_type = 'ocr'"
         ))
+        # Migration: every project is now combined (detect + OCR + segment) --
+        # 'detection'-only projects lose nothing (the extra tools are opt-in
+        # in the UI) but gain the Segment tool / instance-segmentation
+        # pipeline without a manual per-project conversion.
+        await conn.execute(text(
+            "UPDATE projects SET project_type = 'combined' WHERE project_type != 'combined'"
+        ))
+        await conn.execute(text(
+            "ALTER TABLE projects ALTER COLUMN project_type SET DEFAULT 'combined'"
+        ))

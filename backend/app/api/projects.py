@@ -76,7 +76,7 @@ async def update_project(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Update project name, description, or classes list."""
+    """Update project name, description, classes list, or project_type."""
     project = await get_owned_project(project_id, current_user, db)
 
     if data.name is not None:
@@ -85,6 +85,16 @@ async def update_project(
         project.description = data.description
     if data.classes is not None:
         project.classes = data.classes
+    if data.project_type is not None:
+        project_type = "combined" if data.project_type == "ocr" else data.project_type
+        if project_type not in ("detection", "combined"):
+            raise HTTPException(status_code=400, detail="project_type must be 'detection' or 'combined'")
+        # Switching into 'combined' needs the character classes the OCR/segment
+        # tools expect -- same one-click prefill create_project does, so an
+        # existing detection project doesn't land with an empty class list.
+        if project_type == "combined" and project.project_type != "combined" and not project.classes:
+            project.classes = [str(d) for d in range(10)] + [chr(c) for c in range(ord("A"), ord("Z") + 1)]
+        project.project_type = project_type
 
     await db.commit()
     await db.refresh(project)

@@ -30,12 +30,13 @@ class ProjectCreate(BaseModel):
     name: str
     description: Optional[str] = None
     classes: List[str]
-    project_type: str = "detection"  # detection | combined ("ocr" accepted for legacy clients, mapped to combined)
+    project_type: str = "combined"  # detection | combined ("ocr" accepted for legacy clients, mapped to combined)
 
 class ProjectUpdateRequest(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
     classes: Optional[List[str]] = None
+    project_type: Optional[str] = None
 
 class ClassRenameRequest(BaseModel):
     old_name: str
@@ -46,7 +47,7 @@ class ProjectResponse(BaseModel):
     name: str
     description: Optional[str]
     classes: List[str]
-    project_type: str = "detection"
+    project_type: str = "combined"
     created_at: datetime
 
     class Config:

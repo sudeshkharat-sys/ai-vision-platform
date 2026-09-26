@@ -14,7 +14,7 @@ class Project(Base):
     # "detection" (YOLO pipeline) or "combined" (YOLO detection + character
     # OCR + segmentation). Legacy "ocr" rows are migrated to "combined" in
     # database.init_db(); new projects can no longer be created as "ocr".
-    project_type: Mapped[str] = mapped_column(String(20), default="detection")
+    project_type: Mapped[str] = mapped_column(String(20), default="combined")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     user_id: Mapped[str | None] = mapped_column(
         String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
