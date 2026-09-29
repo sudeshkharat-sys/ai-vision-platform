@@ -2041,7 +2041,7 @@ Do you want to proceed?`;
                                     onConfirm={handleClassConfirm}
                                     onCancel={handleClassCancel}
                                     remaining={classifyingAnnId ? aiQueueRef.current.length + 1 : 0}
-                                    ocrMode={project.project_type === 'ocr' || project.project_type === 'combined'}
+                                    ocrMode={project.project_type === 'ocr'}
                                 />
                             )}
                         </div>
