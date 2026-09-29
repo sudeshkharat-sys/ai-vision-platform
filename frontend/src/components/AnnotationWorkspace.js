@@ -119,7 +119,7 @@ const PolygonAnnotation = ({ ann, imgW, imgH, color, isSelected, isPanning, tota
 };
 
 // ── Class Picker ────────────────────────────────────────────────
-const ClassPicker = ({ classes, usedClasses, onConfirm, onCancel, remaining = 0, ocrMode = false }) => {
+const ClassPicker = ({ classes, usedClasses, onConfirm, onCancel, remaining = 0, ocrMode = false, onToggleMode }) => {
     const [customClass, setCustomClass] = useState('');
     const inputRef = useRef(null);
 
@@ -149,6 +149,19 @@ const ClassPicker = ({ classes, usedClasses, onConfirm, onCancel, remaining = 0,
                         </span>
                         <button className="class-picker-close" onClick={onCancel}><X size={16} /></button>
                     </div>
+                    {onToggleMode && (
+                        <div className="class-picker-mode" style={{ display: 'flex', gap: 4, margin: '0 0 8px' }}>
+                            {[['standard', 'Standard list'], ['char', 'Type character']].map(([m, label]) => (
+                                <button
+                                    key={m}
+                                    type="button"
+                                    className={`btn-toolbar ${(m === 'char') === ocrMode ? 'btn-toolbar--active' : ''}`}
+                                    style={{ flex: 1, fontSize: 12 }}
+                                    onClick={() => onToggleMode(m)}
+                                >{label}</button>
+                            ))}
+                        </div>
+                    )}
                     <input
                         ref={inputRef}
                         className="ocr-char-input"
@@ -190,6 +203,19 @@ const ClassPicker = ({ classes, usedClasses, onConfirm, onCancel, remaining = 0,
                     </span>
                     <button className="class-picker-close" onClick={onCancel}><X size={16} /></button>
                 </div>
+                {onToggleMode && (
+                    <div className="class-picker-mode" style={{ display: 'flex', gap: 4, margin: '0 0 8px' }}>
+                        {[['standard', 'Standard list'], ['char', 'Type character']].map(([m, label]) => (
+                            <button
+                                key={m}
+                                type="button"
+                                className={`btn-toolbar ${(m === 'char') === ocrMode ? 'btn-toolbar--active' : ''}`}
+                                style={{ flex: 1, fontSize: 12 }}
+                                onClick={() => onToggleMode(m)}
+                            >{label}</button>
+                        ))}
+                    </div>
+                )}
 
                 {allOptions.length > 0 && (
                     <div className="class-picker-list">
@@ -268,6 +294,15 @@ const AnnotationWorkspace = ({ project, onProjectUpdated }) => {
     // real (possibly rotated/skewed) outline instead of an axis-aligned box,
     // needed on angled plate photos where boxes of neighboring characters touch.
     const [drawMode, setDrawMode] = useState('box');
+    // Class picker style: 'standard' (click a class / type a name) or 'char' (type one key, saves instantly)
+    const [pickerStyle, setPickerStyle] = useState(() => {
+        try { return localStorage.getItem('classPickerStyle') || (project.project_type === 'ocr' ? 'char' : 'standard'); }
+        catch (e) { return 'standard'; }
+    });
+    const changePickerStyle = (m) => {
+        setPickerStyle(m);
+        try { localStorage.setItem('classPickerStyle', m); } catch (e) { /* ignore */ }
+    };
     const [newPolylinePoints, setNewPolylinePoints] = useState([]); // [{x,y}, ...] while drawing
     const [polylineCursor, setPolylineCursor] = useState(null); // rubber-band point to last click
     const [pendingPolyline, setPendingPolyline] = useState(null); // finished points waiting for class
@@ -2041,7 +2076,8 @@ Do you want to proceed?`;
                                     onConfirm={handleClassConfirm}
                                     onCancel={handleClassCancel}
                                     remaining={classifyingAnnId ? aiQueueRef.current.length + 1 : 0}
-                                    ocrMode={project.project_type === 'ocr'}
+                                    ocrMode={pickerStyle === 'char'}
+                                    onToggleMode={changePickerStyle}
                                 />
                             )}
                         </div>
