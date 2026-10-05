@@ -72,6 +72,7 @@ class AnnotationCreate(BaseModel):
     bbox: Optional[List[float]] = None
     annotation_type: str = "bbox"  # "bbox" | "polygon"
     points: Optional[List[List[float]]] = None  # normalized [[x,y], ...] for polygons
+    state: Optional[str] = None  # crop+classify state label (see Annotation.state)
     source: str = "manual"
 
 class AnnotationResponse(BaseModel):
@@ -81,6 +82,7 @@ class AnnotationResponse(BaseModel):
     bbox: Optional[List[float]]
     annotation_type: str = "bbox"
     points: Optional[List[List[float]]] = None
+    state: Optional[str] = None
     source: str
     created_at: datetime
 

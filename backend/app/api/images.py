@@ -494,6 +494,7 @@ async def export_dataset(
             "bbox": ann.bbox,
             "annotation_type": ann.annotation_type,
             "points": ann.points,
+            "state": ann.state,
             "source": ann.source,
         })
 
@@ -607,6 +608,7 @@ async def import_dataset(
                 bbox=ann.get("bbox"),
                 annotation_type=ann.get("annotation_type", "bbox"),
                 points=ann.get("points"),
+                state=ann.get("state"),
                 source=ann.get("source", "manual"),
             ))
             imported_annotations += 1

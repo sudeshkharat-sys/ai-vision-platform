@@ -25,6 +25,12 @@ class Annotation(Base):
     # existing bbox-only consumers (YOLO training export, NMS, etc.) keep working.
     points: Mapped[list[list[float]] | None] = mapped_column(JSON, nullable=True)
 
+    # Optional state attribute on the box (e.g. "full_cover" / "cut_cover" /
+    # "no_cover" for an engine-region box). Used by the crop+classify
+    # pipeline: the box is the localisation target, state is the label the
+    # classifier learns. When unset, class_name doubles as the state.
+    state: Mapped[str | None] = mapped_column(String(100), nullable=True)
+
     source: Mapped[str] = mapped_column(String(50), default="manual") # manual, auto
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 

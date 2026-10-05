@@ -182,6 +182,7 @@ async def duplicate_project(
                     source=ann.source,
                     annotation_type=ann.annotation_type,
                     points=list(ann.points) if ann.points else None,
+                    state=ann.state,
                 ))
 
     await db.commit()

@@ -81,6 +81,7 @@ async def create_annotation(
         bbox=bbox,
         annotation_type=data.annotation_type,
         points=data.points,
+        state=data.state,
         source=data.source,
     )
     db.add(annotation)
