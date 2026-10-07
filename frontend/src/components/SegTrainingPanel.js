@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import axios from 'axios';
 import ClassPicker from './ClassPicker';
+import AugmentToggles from './AugmentToggles';
 import {
     LineChart, Line, XAxis, YAxis, CartesianGrid,
     Tooltip, Legend, ResponsiveContainer,
@@ -197,6 +198,8 @@ const SegTrainingPanel = ({ project, onClose }) => {
     const [statsLoading, setStatsLoading] = useState(true);
     const [segSeedStatus, setSegSeedStatus] = useState(null);
     const [trainClasses, setTrainClasses] = useState([]);   // [] = all classes
+    const [augment, setAugment] = useState(true);
+    const [rotate360, setRotate360] = useState(false);
     const [segMainStatus, setSegMainStatus] = useState(null);
     const [segLegacyStatus, setSegLegacyStatus] = useState(null);
     const [jobs, setJobs]               = useState([]);
@@ -525,6 +528,7 @@ const SegTrainingPanel = ({ project, onClose }) => {
                 aug_degrees: next.augDegrees, aug_translate: next.augTranslate, aug_scale: next.augScale,
                 aug_mixup: next.augMixup, aug_copy_paste: next.augCopyPaste,
                 train_classes: next.trainClasses && next.trainClasses.length ? next.trainClasses : null,
+                augment: next.augment !== false, aug_rotate_360: !!next.rotate360,
             });
             const taskId = res.data.task_id;
             const logs = [`📋  Task ID: ${taskId}`, '⏳  Waiting for worker…'];
@@ -590,7 +594,7 @@ const SegTrainingPanel = ({ project, onClose }) => {
                 jobId: placeholder.id, projectId: project.id, modelName: selectedModel, modelType,
                 epochs, preprocess, imgsz, batch,
                 augFliplr, augFlipud, augMosaic, augHsvV, augHsvH, augHsvS,
-                augDegrees, augTranslate, augScale, augMixup, augCopyPaste, trainClasses,
+                augDegrees, augTranslate, augScale, augMixup, augCopyPaste, trainClasses, augment, rotate360,
             });
             setJobs(prev => [...prev, placeholder]);
             setActiveJobId(placeholder.id);
@@ -608,6 +612,7 @@ const SegTrainingPanel = ({ project, onClose }) => {
                 aug_degrees: augDegrees, aug_translate: augTranslate, aug_scale: augScale,
                 aug_mixup: augMixup, aug_copy_paste: augCopyPaste,
                 train_classes: trainClasses.length ? trainClasses : null,
+                augment, aug_rotate_360: rotate360,
             });
             const taskId = res.data.task_id;
             const job = makeJob(taskId, selectedModel, modelType);
@@ -800,6 +805,7 @@ const SegTrainingPanel = ({ project, onClose }) => {
                             <section className="mtp-section">
                                 <p className="mtp-section-title">Training Config</p>
                                 <ClassPicker classCounts={stats?.class_counts} selected={trainClasses} onChange={setTrainClasses} />
+                                <AugmentToggles augment={augment} onAugment={setAugment} rotate360={rotate360} onRotate360={setRotate360} boxWarning />
 
                                 <div className="mtp-tabs" style={{ marginBottom: 12 }}>
                                     <button

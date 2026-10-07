@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import axios from 'axios';
 import ClassPicker from './ClassPicker';
+import AugmentToggles from './AugmentToggles';
 import {
     LineChart, Line, XAxis, YAxis, CartesianGrid,
     Tooltip, Legend, ResponsiveContainer,
@@ -207,6 +208,8 @@ const TrainingPanel = ({ project, onClose }) => {
     const [augCopyPaste, setAugCopyPaste] = useState(0.05);
     const [classAgnostic, setClassAgnostic] = useState(false);
     const [trainClasses, setTrainClasses] = useState([]);   // [] = all classes
+    const [augment, setAugment] = useState(true);
+    const [rotate360, setRotate360] = useState(false);
     const [showAugSettings, setShowAugSettings] = useState(false);
     const [clahePreview, setClahePreview] = useState(null);   // { original, enhanced, filename }
     const [previewLoading, setPreviewLoading] = useState(false);
@@ -520,6 +523,7 @@ const TrainingPanel = ({ project, onClose }) => {
                 aug_mixup: next.augMixup, aug_copy_paste: next.augCopyPaste,
                 class_agnostic: next.classAgnostic,
                 train_classes: next.trainClasses && next.trainClasses.length ? next.trainClasses : null,
+                augment: next.augment !== false, aug_rotate_360: !!next.rotate360,
                 ...(next.customWeights ? { custom_weights: next.customWeights } : {}),
             });
             const taskId = res.data.task_id;
@@ -584,7 +588,7 @@ const TrainingPanel = ({ project, onClose }) => {
                 logs: ['📋  Job queued — waiting for a free slot…'],
                 epochMeta: null, result: null, error: null, startedAt: new Date(),
             };
-            queueRef.current.push({ jobId: placeholder.id, projectId: project.id, modelName: activeModelName, epochs, preprocess, imgsz, batch, customWeights: modelSource === 'upload' ? selectedWeight : null, augFliplr, augFlipud, augMosaic, augHsvV, augHsvH, augHsvS, augDegrees, augTranslate, augScale, augMixup, augCopyPaste, classAgnostic, trainClasses });
+            queueRef.current.push({ jobId: placeholder.id, projectId: project.id, modelName: activeModelName, epochs, preprocess, imgsz, batch, customWeights: modelSource === 'upload' ? selectedWeight : null, augFliplr, augFlipud, augMosaic, augHsvV, augHsvH, augHsvS, augDegrees, augTranslate, augScale, augMixup, augCopyPaste, classAgnostic, trainClasses, augment, rotate360 });
             setJobs(prev => [...prev, placeholder]);
             setActiveJobId(placeholder.id);
             setLaunching(false);
@@ -602,6 +606,7 @@ const TrainingPanel = ({ project, onClose }) => {
                 aug_mixup: augMixup, aug_copy_paste: augCopyPaste,
                 class_agnostic: classAgnostic,
                 train_classes: trainClasses.length ? trainClasses : null,
+                augment, aug_rotate_360: rotate360,
                 ...(modelSource === 'upload' && selectedWeight ? { custom_weights: selectedWeight } : {}),
             });
             const taskId = res.data.task_id;
@@ -997,6 +1002,7 @@ const TrainingPanel = ({ project, onClose }) => {
                                             </div>
 
                                             <ClassPicker classCounts={stats?.class_counts} selected={trainClasses} onChange={setTrainClasses} />
+                                            <AugmentToggles augment={augment} onAugment={setAugment} rotate360={rotate360} onRotate360={setRotate360} boxWarning />
 
                                             {/* ── Detector mode ── */}
                                             <p style={{ fontSize: 11, fontWeight: 600, color: '#888', margin: '0 0 8px', textTransform: 'uppercase', letterSpacing: 0.5 }}>Detector mode</p>
