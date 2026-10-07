@@ -166,64 +166,127 @@ def rotated_crop(img, bbox_xyxy, margin, angle, shift=(0.0, 0.0)):
                           borderMode=cv2.BORDER_REFLECT_101)
 
 
+def _write_jpg(path: Path, img) -> bool:
+    """Encode + write a JPEG and never leave a 0-byte file behind.
+
+    OpenCV 5 can return (False, empty buffer) from imencode instead of raising,
+    and ultralytics' patched imwrite then happily writes an EMPTY file that
+    later crashes the size probe / the YOLO dataset loader. So check the
+    buffer, fall back to PIL, and report failure to the caller."""
+    import numpy as np
+    img = np.ascontiguousarray(img)
+    try:
+        ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 95])
+        if ok and buf is not None and buf.size > 0:
+            buf.tofile(str(path))
+            return True
+    except Exception:
+        pass
+    try:
+        from PIL import Image as PILImage
+        arr = img[:, :, ::-1] if img.ndim == 3 and img.shape[2] == 3 else img
+        PILImage.fromarray(np.ascontiguousarray(arr)).save(str(path), quality=95)
+        if path.stat().st_size > 0:
+            return True
+        path.unlink()
+    except Exception:
+        pass
+    return False
+
+
+def _process_image(root: Path, split: str, n: int, img_row, anns, mode, margin, preprocess,
+                   rotate_copies, degrees, translate):
+    """Cut + write every crop (and train-only augmented copies) of ONE image.
+    Returns ([state, ...] written, number failed, first failure note)."""
+    import random
+    rng = random.Random(str(img_row["id"]))      # deterministic per image, thread-safe
+    img = cv2.imread(str(_resolve(img_row)))
+    if img is None:
+        return [], 0, f"could not read {img_row.get('filename')}"
+    if preprocess:
+        img = clahe_gamma_sharpen(img)
+    h, w = img.shape[:2]
+
+    def aug_args():
+        return (rng.uniform(-degrees, degrees),
+                (rng.uniform(-translate, translate), rng.uniform(-translate, translate)))
+
+    items = []
+    if mode == "whole":
+        # One label per frame: the state of the largest box.
+        big = max(anns, key=lambda a: a["bbox"][2] * a["bbox"][3])
+        items.append((big["state"], img))
+        if split == "train":
+            for _ in range(rotate_copies):
+                ang, sh = aug_args()
+                rot = rotated_crop(img, (0, 0, w, h), 0.0, ang, sh)
+                if rot is not None:
+                    items.append((big["state"], rot))
+    else:
+        for a in anns:
+            xyxy = _xywh_to_xyxy(a["bbox"], w, h)
+            crop = crop_region(img, xyxy, margin)
+            if crop is None:
+                continue
+            items.append((a["state"], crop))
+            if split == "train":
+                for _ in range(rotate_copies):
+                    ang, sh = aug_args()
+                    rot = rotated_crop(img, xyxy, margin, ang, sh)
+                    if rot is not None:
+                        items.append((a["state"], rot))
+
+    written, failed, note = [], 0, None
+    for k, (state, crop) in enumerate(items):
+        d = root / split / state
+        d.mkdir(parents=True, exist_ok=True)
+        if _write_jpg(d / f"{img_row['id']}_{n}_{k}.jpg", crop):
+            written.append(state)
+        else:
+            failed += 1
+            note = note or f"could not encode a crop (shape {getattr(crop, 'shape', None)}, dtype {getattr(crop, 'dtype', None)})"
+    return written, failed, note
+
+
 def _build_cls_dataset(split_map, anns_by_image, root: Path, mode, margin, preprocess,
                        rotate_copies: int = 0, degrees: float = 0.0, translate: float = 0.0,
-                       progress=None):
+                       progress=None, stats: dict | None = None):
     """Write root/<split>/<state>/*.jpg. Returns {split: Counter(state)}.
+
+    Images are processed on a thread pool (OpenCV releases the GIL), which is
+    several times faster than one at a time -- the CLAHE/gamma/sharpen
+    preprocessing of full-size photos dominates.
 
     rotate_copies > 0 adds that many copies of every TRAIN sample, each
     rotated by a random angle in [-degrees, +degrees] and shifted by up to
     `translate` of its size (YOLO-cls has no rotation/translation of its
     own). degrees=180 is the full 360-degree spin. val/test stay untouched
-    so the accuracy still measures real, un-augmented images."""
-    import random
-    rng = random.Random(0)
+    so the accuracy still measures real, un-augmented images.
 
-    def _aug_args():
-        return (rng.uniform(-degrees, degrees),
-                (rng.uniform(-translate, translate), rng.uniform(-translate, translate)))
+    progress(split, done, total) is called as images finish; `stats` (if
+    given) receives {"failed": n, "notes": [...]}."""
+    import os
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
     counts = {s: Counter() for s in split_map}
-    for split, imgs in split_map.items():
-        for n, img_row in enumerate(imgs):
+    jobs = [(split, n, row) for split, imgs in split_map.items()
+            for n, row in enumerate(imgs) if anns_by_image.get(row["id"])]
+    failed_total, notes = 0, []
+    workers = max(1, min(8, os.cpu_count() or 2))
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        futs = {ex.submit(_process_image, root, split, n, row, anns_by_image[row["id"]], mode,
+                          margin, preprocess, rotate_copies, degrees, translate): split
+                for split, n, row in jobs}
+        for done, fut in enumerate(as_completed(futs), 1):
+            states, failed, note = fut.result()
+            counts[futs[fut]].update(states)
+            failed_total += failed
+            if note and len(notes) < 3:
+                notes.append(note)
             if progress:
-                progress(split, n, len(imgs))
-            anns = anns_by_image.get(img_row["id"], [])
-            if not anns:
-                continue
-            img = cv2.imread(str(_resolve(img_row)))
-            if img is None:
-                continue
-            if preprocess:
-                img = clahe_gamma_sharpen(img)
-            h, w = img.shape[:2]
-            if mode == "whole":
-                # One label per frame: the state of the largest box.
-                big = max(anns, key=lambda a: a["bbox"][2] * a["bbox"][3])
-                items = [(big["state"], img)]
-                if split == "train":
-                    for _ in range(rotate_copies):
-                        ang, sh = _aug_args()
-                        rot = rotated_crop(img, (0, 0, w, h), 0.0, ang, sh)
-                        if rot is not None:
-                            items.append((big["state"], rot))
-            else:
-                items = []
-                for a in anns:
-                    xyxy = _xywh_to_xyxy(a["bbox"], w, h)
-                    crop = crop_region(img, xyxy, margin)
-                    if crop is not None:
-                        items.append((a["state"], crop))
-                        if split == "train":
-                            for _ in range(rotate_copies):
-                                ang, sh = _aug_args()
-                                rot = rotated_crop(img, xyxy, margin, ang, sh)
-                                if rot is not None:
-                                    items.append((a["state"], rot))
-            for k, (state, crop) in enumerate(items):
-                d = root / split / state
-                d.mkdir(parents=True, exist_ok=True)
-                cv2.imwrite(str(d / f"{img_row['id']}_{n}_{k}.jpg"), crop)
-                counts[split][state] += 1
+                progress("all", done, len(jobs))
+    if stats is not None:
+        stats.update({"failed": failed_total, "notes": notes})
     return counts
 
 
@@ -286,10 +349,13 @@ def _auto_imgsz(root: Path, limit: int = 200) -> int:
     """Image size for the classifier when the user chose Auto: the median
     longest side of the training crops, rounded to a multiple of 32 and kept
     within 160-448 (small crops gain nothing from upscaling; huge ones are
-    slow for no accuracy gain on a classifier)."""
+    slow for no accuracy gain on a classifier). Unreadable files are skipped."""
     sizes = []
     for f in list((root / "train").rglob("*.jpg"))[:limit]:
-        im = cv2.imread(str(f))
+        try:
+            im = cv2.imread(str(f))
+        except Exception:
+            continue
         if im is not None:
             sizes.append(max(im.shape[:2]))
     if not sizes:
@@ -429,10 +495,14 @@ def train_crop_cls_model(
                 tl.set("dataset", epoch=0, total_epochs=cls_epochs, history=[],
                        dataset_progress={"split": split, "done": done, "total": total})
 
+        build_stats: dict = {}
         counts = _build_cls_dataset(
             split_map, anns_by_image, cls_root, mode, margin, preprocess,
-            rotate_copies=copies, degrees=deg, translate=tr, progress=_progress)
+            rotate_copies=copies, degrees=deg, translate=tr, progress=_progress, stats=build_stats)
         tl.log("Dataset built: " + "; ".join(f"{k} {dict(v)}" for k, v in counts.items()))
+        if build_stats.get("failed"):
+            tl.log(f"WARNING: {build_stats['failed']} crops could not be saved and were skipped "
+                   f"({'; '.join(build_stats['notes'])})")
         train_states = [s for s in states if counts["train"][s] > 0]
         if len(train_states) < 2:
             return {"error": f"Need training samples for at least 2 classes, got {dict(counts['train'])}"}

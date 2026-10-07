@@ -813,7 +813,7 @@ export default function ClassifierTrainingPanel({ project, onClose }) {
                                                         {activeJob.status === 'PENDING' && !meta.stage
                                                             ? 'Waiting for the worker…'
                                                             : STAGE_LABEL[meta.stage] || 'Working…'}
-                                                        {meta.stage === 'dataset' && dp ? ` — ${dp.split} images ${dp.done}/${dp.total}` : ''}
+                                                        {meta.stage === 'dataset' && dp ? ` — images ${dp.done}/${dp.total}` : ''}
                                                         {meta.stage === 'classifier' && meta.epoch > 0
                                                             ? ` — epoch ${meta.epoch}/${meta.total_epochs}`
                                                               + (meta.eta_seconds > 0 ? ` · ~${Math.ceil(meta.eta_seconds / 60)} min left` : '') : ''}
