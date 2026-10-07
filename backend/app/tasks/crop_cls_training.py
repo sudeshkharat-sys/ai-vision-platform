@@ -308,17 +308,19 @@ def train_crop_cls_model(
     plain = _group_plain(ann_rows)
     derive_summary = None
     det_name = det_path = None
+    detector_note = None
     if mode == "crop":
         if not crop_class:
             return {"error": "Choose the detector class to crop (crop_class)"}
+        # The detector is NOT needed to train: crops are cut from the boxes you
+        # drew. It is only used later, to find the region when testing/predicting,
+        # so a missing or mismatched one is just a note, never an error.
         det_name, det_path = resolve_detector(project_id, detector)
-        if det_path is None:
-            return {"error": "No trained detection model found. Train a Seed or Main "
-                             "detection model that includes the crop class first."}
-        det_names = list(YOLO(str(det_path)).names.values())
-        if crop_class not in det_names:
-            return {"error": f"The {det_name} detector doesn't know the class '{crop_class}' "
-                             f"(it has: {det_names}). Retrain it with that class ticked."}
+        if det_path is not None:
+            det_names = list(YOLO(str(det_path)).names.values())
+            if crop_class not in det_names:
+                detector_note = (f"The {det_name} detector doesn't know the class '{crop_class}' "
+                                 f"(it has: {det_names}) -- retrain it with that class before testing.")
         if not label_classes:
             label_classes = sorted({a["class_name"] for anns in plain.values() for a in anns}
                                    - {crop_class})
@@ -350,6 +352,8 @@ def train_crop_cls_model(
         result["label_summary"] = derive_summary
     if det_name:
         result["detector"] = det_name
+    if detector_note:
+        result["detector_note"] = detector_note
 
     (fl, fu, _mo, hv, hh, hs, deg, tr, sc, _mx, _cp) = _resolve_aug(
         augment, aug_rotate_360, aug_fliplr, aug_flipud, 0.0, aug_hsv_v, aug_hsv_h,

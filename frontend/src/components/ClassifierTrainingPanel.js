@@ -157,7 +157,7 @@ export default function ClassifierTrainingPanel({ project, onClose }) {
 
     const canRun = source === 'folders'
         ? folderClasses.length >= 2
-        : !!(hasDetector && detector && cropClass && labelClasses.length > 0);
+        : !!(cropClass && labelClasses.length > 0);
 
     // ── Folder import ──
     const pickFolder = (fileList) => {
@@ -250,7 +250,7 @@ export default function ClassifierTrainingPanel({ project, onClose }) {
             };
             const body = source === 'folders'
                 ? { ...common, mode: 'whole', region_classes: folderClasses }
-                : { ...common, mode: 'crop', detector, ...rules() };
+                : { ...common, mode: 'crop', ...(detector ? { detector } : {}), ...rules() };
             const { data } = await axios.post(`${API_URL}/crop-cls/train/${project.id}`, body);
             setJob({ taskId: data.task_id, status: 'PENDING' });
             poll(data.task_id);
@@ -325,21 +325,23 @@ export default function ClassifierTrainingPanel({ project, onClose }) {
                             ) : (
                                 <>
                                     <p style={{ fontSize: 13, opacity: 0.8, marginTop: 0 }}>
-                                        Your trained detection model finds the crop class (e.g. engine). Each annotated crop-class box
-                                        is cut out and the classes inside it become the classifier classes.
+                                        Each box of the crop class you pick is cut out of the photo and labelled by the classes inside it; the classifier trains on those crops only. A trained detector is needed later, just to find the region when you test on a full image.
                                     </p>
 
                                     <div className="mtp-model-row">
-                                        <label className="mtp-model-label">Detector (trained detection model)</label>
+                                        <label className="mtp-model-label">
+                                            Detector for testing
+                                            <span className="mtp-model-hint"> (not used for training)</span>
+                                        </label>
                                         {hasDetector ? (
                                             <select className="mtp-model-select" value={detector} onChange={e => setDetector(e.target.value)}>
                                                 {detectors.main && <option value="main">Main model</option>}
                                                 {detectors.seed && <option value="seed">Seed model</option>}
                                             </select>
                                         ) : (
-                                            <div className="mtp-warning">
-                                                No trained detector yet. Train a Seed or Main detection model first (with the crop class ticked) in the Training Hub.
-                                            </div>
+                                            <p style={{ fontSize: 12, opacity: 0.7, margin: 0 }}>
+                                                No trained detector yet. You can still train; train a Seed or Main model that includes the crop class before testing on a full image.
+                                            </p>
                                         )}
                                     </div>
 

@@ -140,11 +140,13 @@ def predict_crop_cls(
     crop = img
 
     if meta.get("mode", "crop") == "crop":
-        if meta.get("detector") in DETECTOR_FILES:
-            _, det_path = resolve_detector(project_id, meta["detector"])
+        legacy = cls_dir(project_id) / CLS_FILES["detector"]
+        if meta.get("detector") not in DETECTOR_FILES and legacy.exists():
+            detector = _load(project_id, CLS_FILES["detector"])   # older dedicated region detector
+        else:
+            # preferred one if it was recorded and still exists, else Main, else Seed
+            _, det_path = resolve_detector(project_id, meta.get("detector"))
             detector = _load_path(det_path) if det_path else None
-        else:   # legacy dedicated region detector
-            detector = _load(project_id, CLS_FILES["detector"])
         if detector is None:
             return {"status": "no_model"}
         det = detector.predict(img, conf=det_conf, verbose=False)[0]
