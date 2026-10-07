@@ -273,7 +273,8 @@ def _build_cls_dataset(split_map, anns_by_image, root: Path, mode, margin, prepr
             for n, row in enumerate(imgs) if anns_by_image.get(row["id"])]
     failed_total, notes = 0, []
     workers = max(1, min(8, os.cpu_count() or 2))
-    with ThreadPoolExecutor(max_workers=workers) as ex:
+    ex = ThreadPoolExecutor(max_workers=workers)
+    try:
         futs = {ex.submit(_process_image, root, split, n, row, anns_by_image[row["id"]], mode,
                           margin, preprocess, rotate_copies, degrees, translate): split
                 for split, n, row in jobs}
@@ -284,7 +285,11 @@ def _build_cls_dataset(split_map, anns_by_image, root: Path, mode, margin, prepr
             if note and len(notes) < 3:
                 notes.append(note)
             if progress:
-                progress("all", done, len(jobs))
+                progress("all", done, len(jobs))      # may raise _Stopped
+    except BaseException:
+        ex.shutdown(wait=False, cancel_futures=True)  # drop queued images right away
+        raise
+    ex.shutdown(wait=True)
     if stats is not None:
         stats.update({"failed": failed_total, "notes": notes})
     return counts
@@ -304,6 +309,30 @@ def _confusion(model, val_dir: Path, classes):
     return matrix
 
 
+class _Stopped(Exception):
+    """The user pressed Stop; unwinds the task from any stage."""
+
+
+def _stop_requested(task_id) -> bool:
+    """The Stop button sets this Redis flag (see POST /crop-cls/stop). The
+    epoch callback only looks at it once per epoch, so every other stage
+    (building crops, loading weights) checks it here."""
+    try:
+        import redis as redis_lib
+        return bool(redis_lib.from_url(settings.redis_url, socket_connect_timeout=1)
+                    .get(f"stop_training:{task_id}"))
+    except Exception:
+        return False
+
+
+def _clear_stop(task_id):
+    try:
+        import redis as redis_lib
+        redis_lib.from_url(settings.redis_url, socket_connect_timeout=1).delete(f"stop_training:{task_id}")
+    except Exception:
+        pass
+
+
 class _TaskLog:
     """Stands in for the Celery task so EVERY progress update carries the
     current stage and a running log (shown in the panel's Jobs tab), and each
@@ -320,6 +349,10 @@ class _TaskLog:
     @property
     def request(self):
         return self._task.request
+
+    def check_stop(self):
+        if _stop_requested(self.request.id):
+            raise _Stopped()
 
     def log(self, msg: str):
         print(f"[crop-cls] {msg}", flush=True)
@@ -485,13 +518,15 @@ def train_crop_cls_model(
             split_map["test"] = test_i
         tl.log(f"Images per split: train {len(train_i)}, val {len(val_i)}, test {len(test_i)}"
                + (f"; each train crop gets {copies} rotated/shifted copies" if copies else ""))
+        tl.check_stop()
         tl.set("dataset", epoch=0, total_epochs=cls_epochs, history=[])
         shutil.rmtree(cls_root, ignore_errors=True)
         _tick = {"t": 0.0}
 
         def _progress(split, done, total):
-            if time.time() - _tick["t"] >= 1.5:     # don't flood Redis
+            if time.time() - _tick["t"] >= 1.0:     # don't flood Redis
                 _tick["t"] = time.time()
+                tl.check_stop()
                 tl.set("dataset", epoch=0, total_epochs=cls_epochs, history=[],
                        dataset_progress={"split": split, "done": done, "total": total})
 
@@ -499,6 +534,7 @@ def train_crop_cls_model(
         counts = _build_cls_dataset(
             split_map, anns_by_image, cls_root, mode, margin, preprocess,
             rotate_copies=copies, degrees=deg, translate=tr, progress=_progress, stats=build_stats)
+        tl.check_stop()
         tl.log("Dataset built: " + "; ".join(f"{k} {dict(v)}" for k, v in counts.items()))
         if build_stats.get("failed"):
             tl.log(f"WARNING: {build_stats['failed']} crops could not be saved and were skipped "
@@ -521,6 +557,7 @@ def train_crop_cls_model(
         run_batch = batch if batch != -1 else (0.9 if device == 0 else 16)
         history, starts, stop = [], [], {"value": False}
         tl.log(f"Image size {cls_imgsz}, batch {run_batch}, device {'GPU' if device == 0 else 'CPU'}")
+        tl.check_stop()
         tl.set("weights", epoch=0, total_epochs=cls_epochs, history=[])
         tl.log(f"Loading weights {start_weights} (downloaded on first use - needs internet)")
         try:
@@ -532,6 +569,7 @@ def train_crop_cls_model(
             "on_fit_epoch_end",
             _make_epoch_callback(tl, cls_epochs, history, starts, stop),
         )
+        tl.check_stop()
         tl.log("Training started")
         tl.set("classifier", epoch=0, total_epochs=cls_epochs, history=[],
                samples={s: dict(c) for s, c in counts.items()})
@@ -544,8 +582,7 @@ def train_crop_cls_model(
         )
         if stop["value"]:
             shutil.rmtree(res.save_dir, ignore_errors=True)
-            from celery.exceptions import Ignore
-            raise Ignore()
+            raise _Stopped()
         best = res.save_dir / "weights" / "best.pt"
         shutil.copy(best, out_dir / CLS_FILES["classifier"])
 
@@ -576,6 +613,10 @@ def train_crop_cls_model(
             "logs": tl.logs,
         })
         return result
+    except _Stopped:
+        _clear_stop(self.request.id)
+        tl.log("Stopped by user")
+        return {"status": "stopped", "stopped": True, "logs": tl.logs}
     finally:
         shutil.rmtree(cls_root, ignore_errors=True)
 

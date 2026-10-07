@@ -203,12 +203,14 @@ export default function ClassifierTrainingPanel({ project, onClose }) {
         let status = data.status;
         let error = data.error || null;
         if (status === 'SUCCESS' && res?.error) { status = 'FAILURE'; error = res.error; }   // task returned {"error": ...}
+        if (status === 'SUCCESS' && res?.stopped) status = 'REVOKED';                         // user pressed Stop
         const meta = data.meta || null;
         const logs = res?.logs || meta?.logs || job.logs;
         const history = res?.history || meta?.history || job.history;
         const ticks = status === 'PENDING' ? (job.pendingTicks || 0) + 1 : 0;
         patchJob(job.id, { status, meta: meta || job.meta, result: status === 'SUCCESS' ? res : job.result,
-                           error, logs, history, pendingTicks: ticks });
+                           error, logs, history, pendingTicks: ticks,
+                           ...(ACTIVE.includes(status) ? {} : { stopping: false }) });
         if (!ACTIVE.includes(status)) {
             axios.patch(`${API_URL}/pipeline/jobs/${job.taskId}`, {
                 status: status === 'SUCCESS' ? 'success' : status === 'REVOKED' ? 'revoked' : 'failure',
@@ -398,7 +400,17 @@ export default function ClassifierTrainingPanel({ project, onClose }) {
     };
 
     const stopJob = async (job) => {
+        patchJob(job.id, { stopping: true });
         await axios.post(`${API_URL}/crop-cls/stop/${job.taskId}`).catch(() => {});
+        if (job.status === 'PENDING') {
+            // Never started (queued behind another job): nothing to wait for.
+            const logs = [...(job.logs || []), 'Stopped before it started'];
+            patchJob(job.id, { status: 'REVOKED', stopping: false, logs });
+            axios.patch(`${API_URL}/pipeline/jobs/${job.taskId}`, {
+                status: 'revoked', result_meta: { logs, summary: job.summary },
+                finished_at: new Date().toISOString(),
+            }).catch(() => {});
+        }
     };
 
     const removeJob = (job) => {
@@ -798,7 +810,10 @@ export default function ClassifierTrainingPanel({ project, onClose }) {
                                                 <span className="mtp-job-detail-time">{fmtTime(activeJob.startedAt)}</span>
                                                 {ACTIVE.includes(activeJob.status) && <span className="mtp-running-badge">● Live</span>}
                                                 {ACTIVE.includes(activeJob.status) && (
-                                                    <button className="mtp-refresh" style={{ marginLeft: 'auto' }} onClick={() => stopJob(activeJob)}>Stop</button>
+                                                    <button className="mtp-refresh" style={{ marginLeft: 'auto' }}
+                                                            disabled={activeJob.stopping} onClick={() => stopJob(activeJob)}>
+                                                        {activeJob.stopping ? 'Stopping…' : 'Stop'}
+                                                    </button>
                                                 )}
                                             </div>
                                             {activeJob.summary && <div className="mtp-job-model-tag">{activeJob.summary}</div>}
@@ -821,6 +836,12 @@ export default function ClassifierTrainingPanel({ project, onClose }) {
                                                     {meta.stage === 'classifier' && (
                                                         <div style={{ height: 6, background: '#eee', borderRadius: 4, marginTop: 6 }}>
                                                             <div style={{ width: `${pct}%`, height: '100%', background: '#dc143c', borderRadius: 4 }} />
+                                                        </div>
+                                                    )}
+                                                    {activeJob.stopping && activeJob.status === 'STARTED' && (
+                                                        <div className="mtp-info" style={{ marginTop: 8 }}>
+                                                            Stopping at the next safe point — within a few seconds while building crops,
+                                                            after the current epoch while training. Downloading weights can't be interrupted.
                                                         </div>
                                                     )}
                                                     {activeJob.status === 'PENDING' && activeJob.pendingTicks >= NO_WORKER_TICKS && (

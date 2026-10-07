@@ -81,3 +81,23 @@ def test_threaded_build_is_not_slower_than_one_worker(tmp_path):
     t0 = time.time()
     ns["_build_cls_dataset"]({"train": rows}, anns, tmp_path / "a", "crop", 0.12, True)
     assert time.time() - t0 < 60
+
+
+def test_stop_cancels_the_build_midway(tmp_path):
+    rows, anns = _make(tmp_path, n=30, size=(1200, 1600))
+
+    class Stopped(Exception):
+        pass
+
+    def progress(split, done, total):
+        if done == 3:
+            raise Stopped()
+
+    t0 = time.time()
+    with pytest.raises(Stopped):
+        ns["_build_cls_dataset"]({"train": rows}, anns, tmp_path / "ds", "crop", 0.12, True,
+                                 rotate_copies=2, degrees=10, translate=0.1, progress=progress)
+    time.sleep(1.0)   # in-flight images may still finish; queued ones must have been dropped
+    written = list((tmp_path / "ds").rglob("*.jpg"))
+    assert len(written) < 30 * 3          # nowhere near the full 30 images x 3 crops
+    assert time.time() - t0 < 30
