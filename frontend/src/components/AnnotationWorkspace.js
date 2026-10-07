@@ -14,8 +14,9 @@ import ActiveLearningPanel from './ActiveLearningPanel';
 import OcrActiveLearningPanel from './OcrActiveLearningPanel';
 import OcrTrainingPanel from './OcrTrainingPanel';
 import SegTrainingPanel from './SegTrainingPanel';
+import ClassifierTrainingPanel from './ClassifierTrainingPanel';
 import './AnnotationWorkspace.css';
-import { Sparkles, AlertTriangle, X, Upload, Image as ImageIcon, Check, ArrowLeft, ArrowRight, Brain, Rocket, Eye, Target, Tag, Package, Film, Undo2, Redo2, ZoomIn, ZoomOut, Maximize2, Trash2, ImageOff, Type, RotateCw, RotateCcw, Grid3x3, Wand2, Square, PenTool, RefreshCw, Scissors, Copy, ClipboardPaste, Info } from 'lucide-react';
+import { Sparkles, AlertTriangle, X, Upload, Image as ImageIcon, Check, ArrowLeft, ArrowRight, Brain, Rocket, Eye, Target, Tag, Package, Film, Undo2, Redo2, ZoomIn, ZoomOut, Maximize2, Trash2, ImageOff, Type, RotateCw, RotateCcw, Grid3x3, Wand2, Square, PenTool, RefreshCw, Scissors, Layers, Copy, ClipboardPaste, Info } from 'lucide-react';
 
 import { API_URL } from '../config';
 
@@ -327,6 +328,7 @@ const AnnotationWorkspace = ({ project, onProjectUpdated }) => {
     const [showOcrActiveLearningPanel, setShowOcrActiveLearningPanel] = useState(false);
     const [showOcrPanel, setShowOcrPanel] = useState(false);
     const [showSegPanel, setShowSegPanel] = useState(false);
+    const [showClassifierPanel, setShowClassifierPanel] = useState(false);
     const [ocrAutoLabeling, setOcrAutoLabeling] = useState(false);
     const [seedModelInfo, setSeedModelInfo] = useState(null); // { exists, modified_at } — character detector status for OCR projects
     const [suggestedImageIds, setSuggestedImageIds] = useState(null);  // Set<id> or null (sidebar highlight)
@@ -1500,6 +1502,13 @@ Do you want to proceed?`;
                             <Scissors size={14} /> Train Segmentation Model
                         </button>
                         <button
+                            className="btn-action btn-action-seg"
+                            onClick={() => setShowClassifierPanel(true)}
+                            title="Cut out a region (e.g. engine) and classify what is inside it (e.g. full / cut / no cover)"
+                        >
+                            <Layers size={14} /> Train Classifier
+                        </button>
+                        <button
                             className="btn-action btn-action-review"
                             onClick={() => setShowReviewPanel(true)}
                             disabled={images.filter(img => img.status === 'annotated').length === 0}
@@ -2222,6 +2231,12 @@ Do you want to proceed?`;
                 <SegTrainingPanel
                     project={project}
                     onClose={() => setShowSegPanel(false)}
+                />
+            )}
+            {showClassifierPanel && (
+                <ClassifierTrainingPanel
+                    project={project}
+                    onClose={() => setShowClassifierPanel(false)}
                 />
             )}
             {showVideoPanel && (

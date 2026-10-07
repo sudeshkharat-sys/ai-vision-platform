@@ -13,6 +13,8 @@ from ..api.deps import get_owned_project
 from ..database import get_db
 from ..models.user import User
 from ..services.cls_model import CLS_FILES, cls_dir, load_cls_meta, predict_crop_cls
+from ..config import settings
+from ..tasks.celery_app import celery_app
 from ..tasks.crop_cls_training import build_label_preview, train_crop_cls_model
 
 router = APIRouter(prefix="/crop-cls", tags=["crop-cls"])
@@ -147,3 +149,20 @@ async def crop_cls_predict(
         "data:image/jpeg;base64," + base64.b64encode(buf.tobytes()).decode() if ok else None
     )
     return result
+
+
+@router.post("/stop/{task_id}")
+async def stop_crop_cls_training(
+    task_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    """Ask a running crop+classify training to stop at the next epoch (same
+    Redis flag the epoch callback already watches) and revoke it if queued."""
+    import redis as redis_lib
+    try:
+        redis_lib.from_url(settings.redis_url, socket_connect_timeout=2).setex(
+            f"stop_training:{task_id}", 300, "1")
+    except Exception:
+        pass
+    celery_app.control.revoke(task_id, terminate=False)
+    return {"status": "stopping"}
