@@ -92,6 +92,20 @@ def _group(ann_rows, region_classes):
     return out
 
 
+def _bbox_from_points(points):
+    """Normalized [xc, yc, w, h] around polygon / segment vertices, for rows
+    saved without a bbox."""
+    try:
+        xs = [float(p[0]) for p in points]
+        ys = [float(p[1]) for p in points]
+    except (TypeError, ValueError, IndexError):
+        return None
+    if len(xs) < 3:
+        return None
+    x1, x2, y1, y2 = min(xs), max(xs), min(ys), max(ys)
+    return [(x1 + x2) / 2, (y1 + y2) / 2, x2 - x1, y2 - y1]
+
+
 def _group_plain(ann_rows):
     """image_id -> [{class_name, bbox, points, ...}] for every usable box,
     with no state logic (used by the crop-class / label-class flow, where
@@ -100,10 +114,12 @@ def _group_plain(ann_rows):
     for row in ann_rows:
         bbox = row.get("bbox")
         bbox = json.loads(bbox) if isinstance(bbox, str) else bbox
-        if not bbox or len(bbox) != 4:
-            continue
         points = row.get("points")
         points = json.loads(points) if isinstance(points, str) else points
+        if (not bbox or len(bbox) != 4) and points:
+            bbox = _bbox_from_points(points)   # polygon / segment rows without a stored box
+        if not bbox or len(bbox) != 4:
+            continue
         out.setdefault(row["image_id"], []).append({
             "class_name": row["class_name"],
             "bbox": bbox,
@@ -221,6 +237,23 @@ def _confusion(model, val_dir: Path, classes):
     return matrix
 
 
+def _auto_imgsz(root: Path, limit: int = 200) -> int:
+    """Image size for the classifier when the user chose Auto: the median
+    longest side of the training crops, rounded to a multiple of 32 and kept
+    within 160-448 (small crops gain nothing from upscaling; huge ones are
+    slow for no accuracy gain on a classifier)."""
+    sizes = []
+    for f in list((root / "train").rglob("*.jpg"))[:limit]:
+        im = cv2.imread(str(f))
+        if im is not None:
+            sizes.append(max(im.shape[:2]))
+    if not sizes:
+        return 224
+    sizes.sort()
+    med = sizes[len(sizes) // 2]
+    return int(min(448, max(160, round(med / 32) * 32)))
+
+
 def _device():
     try:
         import torch
@@ -239,10 +272,10 @@ def train_crop_cls_model(
     cls_model_name: str = "yolo11s-cls.pt",
     custom_weights: str | None = None,
     cls_epochs: int = 40,
-    cls_imgsz: int = 224,
+    cls_imgsz: int = 0,                    # 0 = Auto: sized from the crops
     margin: float = 0.12,
     preprocess: bool = True,
-    batch: int = 32,
+    batch: int = -1,                       # -1 = Auto: fit the GPU (16 on CPU)
     crop_class: str | None = None,         # the detector class to cut out, e.g. "engine"
     label_classes: list | None = None,     # classes inside it that name its state (None = all others)
     empty_label: str | None = "no_cover",  # label for a region with nothing inside (None = skip)
@@ -347,6 +380,10 @@ def train_crop_cls_model(
         else:
             cls_aug = dict(fliplr=0.0, flipud=0.0, hsv_h=0.0, hsv_s=0.0, hsv_v=0.0,
                            scale=0.0, erasing=0.0, auto_augment=None)
+        if not cls_imgsz:
+            cls_imgsz = _auto_imgsz(cls_root)
+        # Auto batch = 90% of GPU memory (same as the detection trainers); CPU can't auto-size.
+        run_batch = batch if batch != -1 else (0.9 if device == 0 else 16)
         history, starts, stop = [], [], {"value": False}
         model = YOLO(start_weights)
         model.add_callback(
@@ -358,7 +395,7 @@ def train_crop_cls_model(
             "samples": {s: dict(c) for s, c in counts.items()},
         })
         res = model.train(
-            data=str(cls_root), epochs=cls_epochs, imgsz=cls_imgsz, batch=batch,
+            data=str(cls_root), epochs=cls_epochs, imgsz=cls_imgsz, batch=run_batch,
             device=device, amp=device == 0, lr0=settings.seed_learning_rate,
             cos_lr=True, patience=15, **cls_aug,
             project=str(settings.model_dir / project_id), name="crop_cls_classifier",
@@ -381,7 +418,7 @@ def train_crop_cls_model(
             "detector": det_name, "crop_class": crop_class, "label_classes": label_classes,
             "empty_label": empty_label,
             "augment": bool(augment), "degrees": deg, "translate": tr,
-            "cls_imgsz": cls_imgsz,
+            "cls_imgsz": cls_imgsz, "batch": batch,
             "val_accuracy": round(correct / total, 4) if total else None,
             "confusion": confusion,
         }

@@ -776,7 +776,7 @@ const SegTrainingPanel = ({ project, onClose }) => {
 
                             <section className="mtp-section">
                                 <p className="mtp-section-title">Training Config</p>
-                                <ClassPicker classCounts={stats?.class_counts} selected={trainClasses} onChange={setTrainClasses} />
+                                <ClassPicker classCounts={stats?.class_breakdown} selected={trainClasses} onChange={setTrainClasses} />
 
                                 <div className="mtp-tabs" style={{ marginBottom: 12 }}>
                                     <button

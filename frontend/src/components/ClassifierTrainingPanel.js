@@ -84,8 +84,8 @@ export default function ClassifierTrainingPanel({ project, onClose }) {
     // Training config — same shape as the Main / Segmentation panels
     const [selectedModel, setSelectedModel] = useState(DEFAULT_CLS_MODEL);
     const [epochs, setEpochs] = useState(40);
-    const [imgsz, setImgsz] = useState(224);
-    const [batch, setBatch] = useState(32);
+    const [imgsz, setImgsz] = useState(0);      // 0 = Auto (sized from the crops)
+    const [batch, setBatch] = useState(-1);     // -1 = Auto (fits the GPU)
     const [preprocess, setPreprocess] = useState(true);
     const [aug, setAug] = useAug();
 
@@ -112,7 +112,7 @@ export default function ClassifierTrainingPanel({ project, onClose }) {
             axios.get(`${API_URL}/crop-cls/model-status/${project.id}`),
         ])
             .then(([stats, ms]) => {
-                setClassCounts(stats.data.class_counts || {});
+                setClassCounts(stats.data.class_breakdown || {});
                 setModelStatus(ms.data);
             })
             .catch(() => setError('Could not load project data.'))
@@ -515,15 +515,25 @@ export default function ClassifierTrainingPanel({ project, onClose }) {
                                    className="mtp-epochs-slider" onChange={e => setEpochs(+e.target.value)} />
                         </div>
                         <div className="mtp-model-row">
-                            <label className="mtp-model-label">Image size</label>
-                            <select className="mtp-model-select" value={imgsz} onChange={e => setImgsz(+e.target.value)}>
-                                {[160, 224, 320, 384, 448, 640].map(n => <option key={n} value={n}>{n} px</option>)}
+                            <label className="mtp-model-label">
+                                Image Size
+                                <span className="mtp-model-hint"> (Auto sizes it from your crops)</span>
+                            </label>
+                            <select className="mtp-model-select mtp-model-select--sm" value={imgsz}
+                                    onChange={e => setImgsz(Number(e.target.value))}>
+                                <option value={0}>Auto (recommended)</option>
+                                {[160, 224, 320, 384, 448, 640].map(n => <option key={n} value={n}>{n} × {n}</option>)}
                             </select>
                         </div>
                         <div className="mtp-model-row">
-                            <label className="mtp-model-label">Batch size</label>
-                            <select className="mtp-model-select" value={batch} onChange={e => setBatch(+e.target.value)}>
-                                {[8, 16, 32, 64, 128].map(n => <option key={n} value={n}>{n}</option>)}
+                            <label className="mtp-model-label">
+                                Batch Size
+                                <span className="mtp-model-hint"> (Auto finds max that fits in VRAM)</span>
+                            </label>
+                            <select className="mtp-model-select mtp-model-select--sm" value={batch}
+                                    onChange={e => setBatch(Number(e.target.value))}>
+                                <option value={-1}>Auto (recommended)</option>
+                                {[2, 4, 8, 16, 32, 64].map(b => <option key={b} value={b}>{b}</option>)}
                             </select>
                         </div>
                         <CheckRow checked={preprocess} onChange={e => setPreprocess(e.target.checked)}>

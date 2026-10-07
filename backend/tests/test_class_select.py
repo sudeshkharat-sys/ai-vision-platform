@@ -76,3 +76,15 @@ def test_folder_label_helpers():
     assert f("data\\no_cover\\a.jpg") == "no_cover"
     assert f("a.jpg") is None and f("__MACOSX/a.jpg") is None
     assert ns["_clean_label"]("  full   cover ") == "full cover"
+
+
+def test_bbox_from_points_fallback():
+    import ast, pathlib
+    src = (pathlib.Path(__file__).resolve().parents[1] / "app/tasks/crop_cls_training.py").read_text()
+    fn = next(n for n in ast.parse(src).body if isinstance(n, ast.FunctionDef) and n.name == "_bbox_from_points")
+    ns = {}
+    exec(compile(ast.Module([fn], []), "x", "exec"), ns)
+    f = ns["_bbox_from_points"]
+    assert f([[0.2, 0.2], [0.6, 0.2], [0.6, 0.8]]) == [0.4, 0.5, 0.4, 0.6000000000000001] or \
+        [round(v, 3) for v in f([[0.2, 0.2], [0.6, 0.2], [0.6, 0.8]])] == [0.4, 0.5, 0.4, 0.6]
+    assert f([[0.1, 0.1]]) is None and f(None) is None

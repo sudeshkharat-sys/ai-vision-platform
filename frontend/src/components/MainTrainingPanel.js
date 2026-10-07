@@ -730,7 +730,7 @@ const MainTrainingPanel = ({ project, onClose }) => {
 
                             {/* Training config */}
                             <section className="mtp-section">
-                                <ClassPicker classCounts={stats?.class_counts} selected={trainClasses} onChange={setTrainClasses} />
+                                <ClassPicker classCounts={stats?.class_breakdown} selected={trainClasses} onChange={setTrainClasses} />
                                 <p className="mtp-section-title">Training Config</p>
 
                                 {/* Starting weights with upload tab */}

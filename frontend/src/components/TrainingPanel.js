@@ -944,6 +944,19 @@ const TrainingPanel = ({ project, onClose }) => {
                                 )}
 
                                 {/* ── Augmentation Settings ── */}
+                                <ClassPicker classCounts={stats?.class_breakdown} selected={trainClasses} onChange={setTrainClasses} />
+
+                                {/* ── Detector mode ── */}
+                                            <p style={{ fontSize: 11, fontWeight: 600, color: '#888', margin: '0 0 8px', textTransform: 'uppercase', letterSpacing: 0.5 }}>Detector mode</p>
+                                            <div style={{ marginBottom: 14 }}>
+                                                <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#555', cursor: 'pointer' }}>
+                                                    <input type="checkbox" checked={classAgnostic}
+                                                        onChange={e => setClassAgnostic(e.target.checked)} />
+                                                    Class-agnostic (box-only) detector
+                                                    <span title="Trains a SEPARATE detector (seed_char_only_best.pt) that only finds character boxes, without trying to identify WHICH character each one is. On tightly-spaced or touching engraved characters, this tends to find tighter/more complete boxes than the normal per-character detector, because it only has one job instead of two. Character identity still comes from the CRNN/value classifier/CNN reading the boxes it finds. Does not replace or overwrite your normal seed_best.pt." style={{ cursor: 'help', color: '#aaa', fontSize: 11 }}>ⓘ</span>
+                                                </label>
+                                            </div>
+
                                 <AugmentationSettings aug={aug} onChange={setAug} kind="detect" />
                             </section>
 

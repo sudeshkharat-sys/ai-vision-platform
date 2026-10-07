@@ -41,10 +41,10 @@ class TrainCropClsRequest(BaseModel):
     cls_model_name: str = "yolo11s-cls.pt"
     custom_weights: Optional[str] = None
     cls_epochs: int = 40
-    cls_imgsz: int = 224
+    cls_imgsz: int = 0       # 0 = Auto (sized from the crops)
     margin: float = 0.12
     preprocess: bool = True
-    batch: int = 32
+    batch: int = -1          # -1 = Auto (fit the GPU)
     # The detector class to cut out (e.g. "engine"); every other class inside
     # it becomes a classifier class unless label_classes narrows it.
     crop_class: Optional[str] = None
