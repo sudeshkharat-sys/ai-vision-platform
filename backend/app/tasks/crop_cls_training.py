@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import time
 from collections import Counter
 from pathlib import Path
 
@@ -166,7 +167,8 @@ def rotated_crop(img, bbox_xyxy, margin, angle, shift=(0.0, 0.0)):
 
 
 def _build_cls_dataset(split_map, anns_by_image, root: Path, mode, margin, preprocess,
-                       rotate_copies: int = 0, degrees: float = 0.0, translate: float = 0.0):
+                       rotate_copies: int = 0, degrees: float = 0.0, translate: float = 0.0,
+                       progress=None):
     """Write root/<split>/<state>/*.jpg. Returns {split: Counter(state)}.
 
     rotate_copies > 0 adds that many copies of every TRAIN sample, each
@@ -183,6 +185,8 @@ def _build_cls_dataset(split_map, anns_by_image, root: Path, mode, margin, prepr
     counts = {s: Counter() for s in split_map}
     for split, imgs in split_map.items():
         for n, img_row in enumerate(imgs):
+            if progress:
+                progress(split, n, len(imgs))
             anns = anns_by_image.get(img_row["id"], [])
             if not anns:
                 continue
@@ -235,6 +239,47 @@ def _confusion(model, val_dir: Path, classes):
         for res in model.predict(files, verbose=False):
             matrix[cdir.name][res.names[int(res.probs.top1)]] += 1
     return matrix
+
+
+class _TaskLog:
+    """Stands in for the Celery task so EVERY progress update carries the
+    current stage and a running log (shown in the panel's Jobs tab), and each
+    log line is also printed on the worker console. The epoch callback from
+    training.py calls update_state(state=..., meta=...) and reads request.id,
+    both of which are forwarded."""
+
+    def __init__(self, task):
+        self._task = task
+        self.logs: list = []
+        self.stage = "starting"
+        self._last_epoch = 0
+
+    @property
+    def request(self):
+        return self._task.request
+
+    def log(self, msg: str):
+        print(f"[crop-cls] {msg}", flush=True)
+        self.logs.append(f"{time.strftime('%H:%M:%S')}  {msg}")
+        del self.logs[:-300]
+
+    def set(self, stage: str, **meta):
+        self.stage = stage
+        self.update_state(state="STARTED", meta=meta)
+
+    def update_state(self, state="STARTED", meta=None):
+        meta = dict(meta or {})
+        epoch, hist = meta.get("epoch") or 0, meta.get("history") or []
+        if epoch and epoch != self._last_epoch and hist:
+            self._last_epoch = epoch
+            last = hist[-1]
+            acc = last.get("accuracy_top1")
+            self.log(f"epoch {epoch}/{meta.get('total_epochs')}"
+                     + (f"  loss {last['loss']:.4f}" if last.get("loss") is not None else "")
+                     + (f"  val acc {acc:.3f}" if acc is not None else ""))
+        meta.setdefault("stage", self.stage)
+        meta["logs"] = list(self.logs)
+        self._task.update_state(state=state, meta=meta)
 
 
 def _auto_imgsz(root: Path, limit: int = 200) -> int:
@@ -299,11 +344,15 @@ def train_crop_cls_model(
     if mode not in ("crop", "whole"):
         return {"error": "mode must be 'crop' or 'whole'"}
 
+    tl = _TaskLog(self)
+    tl.set("reading", epoch=0, total_epochs=cls_epochs, history=[])
+    tl.log("Reading annotations from the database")
     db = StateDBConnector()
     with db.get_session() as conn:
         img_rows, ann_rows = _fetch(db, conn, project_id)
     if not img_rows:
         return {"error": "No annotated images found"}
+    tl.log(f"{len(img_rows)} annotated images, {len(ann_rows)} annotations")
 
     plain = _group_plain(ann_rows)
     derive_summary = None
@@ -326,6 +375,8 @@ def train_crop_cls_model(
                                    - {crop_class})
         anns_by_image, derive_summary = derive_dataset_labels(
             plain, crop_class, label_classes, empty_label, min_overlap)
+        tl.log(f"Crops per class: {derive_summary['per_class']}  "
+               f"(conflicts skipped: {derive_summary['conflict']}, empty: {derive_summary['empty']})")
     else:
         anns_by_image = _group(ann_rows, region_classes)
     img_rows = [i for i in img_rows if anns_by_image.get(i["id"])]
@@ -366,12 +417,22 @@ def train_crop_cls_model(
         split_map = {"train": train_i, "val": val_i}
         if test_i:
             split_map["test"] = test_i
-        self.update_state(state="STARTED", meta={
-            "stage": "dataset", "epoch": 0, "total_epochs": cls_epochs, "history": []})
+        tl.log(f"Images per split: train {len(train_i)}, val {len(val_i)}, test {len(test_i)}"
+               + (f"; each train crop gets {copies} rotated/shifted copies" if copies else ""))
+        tl.set("dataset", epoch=0, total_epochs=cls_epochs, history=[])
         shutil.rmtree(cls_root, ignore_errors=True)
+        _tick = {"t": 0.0}
+
+        def _progress(split, done, total):
+            if time.time() - _tick["t"] >= 1.5:     # don't flood Redis
+                _tick["t"] = time.time()
+                tl.set("dataset", epoch=0, total_epochs=cls_epochs, history=[],
+                       dataset_progress={"split": split, "done": done, "total": total})
+
         counts = _build_cls_dataset(
             split_map, anns_by_image, cls_root, mode, margin, preprocess,
-            rotate_copies=copies, degrees=deg, translate=tr)
+            rotate_copies=copies, degrees=deg, translate=tr, progress=_progress)
+        tl.log("Dataset built: " + "; ".join(f"{k} {dict(v)}" for k, v in counts.items()))
         train_states = [s for s in states if counts["train"][s] > 0]
         if len(train_states) < 2:
             return {"error": f"Need training samples for at least 2 classes, got {dict(counts['train'])}"}
@@ -389,21 +450,27 @@ def train_crop_cls_model(
         # Auto batch = 90% of GPU memory (same as the detection trainers); CPU can't auto-size.
         run_batch = batch if batch != -1 else (0.9 if device == 0 else 16)
         history, starts, stop = [], [], {"value": False}
-        model = YOLO(start_weights)
+        tl.log(f"Image size {cls_imgsz}, batch {run_batch}, device {'GPU' if device == 0 else 'CPU'}")
+        tl.set("weights", epoch=0, total_epochs=cls_epochs, history=[])
+        tl.log(f"Loading weights {start_weights} (downloaded on first use - needs internet)")
+        try:
+            model = YOLO(start_weights)
+        except Exception as e:
+            return {"error": f"Could not load '{start_weights}': {e}. The first run downloads these "
+                             "weights - check the internet/proxy connection, or copy the file next to the app."}
         model.add_callback(
             "on_fit_epoch_end",
-            _make_epoch_callback(self, cls_epochs, history, starts, stop),
+            _make_epoch_callback(tl, cls_epochs, history, starts, stop),
         )
-        self.update_state(state="STARTED", meta={
-            "stage": "classifier", "epoch": 0, "total_epochs": cls_epochs, "history": [],
-            "samples": {s: dict(c) for s, c in counts.items()},
-        })
+        tl.log("Training started")
+        tl.set("classifier", epoch=0, total_epochs=cls_epochs, history=[],
+               samples={s: dict(c) for s, c in counts.items()})
         res = model.train(
             data=str(cls_root), epochs=cls_epochs, imgsz=cls_imgsz, batch=run_batch,
             device=device, amp=device == 0, lr0=settings.seed_learning_rate,
             cos_lr=True, patience=15, **cls_aug,
             project=str(settings.model_dir / project_id), name="crop_cls_classifier",
-            verbose=False, workers=0,
+            verbose=True, workers=0,
         )
         if stop["value"]:
             shutil.rmtree(res.save_dir, ignore_errors=True)
@@ -415,6 +482,7 @@ def train_crop_cls_model(
         confusion = _confusion(YOLO(str(best)), cls_root / "val", train_states)
         total = sum(sum(r.values()) for r in confusion.values())
         correct = sum(confusion[c][c] for c in confusion)
+        tl.log(f"Done. Validation accuracy {correct}/{total}")
 
         meta = {
             "mode": mode, "preprocess": bool(preprocess), "margin": margin,
@@ -435,6 +503,7 @@ def train_crop_cls_model(
             "classifier_metrics": history[-1] if history else {},
             "history": history,
             "model_path": str(out_dir / CLS_FILES["classifier"]),
+            "logs": tl.logs,
         })
         return result
     finally:

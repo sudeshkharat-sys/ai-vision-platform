@@ -88,3 +88,29 @@ def test_bbox_from_points_fallback():
     assert f([[0.2, 0.2], [0.6, 0.2], [0.6, 0.8]]) == [0.4, 0.5, 0.4, 0.6000000000000001] or \
         [round(v, 3) for v in f([[0.2, 0.2], [0.6, 0.2], [0.6, 0.8]])] == [0.4, 0.5, 0.4, 0.6]
     assert f([[0.1, 0.1]]) is None and f(None) is None
+
+
+def test_task_log_carries_stage_logs_and_epoch_lines():
+    import ast, pathlib, time
+    src = (pathlib.Path(__file__).resolve().parents[1] / "app/tasks/crop_cls_training.py").read_text()
+    cls = next(n for n in ast.parse(src).body if isinstance(n, ast.ClassDef) and n.name == "_TaskLog")
+    ns = {"time": time}
+    exec(compile(ast.Module([cls], []), "x", "exec"), ns)
+
+    class FakeTask:
+        request = type("R", (), {"id": "t1"})()
+        states = []
+        def update_state(self, state, meta):
+            self.states.append(meta)
+
+    ft = FakeTask()
+    tl = ns["_TaskLog"](ft)
+    assert tl.request.id == "t1"
+    tl.log("hello")
+    tl.set("dataset", epoch=0, total_epochs=3, history=[])
+    # what the shared epoch callback sends: no stage, no logs
+    tl.update_state(state="STARTED", meta={"epoch": 1, "total_epochs": 3, "eta_seconds": 5,
+                                           "history": [{"epoch": 1, "loss": 0.5, "accuracy_top1": 0.8}]})
+    last = ft.states[-1]
+    assert last["stage"] == "dataset" and last["epoch"] == 1
+    assert any("hello" in l for l in last["logs"]) and any("epoch 1/3" in l and "0.800" in l for l in last["logs"])

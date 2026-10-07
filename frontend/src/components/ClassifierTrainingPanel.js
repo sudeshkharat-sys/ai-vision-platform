@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import axios from 'axios';
-import { Layers, X, RefreshCw, Eye, Play, Upload, FolderUp } from 'lucide-react';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+import { Layers, X, RefreshCw, Eye, Play, Upload, FolderUp, Inbox } from 'lucide-react';
 import { CLS_MODEL_GROUPS, DEFAULT_CLS_MODEL } from '../constants/yoloModels';
 import AugmentationSettings, { useAug, augPayload } from './AugmentationSettings';
 // Reuse MainTrainingPanel's styling (mtp-* classes) — same visual language.
@@ -13,9 +14,80 @@ const IMPORT_CHUNK = 40;
 const IMG_RE = /\.(jpe?g|png|bmp|webp)$/i;
 
 const STAGE_LABEL = {
-    dataset: 'Building classification set',
+    reading: 'Reading annotations',
+    dataset: 'Building classification set (cutting crops)',
+    weights: 'Loading classifier weights (downloaded on first use)',
     classifier: 'Training classifier',
 };
+
+const STATUS_LABEL = {
+    PENDING: { label: 'Pending', cls: 'badge--pending' },
+    STARTED: { label: 'Running', cls: 'badge--running' },
+    SUCCESS: { label: 'Done', cls: 'badge--done' },
+    FAILURE: { label: 'Failed', cls: 'badge--fail' },
+    REVOKED: { label: 'Stopped', cls: 'badge--fail' },
+};
+const DB_STATUS = { pending: 'PENDING', started: 'STARTED', success: 'SUCCESS', failure: 'FAILURE', revoked: 'REVOKED' };
+const ACTIVE = ['PENDING', 'STARTED'];
+const NO_WORKER_TICKS = 15; // ~45 s still PENDING => probably no worker running
+
+const fmtTime = (d) => new Date(d).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+// Loss and validation accuracy per epoch (history comes from the shared epoch callback)
+function ClsCharts({ history }) {
+    if (!history?.length) return null;
+    const hasLoss = history.some(h => h.loss != null || h['val/loss'] != null);
+    const hasAcc = history.some(h => h.accuracy_top1 != null);
+    const axis = { fill: '#666666', fontSize: 10 };
+    return (
+        <>
+            {hasLoss && (
+                <div className="chart-wrap">
+                    <p className="chart-title">Loss</p>
+                    <ResponsiveContainer width="100%" height={150}>
+                        <LineChart data={history} margin={{ top: 4, right: 8, bottom: 0, left: -20 }}>
+                            <CartesianGrid strokeDasharray="3 3" stroke="#e5e5e5" />
+                            <XAxis dataKey="epoch" tick={axis} />
+                            <YAxis tick={axis} />
+                            <Tooltip />
+                            <Legend wrapperStyle={{ fontSize: 10 }} />
+                            <Line isAnimationActive={false} type="monotone" dataKey="loss" name="Train" stroke="#dc143c" dot={false} strokeWidth={1.5} />
+                            <Line isAnimationActive={false} type="monotone" dataKey="val/loss" name="Validation" stroke="#f59e0b" dot={false} strokeWidth={1.5} />
+                        </LineChart>
+                    </ResponsiveContainer>
+                </div>
+            )}
+            {hasAcc && (
+                <div className="chart-wrap">
+                    <p className="chart-title">Validation accuracy</p>
+                    <ResponsiveContainer width="100%" height={150}>
+                        <LineChart data={history} margin={{ top: 4, right: 8, bottom: 0, left: -20 }}>
+                            <CartesianGrid strokeDasharray="3 3" stroke="#e5e5e5" />
+                            <XAxis dataKey="epoch" tick={axis} />
+                            <YAxis domain={[0, 1]} tick={axis} />
+                            <Tooltip />
+                            <Legend wrapperStyle={{ fontSize: 10 }} />
+                            <Line isAnimationActive={false} type="monotone" dataKey="accuracy_top1" name="Top-1" stroke="#10b981" dot={false} strokeWidth={1.5} />
+                            <Line isAnimationActive={false} type="monotone" dataKey="accuracy_top5" name="Top-5" stroke="#38bdf8" dot={false} strokeWidth={1.5} />
+                        </LineChart>
+                    </ResponsiveContainer>
+                </div>
+            )}
+        </>
+    );
+}
+
+function LogBox({ lines }) {
+    const ref = useRef(null);
+    useEffect(() => { if (ref.current) ref.current.scrollTop = ref.current.scrollHeight; }, [lines]);
+    if (!lines?.length) return null;
+    return (
+        <pre ref={ref} style={{ background: '#111', color: '#d4d4d4', fontSize: 11, lineHeight: 1.5, padding: 10,
+                                borderRadius: 8, maxHeight: 220, overflow: 'auto', margin: '10px 0', whiteSpace: 'pre-wrap' }}>
+            {lines.join('\n')}
+        </pre>
+    );
+}
 
 // Plain checkbox row (the mtp-toggle-* classes are styled for switch markup).
 function CheckRow({ checked, onChange, disabled, children, style }) {
@@ -93,8 +165,11 @@ export default function ClassifierTrainingPanel({ project, onClose }) {
     const [preview, setPreview] = useState(null);
     const [previewing, setPreviewing] = useState(false);
     const [error, setError] = useState(null);
-    const [job, setJob] = useState(null);   // {taskId, status, meta, result, error}
-    const pollRef = useRef(null);
+    const [view, setView] = useState('setup');      // 'setup' | 'jobs'
+    const [jobs, setJobs] = useState([]);            // persisted classifier jobs, oldest first
+    const [activeJobId, setActiveJobId] = useState(null);
+    const jobsRef = useRef([]);
+    jobsRef.current = jobs;
 
     // Test-image prediction
     const [prediction, setPrediction] = useState(null);
@@ -120,7 +195,71 @@ export default function ClassifierTrainingPanel({ project, onClose }) {
     }, [project.id]);
 
     useEffect(() => { load(); }, [load]);
-    useEffect(() => () => clearInterval(pollRef.current), []);
+    const patchJob = (id, patch) => setJobs(prev => prev.map(j => (j.id === id ? { ...j, ...patch } : j)));
+
+    // Turn a Celery task-status reply into job state, and persist it when the job ends.
+    const applyStatus = useCallback((job, data) => {
+        const res = data.result;
+        let status = data.status;
+        let error = data.error || null;
+        if (status === 'SUCCESS' && res?.error) { status = 'FAILURE'; error = res.error; }   // task returned {"error": ...}
+        const meta = data.meta || null;
+        const logs = res?.logs || meta?.logs || job.logs;
+        const history = res?.history || meta?.history || job.history;
+        const ticks = status === 'PENDING' ? (job.pendingTicks || 0) + 1 : 0;
+        patchJob(job.id, { status, meta: meta || job.meta, result: status === 'SUCCESS' ? res : job.result,
+                           error, logs, history, pendingTicks: ticks });
+        if (!ACTIVE.includes(status)) {
+            axios.patch(`${API_URL}/pipeline/jobs/${job.taskId}`, {
+                status: status === 'SUCCESS' ? 'success' : status === 'REVOKED' ? 'revoked' : 'failure',
+                result_meta: { logs, history, summary: job.summary, result: status === 'SUCCESS' ? res : undefined, error },
+                finished_at: new Date().toISOString(),
+            }).catch(() => {});
+            if (status === 'SUCCESS') load();
+        }
+    }, [load]);   // eslint-disable-line react-hooks/exhaustive-deps
+
+    // Saved jobs survive closing the panel / reloading the page
+    useEffect(() => {
+        axios.get(`${API_URL}/pipeline/jobs/${project.id}?job_type=cls_training`)
+            .then(async res => {
+                const loaded = res.data.map(j => ({
+                    id: j.id, taskId: j.id,
+                    status: DB_STATUS[j.status] || 'PENDING',
+                    summary: j.result_meta?.summary || '',
+                    logs: j.result_meta?.logs || [],
+                    history: j.result_meta?.history || [],
+                    result: j.result_meta?.result || null,
+                    error: j.result_meta?.error || null,
+                    meta: null,
+                    startedAt: new Date(j.created_at),
+                }));
+                setJobs(loaded);
+                if (loaded.length) setActiveJobId(loaded[loaded.length - 1].id);
+                // anything that was running when the panel closed: ask Celery what happened
+                for (const job of loaded.filter(j => ACTIVE.includes(j.status))) {
+                    try {
+                        const { data } = await axios.get(`${API_URL}/pipeline/task-status/${job.taskId}`);
+                        applyStatus(job, data);
+                    } catch { /* keep as is */ }
+                }
+            })
+            .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [project.id]);
+
+    // One poller for every running job
+    useEffect(() => {
+        const t = setInterval(async () => {
+            for (const job of jobsRef.current.filter(j => ACTIVE.includes(j.status))) {
+                try {
+                    const { data } = await axios.get(`${API_URL}/pipeline/task-status/${job.taskId}`);
+                    applyStatus(job, data);
+                } catch { /* transient — keep polling */ }
+            }
+        }, POLL_INTERVAL);
+        return () => clearInterval(t);
+    }, [applyStatus]);
 
     // Default to the best trained detector (Main, else Seed).
     useEffect(() => {
@@ -227,20 +366,6 @@ export default function ClassifierTrainingPanel({ project, onClose }) {
         }
     };
 
-    const poll = (taskId) => {
-        clearInterval(pollRef.current);
-        pollRef.current = setInterval(async () => {
-            try {
-                const { data } = await axios.get(`${API_URL}/pipeline/task-status/${taskId}`);
-                setJob({ taskId, status: data.status, meta: data.meta, result: data.result, error: data.error });
-                if (['SUCCESS', 'FAILURE', 'REVOKED'].includes(data.status)) {
-                    clearInterval(pollRef.current);
-                    if (data.status === 'SUCCESS') load();
-                }
-            } catch { /* transient — keep polling */ }
-        }, POLL_INTERVAL);
-    };
-
     const startTraining = async () => {
         setError(null);
         try {
@@ -252,16 +377,34 @@ export default function ClassifierTrainingPanel({ project, onClose }) {
                 ? { ...common, mode: 'whole', region_classes: folderClasses }
                 : { ...common, mode: 'crop', ...(detector ? { detector } : {}), ...rules() };
             const { data } = await axios.post(`${API_URL}/crop-cls/train/${project.id}`, body);
-            setJob({ taskId: data.task_id, status: 'PENDING' });
-            poll(data.task_id);
+            const summary = source === 'folders'
+                ? `${selectedModel} · image folders (${folderClasses.length} classes)`
+                : `${selectedModel} · crop "${cropClass}" → ${labelClasses.length} classes`;
+            const job = {
+                id: data.task_id, taskId: data.task_id, status: 'PENDING', summary,
+                logs: [`Task ID: ${data.task_id}`, 'Waiting for the worker to pick the job up…'],
+                history: [], result: null, error: null, meta: null, startedAt: new Date(),
+            };
+            setJobs(prev => [...prev, job]);
+            setActiveJobId(job.id);
+            setView('jobs');
+            axios.post(`${API_URL}/pipeline/jobs`, {
+                task_id: data.task_id, project_id: project.id, job_type: 'cls_training',
+                result_meta: { logs: job.logs, summary, startedAt: job.startedAt.toISOString() },
+            }).catch(() => {});
         } catch (e) {
             setError(e.response?.data?.detail || 'Could not start training.');
         }
     };
 
-    const stopTraining = async () => {
-        if (!job?.taskId) return;
+    const stopJob = async (job) => {
         await axios.post(`${API_URL}/crop-cls/stop/${job.taskId}`).catch(() => {});
+    };
+
+    const removeJob = (job) => {
+        axios.delete(`${API_URL}/pipeline/jobs/${job.taskId}`).catch(() => {});
+        setJobs(prev => prev.filter(j => j.id !== job.id));
+        if (activeJobId === job.id) setActiveJobId(null);
     };
 
     const predictFile = async (file) => {
@@ -280,9 +423,8 @@ export default function ClassifierTrainingPanel({ project, onClose }) {
         }
     };
 
-    const running = job && ['PENDING', 'STARTED'].includes(job.status);
-    const result = job?.status === 'SUCCESS' ? job.result : null;
-    const resultError = result?.error || (job?.status === 'FAILURE' ? job.error : null);
+    const anyRunning = jobs.some(j => ACTIVE.includes(j.status));
+    const activeJob = jobs.find(j => j.id === activeJobId) || jobs[jobs.length - 1] || null;
 
     return (
         <div className="mtp-overlay" onClick={onClose}>
@@ -298,9 +440,21 @@ export default function ClassifierTrainingPanel({ project, onClose }) {
                     <button className="mtp-close" onClick={onClose}><X size={18} /></button>
                 </div>
 
+                <div className="mtp-tabs">
+                    <button className={`mtp-tab ${view === 'setup' ? 'mtp-tab--active' : ''}`} onClick={() => setView('setup')}>
+                        Setup
+                    </button>
+                    <button className={`mtp-tab ${view === 'jobs' ? 'mtp-tab--active' : ''}`} onClick={() => setView('jobs')}>
+                        Jobs
+                        {jobs.length > 0 && <span className="mtp-tab-badge">{jobs.length}</span>}
+                        {anyRunning && <span className="mtp-tab-dot" />}
+                    </button>
+                </div>
+
                 <div className="mtp-body">
                     {error && <div className="mtp-warning">{error}</div>}
 
+                    {view === 'setup' && (<>
                     {/* ── 1. Data ── */}
                     <section className="mtp-section">
                         <div className="mtp-section-header">
@@ -552,45 +706,16 @@ export default function ClassifierTrainingPanel({ project, onClose }) {
                                 {' '}(training again replaces it)
                             </p>
                         )}
-                        <button className="mtp-train-btn" style={{ marginTop: 4 }}
-                                disabled={!canRun || running} onClick={startTraining}>
-                            <Play size={16} /> {running ? 'Training…' : 'Train classifier'}
-                        </button>
-                        {running && (
-                            <button className="mtp-refresh" style={{ marginLeft: 8 }} onClick={stopTraining}>Stop</button>
+                        {anyRunning && (
+                            <p style={{ fontSize: 12, opacity: 0.75 }}>
+                                A job is already running — a new one will wait for it (see the Jobs tab).
+                            </p>
                         )}
+                        <button className="mtp-train-btn" style={{ marginTop: 4 }}
+                                disabled={!canRun} onClick={startTraining}>
+                            <Play size={16} /> Train classifier
+                        </button>
                     </section>
-
-                    {/* ── Progress / result ── */}
-                    {job && (
-                        <section className="mtp-section">
-                            <div className="mtp-section-header">
-                                <span className="mtp-section-title">Progress</span>
-                            </div>
-                            {running && (
-                                <p>
-                                    {job.meta?.epoch > 0
-                                        ? `Training classifier — epoch ${job.meta.epoch}/${job.meta.total_epochs}`
-                                          + (job.meta.eta_seconds > 0 ? ` · ~${Math.ceil(job.meta.eta_seconds / 60)} min left` : '')
-                                        : (STAGE_LABEL[job.meta?.stage] || 'Waiting for worker…')}
-                                </p>
-                            )}
-                            {resultError && <div className="mtp-warning">{resultError}</div>}
-                            {job.status === 'REVOKED' && <p>Stopped.</p>}
-                            {result && !result.error && (
-                                <>
-                                    <p>
-                                        ✅ Done — validation accuracy{' '}
-                                        <b>{result.val_accuracy != null
-                                            ? `${(result.val_accuracy * 100).toFixed(1)}%` : 'n/a'}</b>
-                                        {' '}on classes: {result.classes?.join(', ')}
-                                        {result.detector && ` · detector: ${result.detector} model`}
-                                    </p>
-                                    <ConfusionTable matrix={result.confusion} />
-                                </>
-                            )}
-                        </section>
-                    )}
 
                     {/* ── Test ── */}
                     {modelStatus?.has_classifier && (
@@ -621,6 +746,115 @@ export default function ClassifierTrainingPanel({ project, onClose }) {
                                 </div>
                             )}
                         </section>
+                    )}
+                    </>)}
+
+                    {/* ═══════════ JOBS VIEW ═══════════ */}
+                    {view === 'jobs' && (
+                        jobs.length === 0 ? (
+                            <div className="mtp-jobs-empty">
+                                <span className="mtp-jobs-empty-icon"><Inbox size={32} /></span>
+                                <p>No classifier jobs yet.</p>
+                                <p className="mtp-jobs-empty-sub">Click <strong>Train classifier</strong> in Setup to start one.</p>
+                            </div>
+                        ) : (
+                            <div className="mtp-jobs-layout">
+                                <div className="mtp-jobs-list">
+                                    {[...jobs].reverse().map((job, idx) => {
+                                        const info = STATUS_LABEL[job.status] || { label: job.status, cls: 'badge--pending' };
+                                        return (
+                                            <div key={job.id}
+                                                 className={`mtp-job-item ${activeJob?.id === job.id ? 'mtp-job-item--active' : ''}`}
+                                                 onClick={() => setActiveJobId(job.id)}>
+                                                <div className="mtp-job-item-top">
+                                                    <span className="mtp-job-num">#{jobs.length - idx}</span>
+                                                    <span className={`mtp-job-badge ${info.cls}`}>{info.label}</span>
+                                                    {!ACTIVE.includes(job.status) && (
+                                                        <button onClick={(e) => { e.stopPropagation(); removeJob(job); }} title="Remove"
+                                                                style={{ marginLeft: 'auto', background: 'none', border: 'none', cursor: 'pointer', color: '#999', padding: '0 2px', lineHeight: 1 }}>✕</button>
+                                                    )}
+                                                </div>
+                                                <div className="mtp-job-item-model">{job.summary || 'Classifier'}</div>
+                                                <div className="mtp-job-item-time">{fmtTime(job.startedAt)}</div>
+                                                {job.status === 'STARTED' && job.meta?.epoch > 0 && (
+                                                    <div className="mtp-job-item-epoch">{job.meta.epoch}/{job.meta.total_epochs}</div>
+                                                )}
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+
+                                {activeJob && (() => {
+                                    const info = STATUS_LABEL[activeJob.status] || { label: activeJob.status, cls: 'badge--pending' };
+                                    const meta = activeJob.meta || {};
+                                    const dp = meta.dataset_progress;
+                                    const hist = activeJob.history || [];
+                                    const res = activeJob.status === 'SUCCESS' ? activeJob.result : null;
+                                    const pct = meta.total_epochs ? Math.round(((meta.epoch || 0) / meta.total_epochs) * 100) : 0;
+                                    return (
+                                        <div className="mtp-job-detail">
+                                            <div className="mtp-job-detail-header">
+                                                <span className={`mtp-job-badge mtp-job-badge--lg ${info.cls}`}>{info.label}</span>
+                                                <span className="mtp-job-detail-time">{fmtTime(activeJob.startedAt)}</span>
+                                                {ACTIVE.includes(activeJob.status) && <span className="mtp-running-badge">● Live</span>}
+                                                {ACTIVE.includes(activeJob.status) && (
+                                                    <button className="mtp-refresh" style={{ marginLeft: 'auto' }} onClick={() => stopJob(activeJob)}>Stop</button>
+                                                )}
+                                            </div>
+                                            {activeJob.summary && <div className="mtp-job-model-tag">{activeJob.summary}</div>}
+                                            <div className="mtp-job-taskid">
+                                                <span className="mtp-job-taskid-label">Task ID</span>
+                                                <span className="mtp-job-taskid-val">{activeJob.taskId}</span>
+                                            </div>
+
+                                            {ACTIVE.includes(activeJob.status) && (
+                                                <div style={{ margin: '10px 0' }}>
+                                                    <div style={{ fontSize: 13, fontWeight: 600 }}>
+                                                        {activeJob.status === 'PENDING' && !meta.stage
+                                                            ? 'Waiting for the worker…'
+                                                            : STAGE_LABEL[meta.stage] || 'Working…'}
+                                                        {meta.stage === 'dataset' && dp ? ` — ${dp.split} images ${dp.done}/${dp.total}` : ''}
+                                                        {meta.stage === 'classifier' && meta.epoch > 0
+                                                            ? ` — epoch ${meta.epoch}/${meta.total_epochs}`
+                                                              + (meta.eta_seconds > 0 ? ` · ~${Math.ceil(meta.eta_seconds / 60)} min left` : '') : ''}
+                                                    </div>
+                                                    {meta.stage === 'classifier' && (
+                                                        <div style={{ height: 6, background: '#eee', borderRadius: 4, marginTop: 6 }}>
+                                                            <div style={{ width: `${pct}%`, height: '100%', background: '#dc143c', borderRadius: 4 }} />
+                                                        </div>
+                                                    )}
+                                                    {activeJob.status === 'PENDING' && activeJob.pendingTicks >= NO_WORKER_TICKS && (
+                                                        <div className="mtp-warning" style={{ marginTop: 8 }}>
+                                                            The job has not started. Is the Celery worker running? Restart it after pulling new code,
+                                                            and check its window for errors.
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            )}
+
+                                            {activeJob.error && <div className="mtp-warning">{activeJob.error}</div>}
+                                            {activeJob.status === 'REVOKED' && <p>Stopped.</p>}
+
+                                            <LogBox lines={activeJob.logs} />
+                                            <ClsCharts history={hist} />
+
+                                            {res && (
+                                                <>
+                                                    <p>
+                                                        ✅ Done — validation accuracy{' '}
+                                                        <b>{res.val_accuracy != null ? `${(res.val_accuracy * 100).toFixed(1)}%` : 'n/a'}</b>
+                                                        {' '}on classes: {res.classes?.join(', ')}
+                                                        {res.detector && ` · detector: ${res.detector} model`}
+                                                    </p>
+                                                    {res.detector_note && <div className="mtp-warning">{res.detector_note}</div>}
+                                                    <ConfusionTable matrix={res.confusion} />
+                                                </>
+                                            )}
+                                        </div>
+                                    );
+                                })()}
+                            </div>
+                        )
                     )}
                 </div>
             </div>
