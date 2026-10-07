@@ -33,6 +33,7 @@ from .training import (
 )
 from ..config import settings
 from ..connectors.statedb_connector import StateDBConnector
+from ..services.class_select import derive_dataset_labels
 from ..services.cls_model import CLS_FILES, REGION_CLASS, cls_dir, crop_region
 
 
@@ -89,6 +90,28 @@ def _group(ann_rows, region_classes):
     if any(a["explicit_state"] for anns in out.values() for a in anns):
         out = {iid: kept for iid, anns in out.items()
                if (kept := [a for a in anns if a["explicit_state"]])}
+    return out
+
+
+def _group_plain(ann_rows):
+    """image_id -> [{class_name, bbox, points, ...}] for every usable box,
+    with no state logic (used by the crop-class / label-class flow, where
+    the label comes from nested boxes rather than Annotation.state)."""
+    out: dict = {}
+    for row in ann_rows:
+        bbox = row.get("bbox")
+        bbox = json.loads(bbox) if isinstance(bbox, str) else bbox
+        if not bbox or len(bbox) != 4:
+            continue
+        points = row.get("points")
+        points = json.loads(points) if isinstance(points, str) else points
+        out.setdefault(row["image_id"], []).append({
+            "class_name": row["class_name"],
+            "bbox": bbox,
+            "points": points,
+            "annotation_type": row.get("annotation_type") or "bbox",
+            "source": row.get("source", "manual"),
+        })
     return out
 
 
@@ -174,6 +197,10 @@ def train_crop_cls_model(
     preprocess: bool = True,
     batch: int = 32,
     aug_fliplr: float = 0.5,
+    crop_class: str | None = None,         # big region box, e.g. "engine"
+    label_classes: list | None = None,     # boxes inside it that name its state
+    empty_label: str | None = "no_cover",  # label for a region with nothing inside (None = skip)
+    min_overlap: float = 0.5,              # share of a label box that must lie inside the region
 ):
     if mode not in ("crop", "whole"):
         return {"error": "mode must be 'crop' or 'whole'"}
@@ -184,7 +211,14 @@ def train_crop_cls_model(
     if not img_rows:
         return {"error": "No annotated images found"}
 
-    anns_by_image = _group(ann_rows, region_classes)
+    derive_summary = None
+    if crop_class:
+        if not label_classes:
+            return {"error": "label_classes is required when crop_class is set"}
+        anns_by_image, derive_summary = derive_dataset_labels(
+            _group_plain(ann_rows), crop_class, label_classes, empty_label, min_overlap)
+    else:
+        anns_by_image = _group(ann_rows, region_classes)
     img_rows = [i for i in img_rows if anns_by_image.get(i["id"])]
     if not img_rows:
         return {"error": "No usable box annotations found"}
@@ -197,6 +231,8 @@ def train_crop_cls_model(
     out_dir.mkdir(parents=True, exist_ok=True)
     device = _device()
     result: dict = {"status": "success", "mode": mode, "classes": states}
+    if derive_summary:
+        result["label_summary"] = derive_summary
 
     cls_root = Path(f"./temp_cls_{project_id}")
     det_dataset = None
@@ -283,6 +319,8 @@ def train_crop_cls_model(
         meta = {
             "mode": mode, "preprocess": bool(preprocess), "margin": margin,
             "classes": train_states, "region_classes": region_classes,
+            "crop_class": crop_class, "label_classes": label_classes,
+            "empty_label": empty_label,
             "cls_imgsz": cls_imgsz,
             "val_accuracy": round(correct / total, 4) if total else None,
             "confusion": confusion,
@@ -302,3 +340,59 @@ def train_crop_cls_model(
         shutil.rmtree(cls_root, ignore_errors=True)
         if det_dataset is not None:
             shutil.rmtree(det_dataset, ignore_errors=True)
+
+
+def build_label_preview(
+    project_id: str,
+    crop_class: str,
+    label_classes: list,
+    empty_label: str | None = "no_cover",
+    min_overlap: float = 0.5,
+    margin: float = 0.12,
+    samples_per_class: int = 4,
+    thumb: int = 160,
+) -> dict:
+    """Dry run of the crop-class / label-class flow: how many crops each
+    label would get, how many were skipped (conflicts / empty), and a few
+    thumbnail crops per label so the user can sanity-check before training.
+    Nothing is written to disk."""
+    import base64
+
+    db = StateDBConnector()
+    with db.get_session() as conn:
+        img_rows, ann_rows = _fetch(db, conn, project_id)
+    if not img_rows:
+        return {"error": "No annotated images found"}
+
+    samples_by_image, summary = derive_dataset_labels(
+        _group_plain(ann_rows), crop_class, label_classes, empty_label, min_overlap)
+    summary["annotated_images"] = len(img_rows)
+
+    by_id = {i["id"]: i for i in img_rows}
+    shown: dict = {}
+    for iid, samples in samples_by_image.items():
+        for a in samples:
+            label = a["state"]
+            if len(shown.setdefault(label, [])) >= samples_per_class:
+                continue
+            img = cv2.imread(str(_resolve(by_id[iid])))
+            if img is None:
+                continue
+            h, w = img.shape[:2]
+            crop = crop_region(img, _xywh_to_xyxy(a["bbox"], w, h), margin)
+            if crop is None:
+                continue
+            scale = thumb / max(crop.shape[:2])
+            crop = cv2.resize(crop, None, fx=scale, fy=scale)
+            ok, buf = cv2.imencode(".jpg", crop)
+            if ok:
+                shown[label].append(
+                    "data:image/jpeg;base64," + base64.b64encode(buf.tobytes()).decode())
+    summary["samples"] = shown
+    # A big no_cover share usually means cover boxes were never drawn.
+    total = sum(summary["per_class"].values())
+    if empty_label and total and summary["per_class"].get(empty_label, 0) / total > 0.6:
+        summary["warning"] = (
+            f"'{empty_label}' is over 60% of the samples -- check that the "
+            "other label boxes were actually annotated.")
+    return summary

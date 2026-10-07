@@ -8,6 +8,7 @@ import math
 from pathlib import Path
 from ..config import settings
 from ..connectors.statedb_connector import StateDBConnector
+from ..services.class_select import select_train_classes
 from collections import defaultdict
 import yaml
 import json
@@ -723,6 +724,7 @@ def train_seed_model(
     aug_mixup: float = 0.0,
     aug_copy_paste: float = 0.05,
     class_agnostic: bool = False,
+    train_classes: list = None,
 ):
     """
     Quick seed-training on manually annotated images.
@@ -761,6 +763,13 @@ def train_seed_model(
         return {"error": "No annotated images found"}
 
     anns_by_image = _group_annotations(ann_rows)
+    try:
+        classes, anns_by_image, img_rows = select_train_classes(
+            classes, anns_by_image, img_rows, train_classes)
+    except ValueError as e:
+        return {"error": str(e)}
+    if train_classes and not img_rows:
+        return {"error": "No annotated images contain the selected classes"}
 
     # ── Character/OCR projects: neutralise identity-changing augments ──
     # When most classes are single characters (letters/digits), this seed
@@ -927,6 +936,7 @@ def train_main_model(
     aug_scale: float = 0.4,
     aug_mixup: float = 0.0,
     aug_copy_paste: float = 0.1,
+    train_classes: list = None,
 ):
     """
     Full/main training on ALL annotated images (manual + auto-annotated).
@@ -968,6 +978,13 @@ def train_main_model(
         pretrained = model_name
 
     anns_by_image = _group_annotations(ann_rows)
+    try:
+        classes, anns_by_image, img_rows = select_train_classes(
+            classes, anns_by_image, img_rows, train_classes)
+    except ValueError as e:
+        return {"error": str(e)}
+    if train_classes and not img_rows:
+        return {"error": "No annotated images contain the selected classes"}
 
     # ── Phase 2: Build dataset ───────────────────────────────────
     dataset_path, n_train, n_val, n_test = _build_yolo_dataset(
@@ -1101,6 +1118,7 @@ def train_seg_model(
     aug_scale: float = 0.4,
     aug_mixup: float = 0.0,
     aug_copy_paste: float = 0.05,
+    train_classes: list = None,
 ):
     """
     Instance-segmentation training on annotations drawn with the 'segment'
@@ -1137,6 +1155,13 @@ def train_seg_model(
         return {"error": "No annotated images found"}
 
     anns_by_image = _group_annotations(ann_rows)
+    try:
+        classes, anns_by_image, img_rows = select_train_classes(
+            classes, anns_by_image, img_rows, train_classes)
+    except ValueError as e:
+        return {"error": str(e)}
+    if train_classes and not img_rows:
+        return {"error": "No annotated images contain the selected classes"}
 
     has_seg_anns = any(
         a.get("annotation_type") == "segment" and a.get("points")

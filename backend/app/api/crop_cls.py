@@ -13,7 +13,7 @@ from ..api.deps import get_owned_project
 from ..database import get_db
 from ..models.user import User
 from ..services.cls_model import CLS_FILES, cls_dir, load_cls_meta, predict_crop_cls
-from ..tasks.crop_cls_training import train_crop_cls_model
+from ..tasks.crop_cls_training import build_label_preview, train_crop_cls_model
 
 router = APIRouter(prefix="/crop-cls", tags=["crop-cls"])
 
@@ -34,6 +34,40 @@ class TrainCropClsRequest(BaseModel):
     preprocess: bool = True
     batch: int = 32
     aug_fliplr: float = 0.5
+    # Nested-box labelling: the crop_class box (e.g. "engine") is cut out and
+    # labelled by the label_classes box inside it; empty_label if none is.
+    crop_class: Optional[str] = None
+    label_classes: Optional[List[str]] = None
+    empty_label: Optional[str] = "no_cover"
+    min_overlap: float = 0.5
+
+
+class PreviewRequest(BaseModel):
+    crop_class: str
+    label_classes: List[str]
+    empty_label: Optional[str] = "no_cover"
+    min_overlap: float = 0.5
+    margin: float = 0.12
+
+
+@router.post("/preview/{project_id}")
+async def preview_label_set(
+    project_id: str,
+    body: PreviewRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Dry-run the classification set: counts per label, skipped conflicts /
+    empties and sample crops, without training anything."""
+    await get_owned_project(project_id, current_user, db)
+    if not body.label_classes:
+        raise HTTPException(status_code=400, detail="label_classes must not be empty")
+    result = await run_in_threadpool(
+        build_label_preview, project_id, body.crop_class, body.label_classes,
+        body.empty_label, body.min_overlap, body.margin)
+    if "error" in result:
+        raise HTTPException(status_code=404, detail=result["error"])
+    return result
 
 
 @router.post("/train/{project_id}")
@@ -49,6 +83,8 @@ async def start_crop_cls_training(
     req = body or TrainCropClsRequest()
     if req.mode not in ("crop", "whole"):
         raise HTTPException(status_code=400, detail="mode must be 'crop' or 'whole'")
+    if req.crop_class and not req.label_classes:
+        raise HTTPException(status_code=400, detail="label_classes is required with crop_class")
     task = train_crop_cls_model.delay(project_id, **req.model_dump())
     return {"task_id": task.id, "status": "queued"}
 
