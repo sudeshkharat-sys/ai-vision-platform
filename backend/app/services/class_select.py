@@ -75,6 +75,7 @@ def derive_region_labels(
     label_classes,
     empty_label: str | None = "no_cover",
     min_overlap: float = 0.5,
+    combos: Counter | None = None,
 ):
     """Label every ``crop_class`` box in one image by the boxes inside it.
 
@@ -110,6 +111,8 @@ def derive_region_labels(
         distinct = sorted(set(names))
         if len(distinct) > 1:
             stats["conflict"] += 1
+            if combos is not None:
+                combos[" + ".join(distinct)] += 1     # which classes were found together
             continue
         if distinct:
             state = distinct[0]
@@ -137,11 +140,11 @@ def derive_dataset_labels(anns_by_image, crop_class, label_classes,
       {"per_class": {label: n}, "images": n_images_used,
        "empty": n, "conflict": n, "images_without_crop": n}
     """
-    out, per_class = {}, Counter()
+    out, per_class, combos = {}, Counter(), Counter()
     empty = conflict = no_crop = 0
     for iid, anns in anns_by_image.items():
         samples, st = derive_region_labels(
-            anns, crop_class, label_classes, empty_label, min_overlap)
+            anns, crop_class, label_classes, empty_label, min_overlap, combos)
         empty += st["empty"]
         conflict += st["conflict"]
         if not any(a.get("class_name") == crop_class for a in anns):
@@ -154,5 +157,7 @@ def derive_dataset_labels(anns_by_image, crop_class, label_classes,
         "images": len(out),
         "empty": empty,
         "conflict": conflict,
+        # e.g. {"Cut_Cover + cut": 667}: classes that sit in the same crop, so it can't get one label
+        "conflict_combos": dict(combos.most_common(5)),
         "images_without_crop": no_crop,
     }

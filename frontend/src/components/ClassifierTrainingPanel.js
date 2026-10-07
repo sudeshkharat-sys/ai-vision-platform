@@ -625,6 +625,7 @@ export default function ClassifierTrainingPanel({ project, onClose }) {
                                 <span className="mtp-section-title">Training data preview</span>
                             </div>
                             {preview.warning && <div className="mtp-warning">{preview.warning}</div>}
+                            {preview.conflict_warning && <div className="mtp-warning">{preview.conflict_warning}</div>}
                             <div className="mtp-stat-cards">
                                 {Object.entries(preview.per_class).map(([c, n]) => (
                                     <div key={c} className="mtp-stat-card mtp-stat-card--green">

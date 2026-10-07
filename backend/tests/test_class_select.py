@@ -114,3 +114,15 @@ def test_task_log_carries_stage_logs_and_epoch_lines():
     last = ft.states[-1]
     assert last["stage"] == "dataset" and last["epoch"] == 1
     assert any("hello" in l for l in last["logs"]) and any("epoch 1/3" in l and "0.800" in l for l in last["logs"])
+
+
+def test_conflict_combos_are_reported():
+    E = [0.5, 0.5, 0.6, 0.6]
+    anns = {
+        "a": [ann("area", E), ann("cut_cover", [0.5, 0.5, 0.3, 0.3]), ann("cut", [0.5, 0.5, 0.1, 0.1])],
+        "b": [ann("area", E), ann("cut_cover", [0.5, 0.5, 0.3, 0.3]), ann("cut", [0.5, 0.5, 0.1, 0.1])],
+        "c": [ann("area", E), ann("full", [0.5, 0.5, 0.3, 0.3])],
+    }
+    out, summ = cs.derive_dataset_labels(anns, "area", ["cut_cover", "full", "cut"])
+    assert summ["per_class"] == {"full": 1}
+    assert summ["conflict"] == 2 and summ["conflict_combos"] == {"cut + cut_cover": 2}

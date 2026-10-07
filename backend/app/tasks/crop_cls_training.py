@@ -476,6 +476,10 @@ def train_crop_cls_model(
             plain, crop_class, label_classes, empty_label, min_overlap)
         tl.log(f"Crops per class: {derive_summary['per_class']}  "
                f"(conflicts skipped: {derive_summary['conflict']}, empty: {derive_summary['empty']})")
+        if derive_summary["conflict"]:
+            tl.log(f"WARNING: {derive_summary['conflict']} crops hold more than one class at once "
+                   f"{derive_summary['conflict_combos']} and were skipped. A crop gets one label - untick "
+                   "one of those classes (e.g. a sub-box type) in the class list to keep these crops.")
     else:
         anns_by_image = _group(ann_rows, region_classes)
     img_rows = [i for i in img_rows if anns_by_image.get(i["id"])]
@@ -678,4 +682,10 @@ def build_label_preview(
         summary["warning"] = (
             f"'{empty_label}' is over 60% of the samples -- check that the "
             "other label boxes were actually annotated.")
+    if summary["conflict"] and summary["conflict"] >= 0.2 * (total + summary["conflict"]):
+        top = ", ".join(f"{k} (x{v})" for k, v in summary["conflict_combos"].items())
+        summary["conflict_warning"] = (
+            f"{summary['conflict']} crops hold more than one class at once - {top} - so they get no label "
+            "and are skipped. Untick one of those classes (for example a sub-box type like a 'cut' mark "
+            "drawn inside a Cut_Cover) to keep them.")
     return summary
