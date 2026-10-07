@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import axios from 'axios';
+import ClassPicker from './ClassPicker';
 import {
     LineChart, Line, XAxis, YAxis, CartesianGrid,
     Tooltip, Legend, ResponsiveContainer,
@@ -205,6 +206,7 @@ const TrainingPanel = ({ project, onClose }) => {
     const [augMixup, setAugMixup]       = useState(0.0);
     const [augCopyPaste, setAugCopyPaste] = useState(0.05);
     const [classAgnostic, setClassAgnostic] = useState(false);
+    const [trainClasses, setTrainClasses] = useState([]);   // [] = all classes
     const [showAugSettings, setShowAugSettings] = useState(false);
     const [clahePreview, setClahePreview] = useState(null);   // { original, enhanced, filename }
     const [previewLoading, setPreviewLoading] = useState(false);
@@ -517,6 +519,7 @@ const TrainingPanel = ({ project, onClose }) => {
                 aug_degrees: next.augDegrees, aug_translate: next.augTranslate, aug_scale: next.augScale,
                 aug_mixup: next.augMixup, aug_copy_paste: next.augCopyPaste,
                 class_agnostic: next.classAgnostic,
+                train_classes: next.trainClasses && next.trainClasses.length ? next.trainClasses : null,
                 ...(next.customWeights ? { custom_weights: next.customWeights } : {}),
             });
             const taskId = res.data.task_id;
@@ -581,7 +584,7 @@ const TrainingPanel = ({ project, onClose }) => {
                 logs: ['📋  Job queued — waiting for a free slot…'],
                 epochMeta: null, result: null, error: null, startedAt: new Date(),
             };
-            queueRef.current.push({ jobId: placeholder.id, projectId: project.id, modelName: activeModelName, epochs, preprocess, imgsz, batch, customWeights: modelSource === 'upload' ? selectedWeight : null, augFliplr, augFlipud, augMosaic, augHsvV, augHsvH, augHsvS, augDegrees, augTranslate, augScale, augMixup, augCopyPaste, classAgnostic });
+            queueRef.current.push({ jobId: placeholder.id, projectId: project.id, modelName: activeModelName, epochs, preprocess, imgsz, batch, customWeights: modelSource === 'upload' ? selectedWeight : null, augFliplr, augFlipud, augMosaic, augHsvV, augHsvH, augHsvS, augDegrees, augTranslate, augScale, augMixup, augCopyPaste, classAgnostic, trainClasses });
             setJobs(prev => [...prev, placeholder]);
             setActiveJobId(placeholder.id);
             setLaunching(false);
@@ -598,6 +601,7 @@ const TrainingPanel = ({ project, onClose }) => {
                 aug_degrees: augDegrees, aug_translate: augTranslate, aug_scale: augScale,
                 aug_mixup: augMixup, aug_copy_paste: augCopyPaste,
                 class_agnostic: classAgnostic,
+                train_classes: trainClasses.length ? trainClasses : null,
                 ...(modelSource === 'upload' && selectedWeight ? { custom_weights: selectedWeight } : {}),
             });
             const taskId = res.data.task_id;
@@ -991,6 +995,8 @@ const TrainingPanel = ({ project, onClose }) => {
                                                 <input type="range" min={0.0} max={0.6} step={0.05} value={augHsvV} onChange={e => setAugHsvV(parseFloat(e.target.value))} style={{ width: '100%', marginTop: 4 }} />
                                                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: '#999' }}><span>0.0 (off)</span><span>0.4 (default)</span><span>0.6 (max)</span></div>
                                             </div>
+
+                                            <ClassPicker classCounts={stats?.class_counts} selected={trainClasses} onChange={setTrainClasses} />
 
                                             {/* ── Detector mode ── */}
                                             <p style={{ fontSize: 11, fontWeight: 600, color: '#888', margin: '0 0 8px', textTransform: 'uppercase', letterSpacing: 0.5 }}>Detector mode</p>

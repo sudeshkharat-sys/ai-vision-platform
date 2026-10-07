@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import axios from 'axios';
+import ClassPicker from './ClassPicker';
 import {
     LineChart, Line, XAxis, YAxis, CartesianGrid,
     Tooltip, Legend, ResponsiveContainer,
@@ -184,6 +185,7 @@ const MainTrainingPanel = ({ project, onClose }) => {
     const [stats, setStats]               = useState(null);
     const [statsLoading, setStatsLoading] = useState(true);
     const [modelStatus, setModelStatus]   = useState(null);
+    const [trainClasses, setTrainClasses] = useState([]);   // [] = all classes
     const [jobs, setJobs]                 = useState([]);
     const [activeJobId, setActiveJobId]   = useState(null);
     const [launching, setLaunching]       = useState(false);
@@ -524,6 +526,7 @@ const MainTrainingPanel = ({ project, onClose }) => {
                 aug_hsv_v: next.augHsvV, aug_hsv_h: next.augHsvH, aug_hsv_s: next.augHsvS,
                 aug_degrees: next.augDegrees, aug_translate: next.augTranslate, aug_scale: next.augScale,
                 aug_mixup: next.augMixup, aug_copy_paste: next.augCopyPaste,
+                train_classes: next.trainClasses && next.trainClasses.length ? next.trainClasses : null,
                 ...(next.customWeights ? { custom_weights: next.customWeights } : {}),
             });
             const taskId = res.data.task_id;
@@ -596,7 +599,7 @@ const MainTrainingPanel = ({ project, onClose }) => {
                 modelName: activeModelName, epochs, useSeedWeights, imgsz, preprocess, batch,
                 customWeights: modelSource === 'upload' ? selectedWeight : null,
                 augFliplr, augFlipud, augMosaic, augHsvV, augHsvH, augHsvS,
-                augDegrees, augTranslate, augScale, augMixup, augCopyPaste,
+                augDegrees, augTranslate, augScale, augMixup, augCopyPaste, trainClasses,
             });
             setJobs(prev => [...prev, placeholder]);
             setActiveJobId(placeholder.id);
@@ -613,6 +616,7 @@ const MainTrainingPanel = ({ project, onClose }) => {
                 aug_hsv_v: augHsvV, aug_hsv_h: augHsvH, aug_hsv_s: augHsvS,
                 aug_degrees: augDegrees, aug_translate: augTranslate, aug_scale: augScale,
                 aug_mixup: augMixup, aug_copy_paste: augCopyPaste,
+                train_classes: trainClasses.length ? trainClasses : null,
                 ...(modelSource === 'upload' && selectedWeight ? { custom_weights: selectedWeight } : {}),
             });
             const taskId = res.data.task_id;
@@ -749,6 +753,7 @@ const MainTrainingPanel = ({ project, onClose }) => {
 
                             {/* Training config */}
                             <section className="mtp-section">
+                                <ClassPicker classCounts={stats?.class_counts} selected={trainClasses} onChange={setTrainClasses} />
                                 <p className="mtp-section-title">Training Config</p>
 
                                 {/* Starting weights with upload tab */}

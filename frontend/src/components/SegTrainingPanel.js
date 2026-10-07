@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import axios from 'axios';
+import ClassPicker from './ClassPicker';
 import {
     LineChart, Line, XAxis, YAxis, CartesianGrid,
     Tooltip, Legend, ResponsiveContainer,
@@ -195,6 +196,7 @@ const SegTrainingPanel = ({ project, onClose }) => {
     const [stats, setStats]             = useState(null);
     const [statsLoading, setStatsLoading] = useState(true);
     const [segSeedStatus, setSegSeedStatus] = useState(null);
+    const [trainClasses, setTrainClasses] = useState([]);   // [] = all classes
     const [segMainStatus, setSegMainStatus] = useState(null);
     const [segLegacyStatus, setSegLegacyStatus] = useState(null);
     const [jobs, setJobs]               = useState([]);
@@ -522,6 +524,7 @@ const SegTrainingPanel = ({ project, onClose }) => {
                 aug_hsv_v: next.augHsvV, aug_hsv_h: next.augHsvH, aug_hsv_s: next.augHsvS,
                 aug_degrees: next.augDegrees, aug_translate: next.augTranslate, aug_scale: next.augScale,
                 aug_mixup: next.augMixup, aug_copy_paste: next.augCopyPaste,
+                train_classes: next.trainClasses && next.trainClasses.length ? next.trainClasses : null,
             });
             const taskId = res.data.task_id;
             const logs = [`📋  Task ID: ${taskId}`, '⏳  Waiting for worker…'];
@@ -587,7 +590,7 @@ const SegTrainingPanel = ({ project, onClose }) => {
                 jobId: placeholder.id, projectId: project.id, modelName: selectedModel, modelType,
                 epochs, preprocess, imgsz, batch,
                 augFliplr, augFlipud, augMosaic, augHsvV, augHsvH, augHsvS,
-                augDegrees, augTranslate, augScale, augMixup, augCopyPaste,
+                augDegrees, augTranslate, augScale, augMixup, augCopyPaste, trainClasses,
             });
             setJobs(prev => [...prev, placeholder]);
             setActiveJobId(placeholder.id);
@@ -604,6 +607,7 @@ const SegTrainingPanel = ({ project, onClose }) => {
                 aug_hsv_v: augHsvV, aug_hsv_h: augHsvH, aug_hsv_s: augHsvS,
                 aug_degrees: augDegrees, aug_translate: augTranslate, aug_scale: augScale,
                 aug_mixup: augMixup, aug_copy_paste: augCopyPaste,
+                train_classes: trainClasses.length ? trainClasses : null,
             });
             const taskId = res.data.task_id;
             const job = makeJob(taskId, selectedModel, modelType);
@@ -795,6 +799,7 @@ const SegTrainingPanel = ({ project, onClose }) => {
 
                             <section className="mtp-section">
                                 <p className="mtp-section-title">Training Config</p>
+                                <ClassPicker classCounts={stats?.class_counts} selected={trainClasses} onChange={setTrainClasses} />
 
                                 <div className="mtp-tabs" style={{ marginBottom: 12 }}>
                                     <button
