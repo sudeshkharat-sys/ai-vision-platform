@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
-import { Eye, Leaf, Target, X, RefreshCw, Brain, HardDrive, TrendingUp, Calendar, Download, RotateCcw, Info, Check, Circle, Type } from 'lucide-react';
+import { Eye, Leaf, Target, X, RefreshCw, Brain, HardDrive, TrendingUp, Calendar, Download, RotateCcw, Info, Check, Circle, Type, Layers } from 'lucide-react';
 import './ModelsPanel.css';
 import logoImg from '../logo.png';
 
@@ -155,6 +155,15 @@ function ModelCard({ type, data, onTrain, onDownload, downloading }) {
             sparkColor: '#0891b2',
             trainLabel: <><Leaf size={14} /> Train Seed (Class-Agnostic)</>,
         },
+        classifier: {
+            label: 'Classifier',
+            desc: 'Classifies a cropped region (or whole image) into your classes, e.g. full / cut / no cover',
+            icon: <Layers size={20} />,
+            accent: ['#059669', '#34d399'],
+            light: 'rgba(5,150,105,0.08)',
+            sparkColor: '#059669',
+            trainLabel: <><Layers size={14} /> Train Classifier</>,
+        },
     }[type];
 
     const exists  = data?.exists;
@@ -212,6 +221,18 @@ function ModelCard({ type, data, onTrain, onDownload, downloading }) {
                     </div>
 
                     {/* Metrics grid */}
+                    {type === 'classifier' ? (
+                        <div className="mp-metrics">
+                            <MetricPill
+                                label="Val accuracy"
+                                value={data.meta?.val_accuracy != null ? pct(data.meta.val_accuracy) : '—'}
+                                color={mapColor(data.meta?.val_accuracy)}
+                            />
+                            <MetricPill label="Classes" value={data.meta?.classes?.length ?? '—'} color="#94a3b8" />
+                            <MetricPill label="Detector" value={data.meta?.mode === 'whole' ? 'none' : (data.meta?.detector || '—')} color="#94a3b8" />
+                            <MetricPill label="File size" value={fmtSize(data.file_size_mb)} color="#94a3b8" />
+                        </div>
+                    ) : (
                     <div className="mp-metrics">
                         <MetricPill
                             label="mAP@50"
@@ -234,6 +255,7 @@ function ModelCard({ type, data, onTrain, onDownload, downloading }) {
                             color="#94a3b8"
                         />
                     </div>
+                    )}
 
                     {/* Sparkline chart */}
                     {history.length >= 2 && (
@@ -563,6 +585,13 @@ const ModelsPanel = ({ project, onClose, onGoToTrain }) => {
                                 type="char_only"
                                 data={details.char_only}
                                 onTrain={() => handleTrain('seed')}
+                                onDownload={handleDownload}
+                                downloading={downloading}
+                            />
+                            <ModelCard
+                                type="classifier"
+                                data={details.classifier}
+                                onTrain={handleTrain}
                                 onDownload={handleDownload}
                                 downloading={downloading}
                             />

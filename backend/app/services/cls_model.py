@@ -5,14 +5,19 @@ Crop + classify inference: a YOLO detector finds the region of interest
 (e.g. the engine bay), the region is cropped, and a YOLO-cls model
 classifies the crop (e.g. full_cover / cut_cover / no_cover).
 
+The region detector is the project's own object-detection model (Main,
+else Seed, as recorded in meta["detector"]) -- it is read live from
+<model_dir>/<project_id>/{main,seed}_best.pt, so retraining the detector
+improves this pipeline without retraining the classifier. meta["crop_class"]
+names which detected class is the region to cut out.
+
 Artifacts live in <model_dir>/<project_id>/crop_cls/:
-    region_best.pt   stage-1 detector (single class, REGION_CLASS)
-    cls_best.pt      stage-2 classifier
-    cls_meta.json    {"mode", "preprocess", "margin", "classes", ...}
+    cls_best.pt      the classifier
+    cls_meta.json    {"mode", "detector", "crop_class", "preprocess", "margin", "classes", ...}
+    region_best.pt   legacy: a dedicated single-class detector (older runs)
 
 meta["mode"] is "crop" (detector + crop + classifier) or "whole" (the
-classifier sees the full frame; no detector) -- the second exists as a
-baseline to compare against.
+classifier sees the full frame; no detector).
 """
 
 from __future__ import annotations
@@ -24,9 +29,8 @@ import numpy as np
 
 from ..config import settings
 
-REGION_CLASS = "engine_region"
 CLS_FILES = {
-    "detector": "region_best.pt",
+    "detector": "region_best.pt",   # legacy only
     "classifier": "cls_best.pt",
     "meta": "cls_meta.json",
 }
@@ -37,6 +41,23 @@ _MODEL_CACHE: dict = {}
 
 def cls_dir(project_id: str) -> Path:
     return settings.model_dir.resolve() / project_id / "crop_cls"
+
+
+DETECTOR_FILES = {"main": "main_best.pt", "seed": "seed_best.pt"}
+
+
+def resolve_detector(project_id: str, preferred: str | None = None):
+    """(name, path) of the detection model to find regions with: the
+    preferred one if trained, else Main, else Seed. (None, None) if the
+    project has neither."""
+    base = settings.model_dir.resolve() / project_id
+    order = [preferred] if preferred in DETECTOR_FILES else []
+    order += [n for n in ("main", "seed") if n not in order]
+    for name in order:
+        path = base / DETECTOR_FILES[name]
+        if path.exists():
+            return name, path
+    return None, None
 
 
 def load_cls_meta(project_id: str) -> dict | None:
@@ -64,11 +85,14 @@ def crop_region(img: np.ndarray, bbox_xyxy, margin: float = 0.12) -> np.ndarray 
 
 
 def _load(project_id: str, filename: str):
-    path = cls_dir(project_id) / filename
+    return _load_path(cls_dir(project_id) / filename)
+
+
+def _load_path(path: Path):
     if not path.exists():
         return None
     mtime = path.stat().st_mtime
-    key = (project_id, filename)
+    key = str(path)
     cached = _MODEL_CACHE.get(key)
     if cached and cached[0] == mtime:
         return cached[1]
@@ -116,13 +140,26 @@ def predict_crop_cls(
     crop = img
 
     if meta.get("mode", "crop") == "crop":
-        detector = _load(project_id, CLS_FILES["detector"])
+        if meta.get("detector") in DETECTOR_FILES:
+            _, det_path = resolve_detector(project_id, meta["detector"])
+            detector = _load_path(det_path) if det_path else None
+        else:   # legacy dedicated region detector
+            detector = _load(project_id, CLS_FILES["detector"])
         if detector is None:
             return {"status": "no_model"}
         det = detector.predict(img, conf=det_conf, verbose=False)[0]
         if det.boxes is None or len(det.boxes) == 0:
             return {"status": "region_not_found"}
-        best = int(det.boxes.conf.argmax())
+        confs = det.boxes.conf
+        crop_class = meta.get("crop_class")
+        if crop_class:
+            # only boxes of the chosen class count as the region
+            keep = [i for i in range(len(confs)) if det.names[int(det.boxes.cls[i])] == crop_class]
+            if not keep:
+                return {"status": "region_not_found"}
+            best = max(keep, key=lambda i: float(confs[i]))
+        else:
+            best = int(confs.argmax())
         x1, y1, x2, y2 = det.boxes.xyxy[best].tolist()
         region_conf = float(det.boxes.conf[best])
         bbox = [(x1 + x2) / 2 / w, (y1 + y2) / 2 / h, (x2 - x1) / w, (y2 - y1) / h]

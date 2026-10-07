@@ -77,14 +77,14 @@ export default function TrainingHub({ project, onClose, onOpen }) {
         },
         {
             key: 'classifier', icon: <Layers size={20} />, title: 'Classifier',
-            desc: 'Cut out a region (e.g. engine) and classify its state (full / cut / no cover).',
+            desc: 'Uses your trained detector to cut out a region (e.g. engine), then classifies what is inside (full / cut / no cover).',
             chips: [
                 {
                     label: 'Classifier', ok: cls?.has_classifier,
                     detail: cls?.meta?.val_accuracy != null
                         ? `val acc ${(cls.meta.val_accuracy * 100).toFixed(1)}%` : null,
                 },
-                { label: 'Region detector', ok: cls?.has_detector },
+                { label: 'Detector to crop with', ok: cls?.has_detector, detail: cls?.detectors?.main ? 'Main model' : cls?.detectors?.seed ? 'Seed model' : null },
             ],
             actions: [{ label: 'Train Classifier', onClick: () => go('classifier') }],
         },

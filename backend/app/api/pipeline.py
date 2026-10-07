@@ -495,6 +495,14 @@ async def get_model_status(
     }
 
 
+def _load_cls_meta_safe(project_id: str):
+    from ..services.cls_model import load_cls_meta
+    meta = load_cls_meta(project_id)
+    if not meta:
+        return None
+    return {k: meta.get(k) for k in ("mode", "detector", "crop_class", "classes", "val_accuracy", "cls_imgsz", "augment")}
+
+
 @router.get("/model-details/{project_id}")
 async def get_model_details(
     project_id: str,
@@ -551,6 +559,9 @@ async def get_model_details(
         # Class-agnostic localization-only detector (all char boxes share one
         # generic "char" class); trained via train-seed with class_agnostic=True.
         "char_only": file_info(char_only_path),
+        # Classifier trained from the Training Hub (crop + classify, or image folders).
+        "classifier": {**file_info(settings.model_dir / project_id / "crop_cls" / "cls_best.pt"),
+                       "meta": _load_cls_meta_safe(project_id)},
     }
 
 
@@ -564,7 +575,7 @@ async def download_model(
     """Stream the trained model weights file as a download."""
     await get_owned_project(project_id, current_user, db)
 
-    valid_types = ("seed", "main", "seg", "seg_seed", "seg_main", "char_only")
+    valid_types = ("seed", "main", "seg", "seg_seed", "seg_main", "char_only", "classifier")
     if model_type not in valid_types:
         raise HTTPException(status_code=400, detail=f"model_type must be one of {valid_types}")
 
@@ -573,6 +584,9 @@ async def download_model(
     # with class_agnostic=True, alongside -- not instead of -- seed_best.pt).
     filename = "seed_char_only_best.pt" if model_type == "char_only" else f"{model_type}_best.pt"
     path = settings.model_dir / project_id / filename
+    if model_type == "classifier":
+        filename = "classifier_best.pt"
+        path = settings.model_dir / project_id / "crop_cls" / "cls_best.pt"
     if not path.exists():
         raise HTTPException(status_code=404, detail=f"{model_type} model not found for this project")
 

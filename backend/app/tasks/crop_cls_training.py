@@ -3,12 +3,11 @@ crop_cls_training.py
 ~~~~~~~~~~~~~~~~~~~~~
 Trains the crop + classify pipeline (see services/cls_model.py):
 
-  Stage 1 (mode="crop" only): YOLO detector on a single class
-      (REGION_CLASS) -- every annotated box is relabeled to it, so the
-      detector only learns WHERE the region is, never which state it is in.
-  Stage 2: YOLO-cls on the cropped regions, one folder per state
-      (mode="crop"), or on whole frames (mode="whole", a baseline to
-      compare the crop approach against).
+  Region finding: the object-detection model the user already trained
+      (Main, else Seed) is the detector -- nothing is trained for it here.
+      Training crops come from the annotated crop-class boxes (e.g. engine).
+  Classifier: YOLO-cls on those crops, one folder per state (mode="crop"),
+      or on whole frames / imported class folders (mode="whole").
 
 A box's state label is Annotation.state, falling back to class_name, so
 existing "one class per state" annotations work unchanged.
@@ -26,15 +25,15 @@ import cv2
 from .celery_app import celery_app
 from .training import (
     YOLO,
-    _build_yolo_dataset,
     _make_epoch_callback,
+    _resolve_aug,
     _split_images,
     clahe_gamma_sharpen,
 )
 from ..config import settings
 from ..connectors.statedb_connector import StateDBConnector
 from ..services.class_select import derive_dataset_labels
-from ..services.cls_model import CLS_FILES, REGION_CLASS, cls_dir, crop_region
+from ..services.cls_model import CLS_FILES, cls_dir, crop_region, resolve_detector
 
 
 
@@ -127,7 +126,7 @@ def _xywh_to_xyxy(bbox, w, h):
     return ((xc - bw / 2) * w, (yc - bh / 2) * h, (xc + bw / 2) * w, (yc + bh / 2) * h)
 
 
-def rotated_crop(img, bbox_xyxy, margin, angle):
+def rotated_crop(img, bbox_xyxy, margin, angle, shift=(0.0, 0.0)):
     """Same window crop_region() would cut, but with the scene rotated by
     `angle` degrees about the region's centre first. YOLO-cls has no
     rotation augmentation of its own, so a rotation-invariant subject
@@ -143,21 +142,28 @@ def rotated_crop(img, bbox_xyxy, margin, angle):
         return None
     cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
     m = cv2.getRotationMatrix2D((cx, cy), angle, 1.0)
-    m[0, 2] += cw / 2 - cx
-    m[1, 2] += ch / 2 - cy
+    # `shift` moves the window by that fraction of its own size (translate aug)
+    m[0, 2] += cw / 2 - cx - shift[0] * cw
+    m[1, 2] += ch / 2 - cy - shift[1] * ch
     return cv2.warpAffine(img, m, (cw, ch), flags=cv2.INTER_LINEAR,
                           borderMode=cv2.BORDER_REFLECT_101)
 
 
 def _build_cls_dataset(split_map, anns_by_image, root: Path, mode, margin, preprocess,
-                       rotate_copies: int = 0):
+                       rotate_copies: int = 0, degrees: float = 0.0, translate: float = 0.0):
     """Write root/<split>/<state>/*.jpg. Returns {split: Counter(state)}.
 
-    rotate_copies > 0 adds that many randomly rotated (0-360 degrees)
-    copies of every TRAIN sample; val/test stay untouched so the accuracy
-    still measures real, un-augmented images."""
+    rotate_copies > 0 adds that many copies of every TRAIN sample, each
+    rotated by a random angle in [-degrees, +degrees] and shifted by up to
+    `translate` of its size (YOLO-cls has no rotation/translation of its
+    own). degrees=180 is the full 360-degree spin. val/test stay untouched
+    so the accuracy still measures real, un-augmented images."""
     import random
     rng = random.Random(0)
+
+    def _aug_args():
+        return (rng.uniform(-degrees, degrees),
+                (rng.uniform(-translate, translate), rng.uniform(-translate, translate)))
     counts = {s: Counter() for s in split_map}
     for split, imgs in split_map.items():
         for n, img_row in enumerate(imgs):
@@ -176,7 +182,8 @@ def _build_cls_dataset(split_map, anns_by_image, root: Path, mode, margin, prepr
                 items = [(big["state"], img)]
                 if split == "train":
                     for _ in range(rotate_copies):
-                        rot = rotated_crop(img, (0, 0, w, h), 0.0, rng.uniform(0, 360))
+                        ang, sh = _aug_args()
+                        rot = rotated_crop(img, (0, 0, w, h), 0.0, ang, sh)
                         if rot is not None:
                             items.append((big["state"], rot))
             else:
@@ -188,7 +195,8 @@ def _build_cls_dataset(split_map, anns_by_image, root: Path, mode, margin, prepr
                         items.append((a["state"], crop))
                         if split == "train":
                             for _ in range(rotate_copies):
-                                rot = rotated_crop(img, xyxy, margin, rng.uniform(0, 360))
+                                ang, sh = _aug_args()
+                                rot = rotated_crop(img, xyxy, margin, ang, sh)
                                 if rot is not None:
                                     items.append((a["state"], rot))
             for k, (state, crop) in enumerate(items):
@@ -226,24 +234,34 @@ def train_crop_cls_model(
     self,
     project_id: str,
     mode: str = "crop",                    # "crop" | "whole"
-    region_classes: list | None = None,    # only these class_names count as the region box
-    det_model_name: str = "yolo11s.pt",
+    region_classes: list | None = None,    # whole mode: only these class_names are classes
+    detector: str | None = None,           # "main" | "seed" | None = Main if trained, else Seed
     cls_model_name: str = "yolo11s-cls.pt",
-    det_epochs: int = 60,
+    custom_weights: str | None = None,
     cls_epochs: int = 40,
-    det_imgsz: int = 640,
     cls_imgsz: int = 224,
     margin: float = 0.12,
     preprocess: bool = True,
     batch: int = 32,
-    aug_fliplr: float = 0.5,
-    crop_class: str | None = None,         # big region box, e.g. "engine"
-    label_classes: list | None = None,     # boxes inside it that name its state
+    crop_class: str | None = None,         # the detector class to cut out, e.g. "engine"
+    label_classes: list | None = None,     # classes inside it that name its state (None = all others)
     empty_label: str | None = "no_cover",  # label for a region with nothing inside (None = skip)
     min_overlap: float = 0.5,              # share of a label box that must lie inside the region
-    augment: bool = True,                  # False = no augmentation at all
-    rotate_360: bool = False,              # add random 0-360 degree rotated train copies
-    rotate_copies: int = 4,                # rotated copies per train sample when rotate_360
+    # Same augmentation knobs as the detection / segmentation panels. YOLO-cls
+    # takes flips, colour and scale natively; rotation and translation are
+    # baked into extra train crops (rotate_copies per sample).
+    augment: bool = True,
+    aug_rotate_360: bool = False,
+    aug_fliplr: float = 0.5,
+    aug_flipud: float = 0.1,
+    aug_hsv_v: float = 0.4,
+    aug_hsv_h: float = 0.015,
+    aug_hsv_s: float = 0.3,
+    aug_degrees: float = 10.0,
+    aug_translate: float = 0.1,
+    aug_scale: float = 0.4,
+    rotate_copies: int = 4,
+    **_ignored,                            # mosaic / mixup / copy_paste: no meaning for classification
 ):
     if mode not in ("crop", "whole"):
         return {"error": "mode must be 'crop' or 'whole'"}
@@ -254,12 +272,25 @@ def train_crop_cls_model(
     if not img_rows:
         return {"error": "No annotated images found"}
 
+    plain = _group_plain(ann_rows)
     derive_summary = None
-    if crop_class:
+    det_name = det_path = None
+    if mode == "crop":
+        if not crop_class:
+            return {"error": "Choose the detector class to crop (crop_class)"}
+        det_name, det_path = resolve_detector(project_id, detector)
+        if det_path is None:
+            return {"error": "No trained detection model found. Train a Seed or Main "
+                             "detection model that includes the crop class first."}
+        det_names = list(YOLO(str(det_path)).names.values())
+        if crop_class not in det_names:
+            return {"error": f"The {det_name} detector doesn't know the class '{crop_class}' "
+                             f"(it has: {det_names}). Retrain it with that class ticked."}
         if not label_classes:
-            return {"error": "label_classes is required when crop_class is set"}
+            label_classes = sorted({a["class_name"] for anns in plain.values() for a in anns}
+                                   - {crop_class})
         anns_by_image, derive_summary = derive_dataset_labels(
-            _group_plain(ann_rows), crop_class, label_classes, empty_label, min_overlap)
+            plain, crop_class, label_classes, empty_label, min_overlap)
     else:
         anns_by_image = _group(ann_rows, region_classes)
     img_rows = [i for i in img_rows if anns_by_image.get(i["id"])]
@@ -268,7 +299,15 @@ def train_crop_cls_model(
 
     states = sorted({a["state"] for anns in anns_by_image.values() for a in anns})
     if len(states) < 2:
-        return {"error": f"Need at least 2 states to classify, found: {states}"}
+        return {"error": f"Need at least 2 classes to classify, found: {states}"}
+
+    # Resolve the starting weights before doing any work.
+    start_weights = cls_model_name
+    if custom_weights:
+        cw = settings.model_dir / project_id / "custom_weights" / custom_weights
+        if not cw.exists():
+            return {"error": f"Uploaded weights '{custom_weights}' not found."}
+        start_weights = str(cw)
 
     out_dir = cls_dir(project_id)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -276,49 +315,16 @@ def train_crop_cls_model(
     result: dict = {"status": "success", "mode": mode, "classes": states}
     if derive_summary:
         result["label_summary"] = derive_summary
+    if det_name:
+        result["detector"] = det_name
+
+    (fl, fu, _mo, hv, hh, hs, deg, tr, sc, _mx, _cp) = _resolve_aug(
+        augment, aug_rotate_360, aug_fliplr, aug_flipud, 0.0, aug_hsv_v, aug_hsv_h,
+        aug_hsv_s, aug_degrees, aug_translate, aug_scale, 0.0, 0.0)
+    copies = rotate_copies if (augment and (deg > 0 or tr > 0)) else 0
 
     cls_root = Path(f"./temp_cls_{project_id}")
-    det_dataset = None
     try:
-        # ── Stage 1: region detector ─────────────────────────────
-        if mode == "crop":
-            relabeled = {
-                iid: [{**a, "class_name": REGION_CLASS} for a in anns]
-                for iid, anns in anns_by_image.items()
-            }
-            det_dataset, n_tr, n_va, n_te = _build_yolo_dataset(
-                img_rows, relabeled, [REGION_CLASS], f"{project_id}_cropcls",
-                preprocess=preprocess, imgsz=det_imgsz, task=self,
-            )
-            history, starts, stop = [], [], {"value": False}
-            model = YOLO(det_model_name)
-            model.add_callback(
-                "on_fit_epoch_end",
-                _make_epoch_callback(self, det_epochs, history, starts, stop),
-            )
-            self.update_state(state="STARTED", meta={
-                "stage": "detector", "epoch": 0, "total_epochs": det_epochs,
-                "history": [], "split": {"train": n_tr, "val": n_va, "test": n_te},
-            })
-            res = model.train(
-                data=str(det_dataset / "data.yaml"), epochs=det_epochs, imgsz=det_imgsz,
-                batch=0.9 if device == 0 else 8, cache=True, amp=device == 0, device=device,
-                lr0=settings.seed_learning_rate, lrf=0.01, cos_lr=True, warmup_epochs=3,
-                weight_decay=0.001, patience=20, flipud=0.0,
-                **({"fliplr": aug_fliplr} if augment else
-                   dict(fliplr=0.0, mosaic=0.0, degrees=0.0, translate=0.0, scale=0.0,
-                        hsv_h=0.0, hsv_s=0.0, hsv_v=0.0)),
-                project=str(settings.model_dir / project_id), name="crop_cls_region",
-                verbose=False, workers=0,
-            )
-            if stop["value"]:
-                shutil.rmtree(res.save_dir, ignore_errors=True)
-                from celery.exceptions import Ignore
-                raise Ignore()
-            shutil.copy(res.save_dir / "weights" / "best.pt", out_dir / CLS_FILES["detector"])
-            result["detector_metrics"] = history[-1] if history else {}
-
-        # ── Stage 2: classifier ──────────────────────────────────
         train_i, val_i, test_i = _split_images(img_rows, anns_by_image=anns_by_image)
         split_map = {"train": train_i, "val": val_i}
         if test_i:
@@ -328,23 +334,21 @@ def train_crop_cls_model(
         shutil.rmtree(cls_root, ignore_errors=True)
         counts = _build_cls_dataset(
             split_map, anns_by_image, cls_root, mode, margin, preprocess,
-            rotate_copies=rotate_copies if (augment and rotate_360) else 0)
+            rotate_copies=copies, degrees=deg, translate=tr)
         train_states = [s for s in states if counts["train"][s] > 0]
         if len(train_states) < 2:
-            return {"error": f"Need training samples for at least 2 states, got {dict(counts['train'])}"}
+            return {"error": f"Need training samples for at least 2 classes, got {dict(counts['train'])}"}
         if sum(counts["val"].values()) == 0:   # tiny dataset: mirror train
             shutil.copytree(cls_root / "train", cls_root / "val")
             counts["val"] = counts["train"]
 
-        # YOLO-cls only understands flips, colour jitter, random-resized crop
-        # and erasing; rotation is handled above by the baked-in copies.
         if augment:
-            cls_aug = dict(fliplr=aug_fliplr, flipud=0.0)
+            cls_aug = dict(fliplr=fl, flipud=fu, hsv_h=hh, hsv_s=hs, hsv_v=hv, scale=sc)
         else:
             cls_aug = dict(fliplr=0.0, flipud=0.0, hsv_h=0.0, hsv_s=0.0, hsv_v=0.0,
                            scale=0.0, erasing=0.0, auto_augment=None)
         history, starts, stop = [], [], {"value": False}
-        model = YOLO(cls_model_name)
+        model = YOLO(start_weights)
         model.add_callback(
             "on_fit_epoch_end",
             _make_epoch_callback(self, cls_epochs, history, starts, stop),
@@ -374,9 +378,9 @@ def train_crop_cls_model(
         meta = {
             "mode": mode, "preprocess": bool(preprocess), "margin": margin,
             "classes": train_states, "region_classes": region_classes,
-            "crop_class": crop_class, "label_classes": label_classes,
+            "detector": det_name, "crop_class": crop_class, "label_classes": label_classes,
             "empty_label": empty_label,
-            "augment": bool(augment), "rotate_360": bool(rotate_360 and augment),
+            "augment": bool(augment), "degrees": deg, "translate": tr,
             "cls_imgsz": cls_imgsz,
             "val_accuracy": round(correct / total, 4) if total else None,
             "confusion": confusion,
@@ -394,14 +398,12 @@ def train_crop_cls_model(
         return result
     finally:
         shutil.rmtree(cls_root, ignore_errors=True)
-        if det_dataset is not None:
-            shutil.rmtree(det_dataset, ignore_errors=True)
 
 
 def build_label_preview(
     project_id: str,
     crop_class: str,
-    label_classes: list,
+    label_classes: list | None = None,
     empty_label: str | None = "no_cover",
     min_overlap: float = 0.5,
     margin: float = 0.12,
@@ -420,8 +422,12 @@ def build_label_preview(
     if not img_rows:
         return {"error": "No annotated images found"}
 
+    plain = _group_plain(ann_rows)
+    if not label_classes:
+        label_classes = sorted({a["class_name"] for anns in plain.values() for a in anns} - {crop_class})
     samples_by_image, summary = derive_dataset_labels(
-        _group_plain(ann_rows), crop_class, label_classes, empty_label, min_overlap)
+        plain, crop_class, label_classes, empty_label, min_overlap)
+    summary["label_classes"] = label_classes
     summary["annotated_images"] = len(img_rows)
 
     by_id = {i["id"]: i for i in img_rows}

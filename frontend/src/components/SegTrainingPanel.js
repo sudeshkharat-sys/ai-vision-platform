@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import axios from 'axios';
 import ClassPicker from './ClassPicker';
-import AugmentToggles from './AugmentToggles';
+import AugmentationSettings, { useAug, augPayload } from './AugmentationSettings';
 import {
     LineChart, Line, XAxis, YAxis, CartesianGrid,
     Tooltip, Legend, ResponsiveContainer,
@@ -198,8 +198,7 @@ const SegTrainingPanel = ({ project, onClose }) => {
     const [statsLoading, setStatsLoading] = useState(true);
     const [segSeedStatus, setSegSeedStatus] = useState(null);
     const [trainClasses, setTrainClasses] = useState([]);   // [] = all classes
-    const [augment, setAugment] = useState(true);
-    const [rotate360, setRotate360] = useState(false);
+    const [aug, setAug] = useAug({ copyPaste: 0.05 });
     const [segMainStatus, setSegMainStatus] = useState(null);
     const [segLegacyStatus, setSegLegacyStatus] = useState(null);
     const [jobs, setJobs]               = useState([]);
@@ -212,18 +211,6 @@ const SegTrainingPanel = ({ project, onClose }) => {
     const [imgsz, setImgsz]             = useState(640);
     const [batch, setBatch]             = useState(-1);
     const [preprocess, setPreprocess]   = useState(true);
-    const [augFliplr, setAugFliplr]     = useState(true);
-    const [augFlipud, setAugFlipud]     = useState(true);
-    const [augMosaic, setAugMosaic]     = useState(true);
-    const [augHsvV, setAugHsvV]         = useState(0.4);
-    const [augHsvH, setAugHsvH]         = useState(0.015);
-    const [augHsvS, setAugHsvS]         = useState(0.3);
-    const [augDegrees, setAugDegrees]   = useState(10);
-    const [augTranslate, setAugTranslate] = useState(0.1);
-    const [augScale, setAugScale]       = useState(0.4);
-    const [augMixup, setAugMixup]       = useState(0.0);
-    const [augCopyPaste, setAugCopyPaste] = useState(0.05);
-    const [showAugSettings, setShowAugSettings] = useState(false);
     const [converting, setConverting]   = useState(false);
     const [convertResult, setConvertResult] = useState(null);
     const [convertingBoxes, setConvertingBoxes] = useState(false);
@@ -521,14 +508,7 @@ const SegTrainingPanel = ({ project, onClose }) => {
             const res = await axios.post(`${API_URL}/pipeline/train-seg/${next.projectId}`, {
                 model_name: next.modelName, model_type: next.modelType, epochs: next.epochs,
                 imgsz: next.imgsz, preprocess: next.preprocess, batch: next.batch,
-                aug_fliplr: next.augFliplr ? 0.5 : 0.0,
-                aug_flipud: next.augFlipud ? 0.1 : 0.0,
-                aug_mosaic: next.augMosaic ? 0.5 : 0.0,
-                aug_hsv_v: next.augHsvV, aug_hsv_h: next.augHsvH, aug_hsv_s: next.augHsvS,
-                aug_degrees: next.augDegrees, aug_translate: next.augTranslate, aug_scale: next.augScale,
-                aug_mixup: next.augMixup, aug_copy_paste: next.augCopyPaste,
-                train_classes: next.trainClasses && next.trainClasses.length ? next.trainClasses : null,
-                augment: next.augment !== false, aug_rotate_360: !!next.rotate360,
+                ...augPayload(next.aug),
             });
             const taskId = res.data.task_id;
             const logs = [`📋  Task ID: ${taskId}`, '⏳  Waiting for worker…'];
@@ -593,8 +573,7 @@ const SegTrainingPanel = ({ project, onClose }) => {
             queueRef.current.push({
                 jobId: placeholder.id, projectId: project.id, modelName: selectedModel, modelType,
                 epochs, preprocess, imgsz, batch,
-                augFliplr, augFlipud, augMosaic, augHsvV, augHsvH, augHsvS,
-                augDegrees, augTranslate, augScale, augMixup, augCopyPaste, trainClasses, augment, rotate360,
+                aug: { ...aug }, trainClasses,
             });
             setJobs(prev => [...prev, placeholder]);
             setActiveJobId(placeholder.id);
@@ -605,14 +584,7 @@ const SegTrainingPanel = ({ project, onClose }) => {
         try {
             const res = await axios.post(`${API_URL}/pipeline/train-seg/${project.id}`, {
                 model_name: selectedModel, model_type: modelType, epochs, imgsz, preprocess, batch,
-                aug_fliplr: augFliplr ? 0.5 : 0.0,
-                aug_flipud: augFlipud ? 0.1 : 0.0,
-                aug_mosaic: augMosaic ? 0.5 : 0.0,
-                aug_hsv_v: augHsvV, aug_hsv_h: augHsvH, aug_hsv_s: augHsvS,
-                aug_degrees: augDegrees, aug_translate: augTranslate, aug_scale: augScale,
-                aug_mixup: augMixup, aug_copy_paste: augCopyPaste,
-                train_classes: trainClasses.length ? trainClasses : null,
-                augment, aug_rotate_360: rotate360,
+                ...augPayload(aug),
             });
             const taskId = res.data.task_id;
             const job = makeJob(taskId, selectedModel, modelType);
@@ -805,7 +777,6 @@ const SegTrainingPanel = ({ project, onClose }) => {
                             <section className="mtp-section">
                                 <p className="mtp-section-title">Training Config</p>
                                 <ClassPicker classCounts={stats?.class_counts} selected={trainClasses} onChange={setTrainClasses} />
-                                <AugmentToggles augment={augment} onAugment={setAugment} rotate360={rotate360} onRotate360={setRotate360} boxWarning />
 
                                 <div className="mtp-tabs" style={{ marginBottom: 12 }}>
                                     <button
@@ -915,95 +886,7 @@ const SegTrainingPanel = ({ project, onClose }) => {
                                 )}
 
                                 {/* ── Augmentation Settings ── */}
-                                <div style={{ marginTop: 14 }}>
-                                    <button onClick={() => setShowAugSettings(v => !v)} style={{ background: 'none', border: '1px solid #e5e5e5', borderRadius: 6, padding: '5px 10px', cursor: 'pointer', fontSize: 12, color: '#555', display: 'flex', alignItems: 'center', gap: 6 }}>
-                                        <span>{showAugSettings ? '▼' : '▶'}</span> Augmentation Settings
-                                    </button>
-                                    {showAugSettings && (
-                                        <div style={{ marginTop: 10, padding: '12px 14px', background: '#f9f9f9', borderRadius: 8, border: '1px solid #e5e5e5' }}>
-
-                                            <p style={{ fontSize: 11, fontWeight: 600, color: '#888', margin: '0 0 8px', textTransform: 'uppercase', letterSpacing: 0.5 }}>Color &amp; Lighting</p>
-
-                                            <div style={{ marginBottom: 10 }}>
-                                                <span style={{ fontSize: 12, color: '#555' }}>Hue (hsv_h): <strong>{augHsvH}</strong></span>
-                                                <input type="range" min={0.0} max={0.5} step={0.005} value={augHsvH} onChange={e => setAugHsvH(parseFloat(e.target.value))} style={{ width: '100%', marginTop: 4 }} />
-                                                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: '#999' }}><span>0.0 (off)</span><span>0.015 (default)</span><span>0.5 (max)</span></div>
-                                            </div>
-
-                                            <div style={{ marginBottom: 10 }}>
-                                                <span style={{ fontSize: 12, color: '#555' }}>Saturation (hsv_s): <strong>{augHsvS}</strong></span>
-                                                <input type="range" min={0.0} max={1.0} step={0.05} value={augHsvS} onChange={e => setAugHsvS(parseFloat(e.target.value))} style={{ width: '100%', marginTop: 4 }} />
-                                                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: '#999' }}><span>0.0 (off)</span><span>0.3 (default)</span><span>1.0 (max)</span></div>
-                                            </div>
-
-                                            <div style={{ marginBottom: 14 }}>
-                                                <span style={{ fontSize: 12, color: '#555' }}>Brightness (hsv_v): <strong>{augHsvV}</strong></span>
-                                                <input type="range" min={0.0} max={0.6} step={0.05} value={augHsvV} onChange={e => setAugHsvV(parseFloat(e.target.value))} style={{ width: '100%', marginTop: 4 }} />
-                                                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: '#999' }}><span>0.0 (off)</span><span>0.4 (default)</span><span>0.6 (max)</span></div>
-                                            </div>
-
-                                            <p style={{ fontSize: 11, fontWeight: 600, color: '#888', margin: '0 0 8px', textTransform: 'uppercase', letterSpacing: 0.5 }}>Geometry</p>
-
-                                            <div style={{ marginBottom: 10 }}>
-                                                <span style={{ fontSize: 12, color: '#555' }}>Rotation (degrees): <strong>{augDegrees}°</strong> <span title="Auto-capped to 3° server-side for single-character classes — a rotated dot-mask can flip a 6 into a 9." style={{ cursor: 'help', color: '#aaa', fontSize: 11 }}>ⓘ</span></span>
-                                                <input type="range" min={0} max={45} step={1} value={augDegrees} onChange={e => setAugDegrees(parseFloat(e.target.value))} style={{ width: '100%', marginTop: 4 }} />
-                                                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: '#999' }}><span>0° (off)</span><span>10° (default)</span><span>45° (max)</span></div>
-                                            </div>
-
-                                            <div style={{ marginBottom: 10 }}>
-                                                <span style={{ fontSize: 12, color: '#555' }}>Translation (translate): <strong>{augTranslate}</strong></span>
-                                                <input type="range" min={0.0} max={0.3} step={0.05} value={augTranslate} onChange={e => setAugTranslate(parseFloat(e.target.value))} style={{ width: '100%', marginTop: 4 }} />
-                                                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: '#999' }}><span>0.0 (off)</span><span>0.1 (default)</span><span>0.3 (max)</span></div>
-                                            </div>
-
-                                            <div style={{ marginBottom: 14 }}>
-                                                <span style={{ fontSize: 12, color: '#555' }}>Scale / Zoom (scale): <strong>{augScale}</strong></span>
-                                                <input type="range" min={0.0} max={0.9} step={0.05} value={augScale} onChange={e => setAugScale(parseFloat(e.target.value))} style={{ width: '100%', marginTop: 4 }} />
-                                                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: '#999' }}><span>0.0 (off)</span><span>0.4 (default)</span><span>0.9 (max)</span></div>
-                                            </div>
-
-                                            <p style={{ fontSize: 11, fontWeight: 600, color: '#888', margin: '0 0 8px', textTransform: 'uppercase', letterSpacing: 0.5 }}>Flip</p>
-
-                                            <div className="mtp-toggle-row">
-                                                <label className="mtp-toggle-label">
-                                                    <input type="checkbox" className="mtp-toggle-check" checked={augFliplr} onChange={e => setAugFliplr(e.target.checked)} />
-                                                    <span className="mtp-toggle-slider" />
-                                                    <span className="mtp-toggle-text">Flip Left/Right <span title="Auto-forced off server-side for single-character classes — mirroring flips a character's identity (e.g. S)." style={{ cursor: 'help', color: '#aaa', fontSize: 11 }}>ⓘ</span></span>
-                                                </label>
-                                            </div>
-                                            <div className="mtp-toggle-row" style={{ marginTop: 8, marginBottom: 14 }}>
-                                                <label className="mtp-toggle-label">
-                                                    <input type="checkbox" className="mtp-toggle-check" checked={augFlipud} onChange={e => setAugFlipud(e.target.checked)} />
-                                                    <span className="mtp-toggle-slider" />
-                                                    <span className="mtp-toggle-text">Flip Upside Down <span title="Auto-forced off server-side for single-character classes — e.g. M upside down looks like W." style={{ cursor: 'help', color: '#aaa', fontSize: 11 }}>ⓘ</span></span>
-                                                </label>
-                                            </div>
-
-                                            <p style={{ fontSize: 11, fontWeight: 600, color: '#888', margin: '0 0 8px', textTransform: 'uppercase', letterSpacing: 0.5 }}>Mixing</p>
-
-                                            <div className="mtp-toggle-row">
-                                                <label className="mtp-toggle-label">
-                                                    <input type="checkbox" className="mtp-toggle-check" checked={augMosaic} onChange={e => setAugMosaic(e.target.checked)} />
-                                                    <span className="mtp-toggle-slider" />
-                                                    <span className="mtp-toggle-text">Mosaic</span>
-                                                </label>
-                                            </div>
-
-                                            <div style={{ marginTop: 10 }}>
-                                                <span style={{ fontSize: 12, color: '#555' }}>Mixup: <strong>{augMixup}</strong></span>
-                                                <input type="range" min={0.0} max={0.3} step={0.05} value={augMixup} onChange={e => setAugMixup(parseFloat(e.target.value))} style={{ width: '100%', marginTop: 4 }} />
-                                                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: '#999' }}><span>0.0 (off)</span><span>0.15</span><span>0.3 (max)</span></div>
-                                            </div>
-
-                                            <div style={{ marginTop: 10 }}>
-                                                <span style={{ fontSize: 12, color: '#555' }}>Copy Paste: <strong>{augCopyPaste}</strong></span>
-                                                <input type="range" min={0.0} max={0.2} step={0.01} value={augCopyPaste} onChange={e => setAugCopyPaste(parseFloat(e.target.value))} style={{ width: '100%', marginTop: 4 }} />
-                                                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: '#999' }}><span>0.0 (off)</span><span>0.05 (default)</span><span>0.2 (max)</span></div>
-                                            </div>
-
-                                        </div>
-                                    )}
-                                </div>
+                                <AugmentationSettings aug={aug} onChange={setAug} kind="seg" />
                             </section>
 
                             <section className="mtp-section">

@@ -21,7 +21,7 @@ from ..database import get_db
 from ..models.annotation import Annotation
 from ..models.image import Image
 from ..models.user import User
-from ..services.cls_model import CLS_FILES, cls_dir, load_cls_meta, predict_crop_cls
+from ..services.cls_model import CLS_FILES, cls_dir, load_cls_meta, predict_crop_cls, resolve_detector
 from ..config import settings
 from ..tasks.celery_app import celery_app
 from ..tasks.crop_cls_training import build_label_preview, train_crop_cls_model
@@ -30,35 +30,47 @@ router = APIRouter(prefix="/crop-cls", tags=["crop-cls"])
 
 
 class TrainCropClsRequest(BaseModel):
-    # "crop": detector finds the region, classifier sees the crop.
-    # "whole": classifier sees the full frame (baseline for comparison).
+    # "crop": the trained detection model finds the region, the classifier sees
+    # the crop. "whole": the classifier sees the full frame (image folders).
     mode: str = "crop"
-    # Only boxes with these class_names count as the region (default: all boxes).
+    # whole mode: only these class_names become classes (default: all).
     region_classes: Optional[List[str]] = None
-    det_model_name: str = "yolo11s.pt"
+    # Which trained detection model finds the region: "main", "seed" or None
+    # (= Main if trained, else Seed).
+    detector: Optional[str] = None
     cls_model_name: str = "yolo11s-cls.pt"
-    det_epochs: int = 60
+    custom_weights: Optional[str] = None
     cls_epochs: int = 40
-    det_imgsz: int = 640
     cls_imgsz: int = 224
     margin: float = 0.12
     preprocess: bool = True
     batch: int = 32
-    aug_fliplr: float = 0.5
-    # Nested-box labelling: the crop_class box (e.g. "engine") is cut out and
-    # labelled by the label_classes box inside it; empty_label if none is.
+    # The detector class to cut out (e.g. "engine"); every other class inside
+    # it becomes a classifier class unless label_classes narrows it.
     crop_class: Optional[str] = None
     label_classes: Optional[List[str]] = None
     empty_label: Optional[str] = "no_cover"
     min_overlap: float = 0.5
+    # Same augmentation knobs as the detection / segmentation panels.
     augment: bool = True
-    rotate_360: bool = False
+    aug_rotate_360: bool = False
+    aug_fliplr: float = 0.5
+    aug_flipud: float = 0.1
+    aug_hsv_v: float = 0.4
+    aug_hsv_h: float = 0.015
+    aug_hsv_s: float = 0.3
+    aug_degrees: float = 10.0
+    aug_translate: float = 0.1
+    aug_scale: float = 0.4
+    aug_mosaic: float = 0.5      # accepted for panel parity; no effect on classification
+    aug_mixup: float = 0.0
+    aug_copy_paste: float = 0.0
     rotate_copies: int = 4
 
 
 class PreviewRequest(BaseModel):
     crop_class: str
-    label_classes: List[str]
+    label_classes: Optional[List[str]] = None   # None = every other class
     empty_label: Optional[str] = "no_cover"
     min_overlap: float = 0.5
     margin: float = 0.12
@@ -74,8 +86,6 @@ async def preview_label_set(
     """Dry-run the classification set: counts per label, skipped conflicts /
     empties and sample crops, without training anything."""
     await get_owned_project(project_id, current_user, db)
-    if not body.label_classes:
-        raise HTTPException(status_code=400, detail="label_classes must not be empty")
     result = await run_in_threadpool(
         build_label_preview, project_id, body.crop_class, body.label_classes,
         body.empty_label, body.min_overlap, body.margin)
@@ -97,8 +107,10 @@ async def start_crop_cls_training(
     req = body or TrainCropClsRequest()
     if req.mode not in ("crop", "whole"):
         raise HTTPException(status_code=400, detail="mode must be 'crop' or 'whole'")
-    if req.crop_class and not req.label_classes:
-        raise HTTPException(status_code=400, detail="label_classes is required with crop_class")
+    if req.mode == "crop" and not req.crop_class:
+        raise HTTPException(status_code=400, detail="crop_class is required in crop mode")
+    if req.detector not in (None, "main", "seed"):
+        raise HTTPException(status_code=400, detail="detector must be 'main' or 'seed'")
     task = train_crop_cls_model.delay(project_id, **req.model_dump())
     return {"task_id": task.id, "status": "queued"}
 
@@ -114,7 +126,9 @@ async def crop_cls_model_status(
     meta = load_cls_meta(project_id)
     return {
         "has_classifier": (d / CLS_FILES["classifier"]).exists(),
-        "has_detector": (d / CLS_FILES["detector"]).exists(),
+        "has_detector": resolve_detector(project_id)[1] is not None,
+        # which trained detection models can find the region
+        "detectors": {n: resolve_detector(project_id, n)[0] == n for n in ("main", "seed")},
         "meta": meta,
     }
 

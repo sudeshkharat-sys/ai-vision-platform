@@ -2184,6 +2184,7 @@ Do you want to proceed?`;
                     onGoToTrain={(type) => {
                         if (type === 'seed') setShowTrainingPanel(true);
                         else if (type === 'main') setShowMainTrainingPanel(true);
+                        else if (type === 'classifier') setShowClassifierPanel(true);
                         else setShowSegPanel(true); // 'seg_seed' | 'seg_main'
                     }}
                 />

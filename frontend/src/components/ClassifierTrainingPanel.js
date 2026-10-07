@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import axios from 'axios';
 import { Layers, X, RefreshCw, Eye, Play, Upload, FolderUp } from 'lucide-react';
-import AugmentToggles from './AugmentToggles';
+import { CLS_MODEL_GROUPS, DEFAULT_CLS_MODEL } from '../constants/yoloModels';
+import AugmentationSettings, { useAug, augPayload } from './AugmentationSettings';
 // Reuse MainTrainingPanel's styling (mtp-* classes) — same visual language.
 import './MainTrainingPanel.css';
 
@@ -12,7 +13,6 @@ const IMPORT_CHUNK = 40;
 const IMG_RE = /\.(jpe?g|png|bmp|webp)$/i;
 
 const STAGE_LABEL = {
-    detector: 'Training region detector',
     dataset: 'Building classification set',
     classifier: 'Training classifier',
 };
@@ -63,7 +63,11 @@ export default function ClassifierTrainingPanel({ project, onClose }) {
     const [loading, setLoading] = useState(true);
     const [modelStatus, setModelStatus] = useState(null);
 
-    // Labelling rules
+    // Where the classes come from: boxes nested in a detected region, or one folder per class
+    const [source, setSource] = useState('boxes');   // 'boxes' | 'folders'
+
+    // Boxes mode: the trained detector finds the crop class; everything else inside becomes a class
+    const [detector, setDetector] = useState('');    // 'main' | 'seed'
     const [cropClass, setCropClass] = useState('');
     const [labelClasses, setLabelClasses] = useState([]);
     const [emptyAsLabel, setEmptyAsLabel] = useState(true);
@@ -71,21 +75,19 @@ export default function ClassifierTrainingPanel({ project, onClose }) {
     const [minOverlap, setMinOverlap] = useState(0.5);
     const [margin, setMargin] = useState(0.12);
 
-    // Where the classes come from: boxes nested in a region, or one folder per class
-    const [source, setSource] = useState('boxes');   // 'boxes' | 'folders'
+    // Folders mode
     const [folderClasses, setFolderClasses] = useState([]);
     const [pending, setPending] = useState(null);    // {files, labels, perClass} chosen, not yet uploaded
     const [importing, setImporting] = useState(null); // {done, total}
     const [importResult, setImportResult] = useState(null);
 
-    // Augmentation
-    const [augment, setAugment] = useState(true);
-    const [rotate360, setRotate360] = useState(false);
-
-    // Training config
-    const [mode, setMode] = useState('crop');
-    const [clsEpochs, setClsEpochs] = useState(40);
-    const [detEpochs, setDetEpochs] = useState(60);
+    // Training config — same shape as the Main / Segmentation panels
+    const [selectedModel, setSelectedModel] = useState(DEFAULT_CLS_MODEL);
+    const [epochs, setEpochs] = useState(40);
+    const [imgsz, setImgsz] = useState(224);
+    const [batch, setBatch] = useState(32);
+    const [preprocess, setPreprocess] = useState(true);
+    const [aug, setAug] = useAug();
 
     // Preview / job state
     const [preview, setPreview] = useState(null);
@@ -99,6 +101,9 @@ export default function ClassifierTrainingPanel({ project, onClose }) {
     const [predicting, setPredicting] = useState(false);
 
     const classNames = Object.keys(classCounts);
+    const classKey = classNames.join('|');
+    const detectors = modelStatus?.detectors || {};
+    const hasDetector = !!(detectors.main || detectors.seed);
 
     const load = useCallback(() => {
         setLoading(true);
@@ -117,18 +122,30 @@ export default function ClassifierTrainingPanel({ project, onClose }) {
     useEffect(() => { load(); }, [load]);
     useEffect(() => () => clearInterval(pollRef.current), []);
 
-    // Default the crop class to the biggest-looking name once classes load.
+    // Default to the best trained detector (Main, else Seed).
+    useEffect(() => {
+        if (!detector && hasDetector) setDetector(detectors.main ? 'main' : 'seed');
+    }, [detector, hasDetector, detectors.main]);
+
+    // Default the crop class to the region-looking class once classes load.
     useEffect(() => {
         if (!cropClass && classNames.length) {
-            const guess = classNames.find(c => /engine|region/i.test(c)) || classNames[0];
-            setCropClass(guess);
+            setCropClass(classNames.find(c => /engine|region/i.test(c)) || classNames[0]);
         }
-    }, [classNames, cropClass]);
+    }, [classKey, cropClass]);   // eslint-disable-line react-hooks/exhaustive-deps
+
+    // Every class other than the crop class is a classifier class unless unticked.
+    useEffect(() => {
+        setLabelClasses(classNames.filter(c => c !== cropClass));
+        setPreview(null);
+    }, [classKey, cropClass]);   // eslint-disable-line react-hooks/exhaustive-deps
 
     const toggleLabel = (c) => {
         setPreview(null);
         setLabelClasses(prev => prev.includes(c) ? prev.filter(x => x !== c) : [...prev, c]);
     };
+    const toggleFolderClass = (c) =>
+        setFolderClasses(prev => prev.includes(c) ? prev.filter(x => x !== c) : [...prev, c]);
 
     const rules = () => ({
         crop_class: cropClass,
@@ -138,11 +155,11 @@ export default function ClassifierTrainingPanel({ project, onClose }) {
         margin,
     });
 
-    const canRunBoxes = cropClass && labelClasses.length > 0 && !labelClasses.includes(cropClass);
-    const canRun = source === 'folders' ? folderClasses.length >= 2 : canRunBoxes;
-    const toggleFolderClass = (c) =>
-        setFolderClasses(prev => prev.includes(c) ? prev.filter(x => x !== c) : [...prev, c]);
+    const canRun = source === 'folders'
+        ? folderClasses.length >= 2
+        : !!(hasDetector && detector && cropClass && labelClasses.length > 0);
 
+    // ── Folder import ──
     const pickFolder = (fileList) => {
         const files = [], labels = [], perClass = {};
         Array.from(fileList || []).forEach(f => {
@@ -155,8 +172,8 @@ export default function ClassifierTrainingPanel({ project, onClose }) {
         });
         setImportResult(null);
         setPending(files.length ? { files, labels, perClass } : null);
-        if (!files.length) setError('No images found inside class folders. Pick a folder that contains one sub-folder per class.');
-        else setError(null);
+        setError(files.length ? null
+            : 'No images found inside class folders. Pick a folder that contains one sub-folder per class.');
     };
 
     const importFolders = async (zipFile) => {
@@ -195,6 +212,7 @@ export default function ClassifierTrainingPanel({ project, onClose }) {
         }
     };
 
+    // ── Preview / train ──
     const runPreview = async () => {
         setError(null);
         setPreviewing(true);
@@ -226,10 +244,13 @@ export default function ClassifierTrainingPanel({ project, onClose }) {
     const startTraining = async () => {
         setError(null);
         try {
-            const common = { cls_epochs: clsEpochs, det_epochs: detEpochs, augment, rotate_360: rotate360 };
+            const common = {
+                cls_model_name: selectedModel, cls_epochs: epochs, cls_imgsz: imgsz,
+                batch, preprocess, ...augPayload(aug),
+            };
             const body = source === 'folders'
                 ? { ...common, mode: 'whole', region_classes: folderClasses }
-                : { ...common, mode, ...rules() };
+                : { ...common, mode: 'crop', detector, ...rules() };
             const { data } = await axios.post(`${API_URL}/crop-cls/train/${project.id}`, body);
             setJob({ taskId: data.task_id, status: 'PENDING' });
             poll(data.task_id);
@@ -280,22 +301,97 @@ export default function ClassifierTrainingPanel({ project, onClose }) {
                 <div className="mtp-body">
                     {error && <div className="mtp-warning">{error}</div>}
 
-                    {/* ── 1. Classification set ── */}
+                    {/* ── 1. Data ── */}
                     <section className="mtp-section">
                         <div className="mtp-section-header">
-                            <span className="mtp-section-title">1. Build the classification set</span>
+                            <span className="mtp-section-title">1. Classification data</span>
                             <button className="mtp-refresh" onClick={load} title="Refresh"><RefreshCw size={15} /></button>
                         </div>
                         <div className="mtp-tabs" style={{ marginBottom: 12 }}>
                             <button className={`mtp-tab ${source === 'boxes' ? 'mtp-tab--active' : ''}`} onClick={() => setSource('boxes')}>
-                                Boxes inside a region
+                                From annotations
                             </button>
                             <button className={`mtp-tab ${source === 'folders' ? 'mtp-tab--active' : ''}`} onClick={() => setSource('folders')}>
                                 Image folders
                             </button>
                         </div>
 
-                        {source === 'folders' && (
+                        {loading && <div className="mtp-loading"><div className="mtp-spinner" /><span>Loading…</span></div>}
+
+                        {/* ── From annotations: trained detector → crop class → remaining classes ── */}
+                        {!loading && source === 'boxes' && (
+                            classNames.length === 0 ? (
+                                <div className="mtp-warning">No annotated classes yet — annotate some images first.</div>
+                            ) : (
+                                <>
+                                    <p style={{ fontSize: 13, opacity: 0.8, marginTop: 0 }}>
+                                        Your trained detection model finds the crop class (e.g. engine). Each annotated crop-class box
+                                        is cut out and the classes inside it become the classifier classes.
+                                    </p>
+
+                                    <div className="mtp-model-row">
+                                        <label className="mtp-model-label">Detector (trained detection model)</label>
+                                        {hasDetector ? (
+                                            <select className="mtp-model-select" value={detector} onChange={e => setDetector(e.target.value)}>
+                                                {detectors.main && <option value="main">Main model</option>}
+                                                {detectors.seed && <option value="seed">Seed model</option>}
+                                            </select>
+                                        ) : (
+                                            <div className="mtp-warning">
+                                                No trained detector yet. Train a Seed or Main detection model first (with the crop class ticked) in the Training Hub.
+                                            </div>
+                                        )}
+                                    </div>
+
+                                    <div className="mtp-model-row">
+                                        <label className="mtp-model-label">Crop class (detector class to cut out)</label>
+                                        <select className="mtp-model-select" value={cropClass}
+                                                onChange={e => setCropClass(e.target.value)}>
+                                            {classNames.map(c => <option key={c} value={c}>{c} ({classCounts[c]})</option>)}
+                                        </select>
+                                    </div>
+
+                                    <div style={{ margin: '12px 0 4px', fontWeight: 600 }}>
+                                        Classifier classes (all remaining classes)
+                                    </div>
+                                    {classNames.filter(c => c !== cropClass).map(c => (
+                                        <CheckRow key={c} checked={labelClasses.includes(c)} onChange={() => toggleLabel(c)}>
+                                            {c} ({classCounts[c]})
+                                        </CheckRow>
+                                    ))}
+                                    <CheckRow
+                                        checked={emptyAsLabel}
+                                        onChange={e => { setEmptyAsLabel(e.target.checked); setPreview(null); }}
+                                        style={{ marginTop: 8 }}
+                                    >
+                                        Crop with nothing inside is labelled
+                                        <input type="text" value={emptyLabel} disabled={!emptyAsLabel}
+                                               onChange={e => { setEmptyLabel(e.target.value); setPreview(null); }}
+                                               style={{ width: 120 }} />
+                                    </CheckRow>
+                                    {!emptyAsLabel && <div className="mtp-warning">Crops with nothing inside will be skipped.</div>}
+
+                                    <div className="mtp-epochs-row" style={{ marginTop: 10 }}>
+                                        <span>Min overlap: {Math.round(minOverlap * 100)}% of a class box inside the crop</span>
+                                        <input type="range" min="0.2" max="1" step="0.05" value={minOverlap} className="mtp-epochs-slider"
+                                               onChange={e => { setMinOverlap(+e.target.value); setPreview(null); }} />
+                                    </div>
+                                    <div className="mtp-epochs-row">
+                                        <span>Crop margin: {Math.round(margin * 100)}%</span>
+                                        <input type="range" min="0" max="0.4" step="0.02" value={margin} className="mtp-epochs-slider"
+                                               onChange={e => { setMargin(+e.target.value); setPreview(null); }} />
+                                    </div>
+
+                                    <button className="mtp-train-btn" style={{ marginTop: 12 }}
+                                            disabled={!canRun || previewing} onClick={runPreview}>
+                                        <Eye size={16} /> {previewing ? 'Building preview…' : 'Preview training data'}
+                                    </button>
+                                </>
+                            )
+                        )}
+
+                        {/* ── Image folders ── */}
+                        {!loading && source === 'folders' && (
                             <>
                                 <p style={{ fontSize: 13, opacity: 0.8, marginTop: 0 }}>
                                     One folder per class (e.g. <code>full_cover/</code>, <code>cut_cover/</code>, <code>no_cover/</code>).
@@ -345,94 +441,20 @@ export default function ClassifierTrainingPanel({ project, onClose }) {
                                 <div style={{ margin: '14px 0 4px', fontWeight: 600 }}>Classes to train on</div>
                                 {classNames.length === 0 && <p style={{ fontSize: 13, opacity: 0.7 }}>No classes yet — import a folder first.</p>}
                                 {classNames.map(c => (
-                                    <CheckRow key={c} checked={folderClasses.includes(c)} onChange={() => toggleFolderClass(c)}>{c} ({classCounts[c]})</CheckRow>
+                                    <CheckRow key={c} checked={folderClasses.includes(c)} onChange={() => toggleFolderClass(c)}>
+                                        {c} ({classCounts[c]})
+                                    </CheckRow>
                                 ))}
                                 {folderClasses.length === 1 && <div className="mtp-warning">Pick at least 2 classes.</div>}
                             </>
                         )}
-
-                        {source === 'boxes' && (loading ? (
-                            <div className="mtp-loading"><div className="mtp-spinner" /><span>Loading…</span></div>
-                        ) : classNames.length === 0 ? (
-                            <div className="mtp-warning">No annotated classes yet — annotate some images first.</div>
-                        ) : (
-                            <>
-                                <div className="mtp-model-row">
-                                    <label className="mtp-model-label">Crop class (the region to cut out)</label>
-                                    <select
-                                        className="mtp-model-select"
-                                        value={cropClass}
-                                        onChange={e => {
-                                            setCropClass(e.target.value);
-                                            setLabelClasses(prev => prev.filter(c => c !== e.target.value));
-                                            setPreview(null);
-                                        }}
-                                    >
-                                        {classNames.map(c => (
-                                            <option key={c} value={c}>{c} ({classCounts[c]})</option>
-                                        ))}
-                                    </select>
-                                </div>
-
-                                <div style={{ margin: '12px 0 4px', fontWeight: 600 }}>
-                                    Label classes (boxes inside the region that name its state)
-                                </div>
-                                {classNames.filter(c => c !== cropClass).map(c => (
-                                    <CheckRow key={c} checked={labelClasses.includes(c)} onChange={() => toggleLabel(c)}>{c} ({classCounts[c]})</CheckRow>
-                                ))}
-
-                                <CheckRow
-                                    checked={emptyAsLabel}
-                                    onChange={e => { setEmptyAsLabel(e.target.checked); setPreview(null); }}
-                                    style={{ marginTop: 10 }}
-                                >
-                                    Region with nothing inside is labelled
-                                    <input
-                                        type="text"
-                                        value={emptyLabel}
-                                        disabled={!emptyAsLabel}
-                                        onChange={e => { setEmptyLabel(e.target.value); setPreview(null); }}
-                                        style={{ width: 120 }}
-                                    />
-                                </CheckRow>
-                                {!emptyAsLabel && (
-                                    <div className="mtp-warning">Empty regions will be skipped.</div>
-                                )}
-
-                                <div className="mtp-epochs-row" style={{ marginTop: 10 }}>
-                                    <span>Min overlap: {Math.round(minOverlap * 100)}% of a label box inside the region</span>
-                                    <input
-                                        type="range" min="0.2" max="1" step="0.05"
-                                        value={minOverlap} className="mtp-epochs-slider"
-                                        onChange={e => { setMinOverlap(+e.target.value); setPreview(null); }}
-                                    />
-                                </div>
-                                <div className="mtp-epochs-row">
-                                    <span>Crop margin: {Math.round(margin * 100)}%</span>
-                                    <input
-                                        type="range" min="0" max="0.4" step="0.02"
-                                        value={margin} className="mtp-epochs-slider"
-                                        onChange={e => { setMargin(+e.target.value); setPreview(null); }}
-                                    />
-                                </div>
-
-                                <button
-                                    className="mtp-train-btn"
-                                    style={{ marginTop: 12 }}
-                                    disabled={!canRun || previewing}
-                                    onClick={runPreview}
-                                >
-                                    <Eye size={16} /> {previewing ? 'Building preview…' : 'Preview set'}
-                                </button>
-                            </>
-                        ))}
                     </section>
 
                     {/* ── Preview ── */}
                     {source === 'boxes' && preview && (
                         <section className="mtp-section">
                             <div className="mtp-section-header">
-                                <span className="mtp-section-title">Preview</span>
+                                <span className="mtp-section-title">Training data preview</span>
                             </div>
                             {preview.warning && <div className="mtp-warning">{preview.warning}</div>}
                             <div className="mtp-stat-cards">
@@ -463,8 +485,7 @@ export default function ClassifierTrainingPanel({ project, onClose }) {
                                     <div style={{ fontWeight: 600 }}>{label}</div>
                                     <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                                         {thumbs.map((src, i) => (
-                                            <img key={i} src={src} alt={label}
-                                                 style={{ height: 90, borderRadius: 6 }} />
+                                            <img key={i} src={src} alt={label} style={{ height: 90, borderRadius: 6 }} />
                                         ))}
                                     </div>
                                 </div>
@@ -472,52 +493,59 @@ export default function ClassifierTrainingPanel({ project, onClose }) {
                         </section>
                     )}
 
-                    {/* ── 2. Train ── */}
+                    {/* ── 2. Training config (same shape as the Main / Segmentation panels) ── */}
                     <section className="mtp-section">
                         <div className="mtp-section-header">
-                            <span className="mtp-section-title">2. Train</span>
+                            <span className="mtp-section-title">2. Training config</span>
                         </div>
-                        {source === 'boxes' && <div className="mtp-model-row">
-                            <label className="mtp-model-label">Mode</label>
-                            <select className="mtp-model-select" value={mode} onChange={e => setMode(e.target.value)}>
-                                <option value="crop">Crop + classify (region detector, then classifier)</option>
-                                <option value="whole">Whole image (baseline, no detector)</option>
+
+                        <div className="mtp-model-row">
+                            <label className="mtp-model-label">Classifier model</label>
+                            <select className="mtp-model-select" value={selectedModel} onChange={e => setSelectedModel(e.target.value)}>
+                                {CLS_MODEL_GROUPS.map(g => (
+                                    <optgroup key={g.family} label={g.family}>
+                                        {g.models.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
+                                    </optgroup>
+                                ))}
                             </select>
-                        </div>}
-                        <AugmentToggles augment={augment} onAugment={setAugment}
-                                        rotate360={rotate360} onRotate360={setRotate360} />
-                        <div className="mtp-epochs-row">
-                            <span>Classifier epochs: {clsEpochs}</span>
-                            <input type="range" min="10" max="150" step="5" value={clsEpochs}
-                                   className="mtp-epochs-slider" onChange={e => setClsEpochs(+e.target.value)} />
                         </div>
-                        {source === 'boxes' && mode === 'crop' && (
-                            <div className="mtp-epochs-row">
-                                <span>Region detector epochs: {detEpochs}</span>
-                                <input type="range" min="10" max="200" step="5" value={detEpochs}
-                                       className="mtp-epochs-slider" onChange={e => setDetEpochs(+e.target.value)} />
-                            </div>
-                        )}
+                        <div className="mtp-epochs-row">
+                            <span>Epochs: {epochs}</span>
+                            <input type="range" min="10" max="200" step="5" value={epochs}
+                                   className="mtp-epochs-slider" onChange={e => setEpochs(+e.target.value)} />
+                        </div>
+                        <div className="mtp-model-row">
+                            <label className="mtp-model-label">Image size</label>
+                            <select className="mtp-model-select" value={imgsz} onChange={e => setImgsz(+e.target.value)}>
+                                {[160, 224, 320, 384, 448, 640].map(n => <option key={n} value={n}>{n} px</option>)}
+                            </select>
+                        </div>
+                        <div className="mtp-model-row">
+                            <label className="mtp-model-label">Batch size</label>
+                            <select className="mtp-model-select" value={batch} onChange={e => setBatch(+e.target.value)}>
+                                {[8, 16, 32, 64, 128].map(n => <option key={n} value={n}>{n}</option>)}
+                            </select>
+                        </div>
+                        <CheckRow checked={preprocess} onChange={e => setPreprocess(e.target.checked)}>
+                            Enhance images (CLAHE / gamma / sharpen) before training
+                        </CheckRow>
+
+                        <AugmentationSettings aug={aug} onChange={setAug} kind="cls" />
+
                         {modelStatus?.has_classifier && (
                             <p style={{ fontSize: 13, opacity: 0.8 }}>
-                                ✅ Trained model exists
+                                ✅ Trained classifier exists
                                 {modelStatus.meta?.val_accuracy != null &&
                                     ` — val accuracy ${(modelStatus.meta.val_accuracy * 100).toFixed(1)}%`}
                                 {' '}(training again replaces it)
                             </p>
                         )}
-                        <button
-                            className="mtp-train-btn"
-                            style={{ marginTop: 12 }}
-                            disabled={!canRun || running}
-                            onClick={startTraining}
-                        >
+                        <button className="mtp-train-btn" style={{ marginTop: 4 }}
+                                disabled={!canRun || running} onClick={startTraining}>
                             <Play size={16} /> {running ? 'Training…' : 'Train classifier'}
                         </button>
                         {running && (
-                            <button className="mtp-refresh" style={{ marginLeft: 8 }} onClick={stopTraining}>
-                                Stop
-                            </button>
+                            <button className="mtp-refresh" style={{ marginLeft: 8 }} onClick={stopTraining}>Stop</button>
                         )}
                     </section>
 
@@ -530,7 +558,7 @@ export default function ClassifierTrainingPanel({ project, onClose }) {
                             {running && (
                                 <p>
                                     {STAGE_LABEL[job.meta?.stage] || 'Waiting for worker…'}
-                                    {job.meta?.total_epochs
+                                    {job.meta?.total_epochs && job.meta?.stage === 'classifier'
                                         ? ` — epoch ${job.meta.epoch || 0}/${job.meta.total_epochs}` : ''}
                                 </p>
                             )}
@@ -543,6 +571,7 @@ export default function ClassifierTrainingPanel({ project, onClose }) {
                                         <b>{result.val_accuracy != null
                                             ? `${(result.val_accuracy * 100).toFixed(1)}%` : 'n/a'}</b>
                                         {' '}on classes: {result.classes?.join(', ')}
+                                        {result.detector && ` · detector: ${result.detector} model`}
                                     </p>
                                     <ConfusionTable matrix={result.confusion} />
                                 </>

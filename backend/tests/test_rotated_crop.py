@@ -41,3 +41,12 @@ def test_ninety_degrees_moves_content():
 
 def test_degenerate_box_is_none():
     assert rotated_crop(_img(), (10, 10, 11, 11), 0.0, 10) is None
+
+
+def test_shift_moves_the_window():
+    img = _img()
+    plain = rotated_crop(img, (100, 60, 200, 140), 0.0, 0)
+    shifted = rotated_crop(img, (100, 60, 200, 140), 0.0, 0, shift=(0.2, 0.0))
+    assert shifted.shape == plain.shape
+    # window moved 20% of its width (20px) to the right
+    assert np.array_equal(shifted[:, :80], img[60:140, 120:200])

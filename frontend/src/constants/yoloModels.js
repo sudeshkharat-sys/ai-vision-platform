@@ -113,3 +113,42 @@ export const SEG_MODEL_GROUPS = [
 
 /** Default model for segmentation training */
 export const DEFAULT_SEG_MODEL = "yolo11n-seg.pt";
+
+/**
+ * Image-classification weights (YOLO-cls), used by the Classifier panel.
+ * Ultralytics auto-downloads them on first use.
+ */
+export const CLS_MODEL_GROUPS = [
+    {
+        family: "YOLO26 Classify",
+        models: [
+            { value: "yolo26n-cls.pt", label: "YOLO26 Nano — fastest" },
+            { value: "yolo26s-cls.pt", label: "YOLO26 Small" },
+            { value: "yolo26m-cls.pt", label: "YOLO26 Medium" },
+            { value: "yolo26l-cls.pt", label: "YOLO26 Large" },
+            { value: "yolo26x-cls.pt", label: "YOLO26 XL — best accuracy" },
+        ],
+    },
+    {
+        family: "YOLO11 Classify",
+        models: [
+            { value: "yolo11n-cls.pt", label: "YOLO11 Nano — fastest" },
+            { value: "yolo11s-cls.pt", label: "YOLO11 Small" },
+            { value: "yolo11m-cls.pt", label: "YOLO11 Medium" },
+            { value: "yolo11l-cls.pt", label: "YOLO11 Large" },
+            { value: "yolo11x-cls.pt", label: "YOLO11 XL — best accuracy" },
+        ],
+    },
+    {
+        family: "YOLOv8 Classify",
+        models: [
+            { value: "yolov8n-cls.pt", label: "YOLOv8 Nano" },
+            { value: "yolov8s-cls.pt", label: "YOLOv8 Small" },
+            { value: "yolov8m-cls.pt", label: "YOLOv8 Medium" },
+            { value: "yolov8l-cls.pt", label: "YOLOv8 Large" },
+            { value: "yolov8x-cls.pt", label: "YOLOv8 XL" },
+        ],
+    },
+];
+
+export const DEFAULT_CLS_MODEL = "yolo11s-cls.pt";
