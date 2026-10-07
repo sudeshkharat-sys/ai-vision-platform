@@ -282,9 +282,17 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
-  max-height: 42vh;
-  overflow-y: auto;
   flex-shrink: 0;
+}
+
+.sidebar-submenu {
+  display: flex;
+  gap: 6px;
+  margin-top: -2px;
+}
+.sidebar-submenu .btn-action {
+  justify-content: center;
+  padding: 7px 10px;
 }
 
 .btn-action {

@@ -15,8 +15,9 @@ import OcrActiveLearningPanel from './OcrActiveLearningPanel';
 import OcrTrainingPanel from './OcrTrainingPanel';
 import SegTrainingPanel from './SegTrainingPanel';
 import ClassifierTrainingPanel from './ClassifierTrainingPanel';
+import TrainingHub from './TrainingHub';
 import './AnnotationWorkspace.css';
-import { Sparkles, AlertTriangle, X, Upload, Image as ImageIcon, Check, ArrowLeft, ArrowRight, Brain, Rocket, Eye, Target, Tag, Package, Film, Undo2, Redo2, ZoomIn, ZoomOut, Maximize2, Trash2, ImageOff, Type, RotateCw, RotateCcw, Grid3x3, Wand2, Square, PenTool, RefreshCw, Scissors, Layers, Copy, ClipboardPaste, Info } from 'lucide-react';
+import { Sparkles, AlertTriangle, X, Upload, Image as ImageIcon, Check, ArrowLeft, ArrowRight, Brain, Rocket, Eye, Target, Tag, Package, Film, Undo2, Redo2, ZoomIn, ZoomOut, Maximize2, Trash2, ImageOff, RotateCw, RotateCcw, Grid3x3, Wand2, Square, PenTool, RefreshCw, Scissors, Copy, ClipboardPaste, Info } from 'lucide-react';
 
 import { API_URL } from '../config';
 
@@ -329,6 +330,9 @@ const AnnotationWorkspace = ({ project, onProjectUpdated }) => {
     const [showOcrPanel, setShowOcrPanel] = useState(false);
     const [showSegPanel, setShowSegPanel] = useState(false);
     const [showClassifierPanel, setShowClassifierPanel] = useState(false);
+    const [showTrainingHub, setShowTrainingHub] = useState(false);
+    const [alMenuOpen, setAlMenuOpen] = useState(false);
+    const isCombined = project.project_type === 'combined' || project.project_type === 'ocr';
     const [ocrAutoLabeling, setOcrAutoLabeling] = useState(false);
     const [seedModelInfo, setSeedModelInfo] = useState(null); // { exists, modified_at } — character detector status for OCR projects
     const [suggestedImageIds, setSuggestedImageIds] = useState(null);  // Set<id> or null (sidebar highlight)
@@ -1454,31 +1458,23 @@ Do you want to proceed?`;
         <div className="workspace">
             {/* ── Sidebar ── */}
             <aside className="workspace-sidebar">
-                {project.project_type === 'combined' || project.project_type === 'ocr' ? (
-                    <div className="sidebar-section sidebar-actions">
-                        <p className="sidebar-label">Pipeline (Detect + OCR + Segment)</p>
-                        <button className="btn-action" onClick={() => setShowTrainingPanel(true)}>
-                            <Rocket size={14} /> Train Seed / Character Detector
-                        </button>
-                        {seedModelInfo && (
-                            <p className="ocr-seed-status">
-                                {seedModelInfo.exists
-                                    ? '✓ Character detector trained'
-                                    : '— Character detector not trained yet'}
-                            </p>
-                        )}
-                        <button className="btn-action btn-action-secondary" onClick={startAutoAnnotation}>
-                            <Sparkles size={14} /> Auto-Annotate
-                        </button>
-                        <button className="btn-action btn-action-al" onClick={() => setShowActiveLearningPanel(true)}>
-                            <Brain size={14} /> Active Learning (Detection)
-                        </button>
-                        <button className="btn-action btn-action-main" onClick={() => setShowMainTrainingPanel(true)}>
-                            <Target size={14} /> Train Main Model
-                        </button>
-                        <button className="btn-action btn-action-ocr" onClick={() => setShowOcrPanel(true)}>
-                            <Type size={14} /> Train OCR Model
-                        </button>
+                <div className="sidebar-section sidebar-actions">
+                    <p className="sidebar-label">Pipeline</p>
+                    <button className="btn-action" onClick={() => setShowTrainingHub(true)}
+                        title="Detection, Segmentation, OCR and Classifier training in one place">
+                        <Rocket size={14} /> Training Hub
+                    </button>
+                    {isCombined && seedModelInfo && (
+                        <p className="ocr-seed-status">
+                            {seedModelInfo.exists
+                                ? '✓ Character detector trained'
+                                : '— Character detector not trained yet'}
+                        </p>
+                    )}
+                    <button className="btn-action btn-action-secondary" onClick={startAutoAnnotation}>
+                        <Sparkles size={14} /> Auto-Annotate
+                    </button>
+                    {isCombined && (
                         <button
                             className="btn-action btn-action-secondary"
                             onClick={handleOcrAutoLabel}
@@ -1487,71 +1483,42 @@ Do you want to proceed?`;
                         >
                             <Sparkles size={14} /> {ocrAutoLabeling ? 'Labeling…' : `Auto-Label Characters (${drawMode === 'segment' ? 'Segment' : drawMode === 'polyline' ? 'Polyline' : 'Box'})`}
                         </button>
-                        <button
-                            className="btn-action btn-action-al"
-                            onClick={() => setShowOcrActiveLearningPanel(true)}
-                            title="Rank pending photos by how uncertain the trained annotation model is, so you label the hardest ones first"
-                        >
-                            <Brain size={14} /> Active Learning (OCR)
-                        </button>
-                        <button
-                            className="btn-action btn-action-seg"
-                            onClick={() => setShowSegPanel(true)}
-                            title="Train an instance-segmentation model on annotations drawn with the Segment tool (mask outlines, not boxes)"
-                        >
-                            <Scissors size={14} /> Train Segmentation Model
-                        </button>
-                        <button
-                            className="btn-action btn-action-seg"
-                            onClick={() => setShowClassifierPanel(true)}
-                            title="Cut out a region (e.g. engine) and classify what is inside it (e.g. full / cut / no cover)"
-                        >
-                            <Layers size={14} /> Train Classifier
-                        </button>
-                        <button
-                            className="btn-action btn-action-review"
-                            onClick={() => setShowReviewPanel(true)}
-                            disabled={images.filter(img => img.status === 'annotated').length === 0}
-                        >
-                            <Eye size={14} /> Review Annotations
-                        </button>
-                        <button className="btn-action btn-action-labels" onClick={() => setShowLabelsPanel(true)}>
-                            <Tag size={14} /> Edit Labels
-                        </button>
-                        <button className="btn-action btn-action-models" onClick={() => setShowModelsPanel(true)}>
-                            <Package size={14} /> View Models
-                        </button>
-                    </div>
-                ) : (
-                    <div className="sidebar-section sidebar-actions">
-                        <p className="sidebar-label">Pipeline</p>
-                        <button className="btn-action" onClick={() => setShowTrainingPanel(true)}>
-                            <Rocket size={14} /> Train Seed Model
-                        </button>
-                        <button className="btn-action btn-action-secondary" onClick={startAutoAnnotation}>
-                            <Sparkles size={14} /> Auto-Annotate
-                        </button>
-                        <button className="btn-action btn-action-al" onClick={() => setShowActiveLearningPanel(true)}>
-                            <Brain size={14} /> Active Learning
-                        </button>
-                        <button
-                            className="btn-action btn-action-review"
-                            onClick={() => setShowReviewPanel(true)}
-                            disabled={images.filter(img => img.status === 'annotated').length === 0}
-                        >
-                            <Eye size={14} /> Review Annotations
-                        </button>
-                        <button className="btn-action btn-action-main" onClick={() => setShowMainTrainingPanel(true)}>
-                            <Target size={14} /> Train Main Model
-                        </button>
-                        <button className="btn-action btn-action-labels" onClick={() => setShowLabelsPanel(true)}>
-                            <Tag size={14} /> Edit Labels
-                        </button>
-                        <button className="btn-action btn-action-models" onClick={() => setShowModelsPanel(true)}>
-                            <Package size={14} /> View Models
-                        </button>
-                    </div>
-                )}
+                    )}
+                    <button
+                        className="btn-action btn-action-al"
+                        onClick={() => isCombined ? setAlMenuOpen(o => !o) : setShowActiveLearningPanel(true)}
+                        title="Rank pending photos by how uncertain the trained model is, so you label the hardest ones first"
+                    >
+                        <Brain size={14} /> Active Learning{isCombined ? (alMenuOpen ? ' ▴' : ' ▾') : ''}
+                    </button>
+                    {isCombined && alMenuOpen && (
+                        <div className="sidebar-submenu">
+                            <button className="btn-action btn-action-al" onClick={() => { setAlMenuOpen(false); setShowActiveLearningPanel(true); }}>
+                                Detection
+                            </button>
+                            <button className="btn-action btn-action-al" onClick={() => { setAlMenuOpen(false); setShowOcrActiveLearningPanel(true); }}>
+                                OCR
+                            </button>
+                        </div>
+                    )}
+                </div>
+
+                <div className="sidebar-section sidebar-actions">
+                    <p className="sidebar-label">Review</p>
+                    <button
+                        className="btn-action btn-action-review"
+                        onClick={() => setShowReviewPanel(true)}
+                        disabled={images.filter(img => img.status === 'annotated').length === 0}
+                    >
+                        <Eye size={14} /> Review Annotations
+                    </button>
+                    <button className="btn-action btn-action-labels" onClick={() => setShowLabelsPanel(true)}>
+                        <Tag size={14} /> Edit Labels
+                    </button>
+                    <button className="btn-action btn-action-models" onClick={() => setShowModelsPanel(true)}>
+                        <Package size={14} /> View Models
+                    </button>
+                </div>
 
                 <div className="sidebar-section">
                     <p className="sidebar-label">Images ({images.length})</p>
@@ -2231,6 +2198,19 @@ Do you want to proceed?`;
                 <SegTrainingPanel
                     project={project}
                     onClose={() => setShowSegPanel(false)}
+                />
+            )}
+            {showTrainingHub && (
+                <TrainingHub
+                    project={project}
+                    onClose={() => setShowTrainingHub(false)}
+                    onOpen={(kind) => {
+                        if (kind === 'seed') setShowTrainingPanel(true);
+                        else if (kind === 'main') setShowMainTrainingPanel(true);
+                        else if (kind === 'seg') setShowSegPanel(true);
+                        else if (kind === 'ocr') setShowOcrPanel(true);
+                        else if (kind === 'classifier') setShowClassifierPanel(true);
+                    }}
                 />
             )}
             {showClassifierPanel && (
