@@ -131,6 +131,9 @@ class TrainSeedRequest(BaseModel):
     class_agnostic: bool = False
     # Train only on these annotation classes (None/[] = all). Others stay in the DB.
     train_classes: Optional[List[str]] = None
+    # Master switch (False = no augmentation at all) and full-circle rotation.
+    augment: bool = True
+    aug_rotate_360: bool = False
 
 
 @router.post("/train-seed/{project_id}")
@@ -148,6 +151,7 @@ async def start_seed_training(
         req.aug_hsv_h, req.aug_hsv_s, req.aug_degrees, req.aug_translate,
         req.aug_scale, req.aug_mixup, req.aug_copy_paste, req.class_agnostic,
         train_classes=req.train_classes,
+        augment=req.augment, aug_rotate_360=req.aug_rotate_360,
     )
     return {"task_id": task.id, "status": "queued"}
 
@@ -172,6 +176,9 @@ class TrainMainRequest(BaseModel):
     aug_mixup: float = 0.0
     aug_copy_paste: float = 0.1
     train_classes: Optional[List[str]] = None
+    # Master switch (False = no augmentation at all) and full-circle rotation.
+    augment: bool = True
+    aug_rotate_360: bool = False
 
 
 @router.post("/train-main/{project_id}")
@@ -190,6 +197,7 @@ async def start_main_training(
         req.aug_hsv_h, req.aug_hsv_s, req.aug_degrees, req.aug_translate,
         req.aug_scale, req.aug_mixup, req.aug_copy_paste,
         train_classes=req.train_classes,
+        augment=req.augment, aug_rotate_360=req.aug_rotate_360,
     )
     return {"task_id": task.id, "status": "queued"}
 
@@ -214,6 +222,9 @@ class TrainSegRequest(BaseModel):
     aug_mixup: float = 0.0
     aug_copy_paste: float = 0.05
     train_classes: Optional[List[str]] = None
+    # Master switch (False = no augmentation at all) and full-circle rotation.
+    augment: bool = True
+    aug_rotate_360: bool = False
 
 
 @router.post("/train-seg/{project_id}")
@@ -233,6 +244,7 @@ async def start_seg_training(
         req.aug_hsv_h, req.aug_hsv_s, req.aug_degrees, req.aug_translate,
         req.aug_scale, req.aug_mixup, req.aug_copy_paste,
         train_classes=req.train_classes,
+        augment=req.augment, aug_rotate_360=req.aug_rotate_360,
     )
     return {"task_id": task.id, "status": "queued"}
 

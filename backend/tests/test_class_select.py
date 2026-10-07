@@ -60,3 +60,19 @@ def test_dataset_summary():
     anns = {"a": [ann("engine", ENGINE)], "b": [ann("cut_cover", ENGINE)]}
     out, summ = cs.derive_dataset_labels(anns, "engine", ["cut_cover"])
     assert list(out) == ["a"] and summ["per_class"] == {"no_cover": 1} and summ["images_without_crop"] == 1
+
+
+def test_folder_label_helpers():
+    import ast, pathlib, re
+    src = (pathlib.Path(__file__).resolve().parents[1] / "app/api/crop_cls.py").read_text()
+    tree = ast.parse(src)
+    ns = {"re": re, "Optional": __import__("typing").Optional}
+    for n in tree.body:
+        if isinstance(n, ast.FunctionDef) and n.name in ("_clean_label", "label_from_path"):
+            exec(compile(ast.Module([n], []), "x", "exec"), ns)
+    f = ns["label_from_path"]
+    assert f("cut_cover/a.jpg") == "cut_cover"
+    assert f("dataset/full cover/sub/a.jpg") == "sub"
+    assert f("data\\no_cover\\a.jpg") == "no_cover"
+    assert f("a.jpg") is None and f("__MACOSX/a.jpg") is None
+    assert ns["_clean_label"]("  full   cover ") == "full cover"

@@ -698,6 +698,25 @@ def _make_epoch_callback(celery_task, total_epochs, epoch_history, epoch_start_t
     return on_fit_epoch_end
 
 
+def _resolve_aug(augment, rotate_360, fliplr, flipud, mosaic, hsv_v, hsv_h, hsv_s,
+                 degrees, translate, scale, mixup, copy_paste):
+    """Apply the master augmentation switches to the per-knob values.
+
+    augment=False zeroes every augmentation (clean, un-augmented training).
+    rotate_360=True lets objects appear at any in-plane angle (YOLO samples
+    a rotation in [-degrees, +degrees], so 180 covers the full circle) --
+    meant for round / orientation-free subjects such as a tyre. Callers
+    apply the character-project clamp AFTER this, so OCR models can never
+    end up with a spin that turns a 6 into a 9.
+    """
+    if rotate_360:
+        degrees = 180.0
+    if not augment:
+        return 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+    return (fliplr, flipud, mosaic, hsv_v, hsv_h, hsv_s,
+            degrees, translate, scale, mixup, copy_paste)
+
+
 # ══════════════════════════════════════════════════════════════════
 #  Seed Training Task
 # ══════════════════════════════════════════════════════════════════
@@ -725,6 +744,8 @@ def train_seed_model(
     aug_copy_paste: float = 0.05,
     class_agnostic: bool = False,
     train_classes: list = None,
+    augment: bool = True,
+    aug_rotate_360: bool = False,
 ):
     """
     Quick seed-training on manually annotated images.
@@ -749,6 +770,10 @@ def train_seed_model(
     per-character CNN classifier, or the CRNN reading the assembled
     line) -- this model's only job is finding them.
     """
+    (aug_fliplr, aug_flipud, aug_mosaic, aug_hsv_v, aug_hsv_h, aug_hsv_s,
+     aug_degrees, aug_translate, aug_scale, aug_mixup, aug_copy_paste) = _resolve_aug(
+        augment, aug_rotate_360, aug_fliplr, aug_flipud, aug_mosaic, aug_hsv_v, aug_hsv_h,
+        aug_hsv_s, aug_degrees, aug_translate, aug_scale, aug_mixup, aug_copy_paste)
     db = StateDBConnector()
 
     # ── Phase 1: DB reads ────────────────────────────────────────
@@ -937,6 +962,8 @@ def train_main_model(
     aug_mixup: float = 0.0,
     aug_copy_paste: float = 0.1,
     train_classes: list = None,
+    augment: bool = True,
+    aug_rotate_360: bool = False,
 ):
     """
     Full/main training on ALL annotated images (manual + auto-annotated).
@@ -950,6 +977,10 @@ def train_main_model(
     3. Training  — YOLO model.train()
     4. Cleanup   — copy main_best.pt, remove temp dataset
     """
+    (aug_fliplr, aug_flipud, aug_mosaic, aug_hsv_v, aug_hsv_h, aug_hsv_s,
+     aug_degrees, aug_translate, aug_scale, aug_mixup, aug_copy_paste) = _resolve_aug(
+        augment, aug_rotate_360, aug_fliplr, aug_flipud, aug_mosaic, aug_hsv_v, aug_hsv_h,
+        aug_hsv_s, aug_degrees, aug_translate, aug_scale, aug_mixup, aug_copy_paste)
     db = StateDBConnector()
 
     # ── Phase 1: DB reads ────────────────────────────────────────
@@ -1119,6 +1150,8 @@ def train_seg_model(
     aug_mixup: float = 0.0,
     aug_copy_paste: float = 0.05,
     train_classes: list = None,
+    augment: bool = True,
+    aug_rotate_360: bool = False,
 ):
     """
     Instance-segmentation training on annotations drawn with the 'segment'
@@ -1142,6 +1175,10 @@ def train_seg_model(
         to seg_seed_best.pt, then the legacy seg_best.pt filename used
         before this seed/main split existed.
     """
+    (aug_fliplr, aug_flipud, aug_mosaic, aug_hsv_v, aug_hsv_h, aug_hsv_s,
+     aug_degrees, aug_translate, aug_scale, aug_mixup, aug_copy_paste) = _resolve_aug(
+        augment, aug_rotate_360, aug_fliplr, aug_flipud, aug_mosaic, aug_hsv_v, aug_hsv_h,
+        aug_hsv_s, aug_degrees, aug_translate, aug_scale, aug_mixup, aug_copy_paste)
     db = StateDBConnector()
 
     with db.get_session() as conn:

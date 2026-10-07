@@ -127,8 +127,37 @@ def _xywh_to_xyxy(bbox, w, h):
     return ((xc - bw / 2) * w, (yc - bh / 2) * h, (xc + bw / 2) * w, (yc + bh / 2) * h)
 
 
-def _build_cls_dataset(split_map, anns_by_image, root: Path, mode, margin, preprocess):
-    """Write root/<split>/<state>/*.jpg. Returns {split: Counter(state)}."""
+def rotated_crop(img, bbox_xyxy, margin, angle):
+    """Same window crop_region() would cut, but with the scene rotated by
+    `angle` degrees about the region's centre first. YOLO-cls has no
+    rotation augmentation of its own, so a rotation-invariant subject
+    (e.g. a tyre) needs these baked into the train folder. Pixels that
+    rotate in from outside the image are mirrored from the edge."""
+    h, w = img.shape[:2]
+    x1, y1, x2, y2 = bbox_xyxy
+    mx, my = (x2 - x1) * margin, (y2 - y1) * margin
+    x1, y1 = max(0, int(round(x1 - mx))), max(0, int(round(y1 - my)))
+    x2, y2 = min(w, int(round(x2 + mx))), min(h, int(round(y2 + my)))
+    cw, ch = x2 - x1, y2 - y1
+    if cw < 2 or ch < 2:
+        return None
+    cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
+    m = cv2.getRotationMatrix2D((cx, cy), angle, 1.0)
+    m[0, 2] += cw / 2 - cx
+    m[1, 2] += ch / 2 - cy
+    return cv2.warpAffine(img, m, (cw, ch), flags=cv2.INTER_LINEAR,
+                          borderMode=cv2.BORDER_REFLECT_101)
+
+
+def _build_cls_dataset(split_map, anns_by_image, root: Path, mode, margin, preprocess,
+                       rotate_copies: int = 0):
+    """Write root/<split>/<state>/*.jpg. Returns {split: Counter(state)}.
+
+    rotate_copies > 0 adds that many randomly rotated (0-360 degrees)
+    copies of every TRAIN sample; val/test stay untouched so the accuracy
+    still measures real, un-augmented images."""
+    import random
+    rng = random.Random(0)
     counts = {s: Counter() for s in split_map}
     for split, imgs in split_map.items():
         for n, img_row in enumerate(imgs):
@@ -145,12 +174,23 @@ def _build_cls_dataset(split_map, anns_by_image, root: Path, mode, margin, prepr
                 # One label per frame: the state of the largest box.
                 big = max(anns, key=lambda a: a["bbox"][2] * a["bbox"][3])
                 items = [(big["state"], img)]
+                if split == "train":
+                    for _ in range(rotate_copies):
+                        rot = rotated_crop(img, (0, 0, w, h), 0.0, rng.uniform(0, 360))
+                        if rot is not None:
+                            items.append((big["state"], rot))
             else:
                 items = []
                 for a in anns:
-                    crop = crop_region(img, _xywh_to_xyxy(a["bbox"], w, h), margin)
+                    xyxy = _xywh_to_xyxy(a["bbox"], w, h)
+                    crop = crop_region(img, xyxy, margin)
                     if crop is not None:
                         items.append((a["state"], crop))
+                        if split == "train":
+                            for _ in range(rotate_copies):
+                                rot = rotated_crop(img, xyxy, margin, rng.uniform(0, 360))
+                                if rot is not None:
+                                    items.append((a["state"], rot))
             for k, (state, crop) in enumerate(items):
                 d = root / split / state
                 d.mkdir(parents=True, exist_ok=True)
@@ -201,6 +241,9 @@ def train_crop_cls_model(
     label_classes: list | None = None,     # boxes inside it that name its state
     empty_label: str | None = "no_cover",  # label for a region with nothing inside (None = skip)
     min_overlap: float = 0.5,              # share of a label box that must lie inside the region
+    augment: bool = True,                  # False = no augmentation at all
+    rotate_360: bool = False,              # add random 0-360 degree rotated train copies
+    rotate_copies: int = 4,                # rotated copies per train sample when rotate_360
 ):
     if mode not in ("crop", "whole"):
         return {"error": "mode must be 'crop' or 'whole'"}
@@ -261,7 +304,10 @@ def train_crop_cls_model(
                 data=str(det_dataset / "data.yaml"), epochs=det_epochs, imgsz=det_imgsz,
                 batch=0.9 if device == 0 else 8, cache=True, amp=device == 0, device=device,
                 lr0=settings.seed_learning_rate, lrf=0.01, cos_lr=True, warmup_epochs=3,
-                weight_decay=0.001, patience=20, fliplr=aug_fliplr, flipud=0.0,
+                weight_decay=0.001, patience=20, flipud=0.0,
+                **({"fliplr": aug_fliplr} if augment else
+                   dict(fliplr=0.0, mosaic=0.0, degrees=0.0, translate=0.0, scale=0.0,
+                        hsv_h=0.0, hsv_s=0.0, hsv_v=0.0)),
                 project=str(settings.model_dir / project_id), name="crop_cls_region",
                 verbose=False, workers=0,
             )
@@ -280,7 +326,9 @@ def train_crop_cls_model(
         self.update_state(state="STARTED", meta={
             "stage": "dataset", "epoch": 0, "total_epochs": cls_epochs, "history": []})
         shutil.rmtree(cls_root, ignore_errors=True)
-        counts = _build_cls_dataset(split_map, anns_by_image, cls_root, mode, margin, preprocess)
+        counts = _build_cls_dataset(
+            split_map, anns_by_image, cls_root, mode, margin, preprocess,
+            rotate_copies=rotate_copies if (augment and rotate_360) else 0)
         train_states = [s for s in states if counts["train"][s] > 0]
         if len(train_states) < 2:
             return {"error": f"Need training samples for at least 2 states, got {dict(counts['train'])}"}
@@ -288,6 +336,13 @@ def train_crop_cls_model(
             shutil.copytree(cls_root / "train", cls_root / "val")
             counts["val"] = counts["train"]
 
+        # YOLO-cls only understands flips, colour jitter, random-resized crop
+        # and erasing; rotation is handled above by the baked-in copies.
+        if augment:
+            cls_aug = dict(fliplr=aug_fliplr, flipud=0.0)
+        else:
+            cls_aug = dict(fliplr=0.0, flipud=0.0, hsv_h=0.0, hsv_s=0.0, hsv_v=0.0,
+                           scale=0.0, erasing=0.0, auto_augment=None)
         history, starts, stop = [], [], {"value": False}
         model = YOLO(cls_model_name)
         model.add_callback(
@@ -301,7 +356,7 @@ def train_crop_cls_model(
         res = model.train(
             data=str(cls_root), epochs=cls_epochs, imgsz=cls_imgsz, batch=batch,
             device=device, amp=device == 0, lr0=settings.seed_learning_rate,
-            cos_lr=True, patience=15, fliplr=aug_fliplr, flipud=0.0,
+            cos_lr=True, patience=15, **cls_aug,
             project=str(settings.model_dir / project_id), name="crop_cls_classifier",
             verbose=False, workers=0,
         )
@@ -321,6 +376,7 @@ def train_crop_cls_model(
             "classes": train_states, "region_classes": region_classes,
             "crop_class": crop_class, "label_classes": label_classes,
             "empty_label": empty_label,
+            "augment": bool(augment), "rotate_360": bool(rotate_360 and augment),
             "cls_imgsz": cls_imgsz,
             "val_accuracy": round(correct / total, 4) if total else None,
             "confusion": confusion,
