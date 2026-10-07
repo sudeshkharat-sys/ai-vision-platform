@@ -567,9 +567,10 @@ export default function ClassifierTrainingPanel({ project, onClose }) {
                             </div>
                             {running && (
                                 <p>
-                                    {STAGE_LABEL[job.meta?.stage] || 'Waiting for worker…'}
-                                    {job.meta?.total_epochs && job.meta?.stage === 'classifier'
-                                        ? ` — epoch ${job.meta.epoch || 0}/${job.meta.total_epochs}` : ''}
+                                    {job.meta?.epoch > 0
+                                        ? `Training classifier — epoch ${job.meta.epoch}/${job.meta.total_epochs}`
+                                          + (job.meta.eta_seconds > 0 ? ` · ~${Math.ceil(job.meta.eta_seconds / 60)} min left` : '')
+                                        : (STAGE_LABEL[job.meta?.stage] || 'Waiting for worker…')}
                                 </p>
                             )}
                             {resultError && <div className="mtp-warning">{resultError}</div>}
