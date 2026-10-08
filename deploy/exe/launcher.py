@@ -55,7 +55,7 @@ CFG_FILE = BASE_DIR / "aivision.cfg"
 DEFAULTS = {
     "postgres_port": "5433",
     "redis_port": "6380",
-    "api_port": "8001",
+    "api_port": "8005",
     "db_name": "ai_vision",
     "db_user": "aivision",
     "db_password": "aivision_local_pass",

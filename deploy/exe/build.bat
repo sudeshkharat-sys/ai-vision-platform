@@ -52,8 +52,8 @@ if not exist node_modules (
     if errorlevel 1 ( echo [ERROR] npm install failed. & exit /b 1 )
 )
 
-set REACT_APP_API_URL=http://localhost:8001/api/v1
-set REACT_APP_BASE_URL=http://localhost:8001
+set REACT_APP_API_URL=http://localhost:8005/api/v1
+set REACT_APP_BASE_URL=http://localhost:8005
 call npm run build
 if errorlevel 1 ( echo [ERROR] React build failed. & exit /b 1 )
 echo      Frontend built successfully.
@@ -157,6 +157,6 @@ echo.
 echo On first launch, the app will:
 echo   - Initialize the PostgreSQL database
 echo   - Start all services
-echo   - Open your browser at http://localhost:8001
+echo   - Open your browser at http://localhost:8005
 
 endlocal

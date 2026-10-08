@@ -88,7 +88,7 @@ On **first launch** the launcher will:
 4. Start Redis
 5. Start the FastAPI backend (with the React UI embedded)
 6. Start the Celery worker
-7. Open your browser at `http://localhost:8001`
+7. Open your browser at `http://localhost:8005`
 
 On subsequent launches steps 2–3 are skipped (database already exists).
 
@@ -102,7 +102,7 @@ On subsequent launches steps 2–3 are skipped (database already exists).
 [aivision]
 postgres_port = 5433
 redis_port = 6380
-api_port = 8001
+api_port = 8005
 db_name = ai_vision
 db_user = aivision
 db_password = aivision_local_pass
