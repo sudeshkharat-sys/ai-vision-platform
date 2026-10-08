@@ -53,9 +53,9 @@ import cuda_check
 CFG_FILE = BASE_DIR / "aivision.cfg"
 
 DEFAULTS = {
-    "postgres_port": "5432",
-    "redis_port": "6379",
-    "api_port": "8000",
+    "postgres_port": "5433",
+    "redis_port": "6380",
+    "api_port": "8001",
     "db_name": "ai_vision",
     "db_user": "aivision",
     "db_password": "aivision_local_pass",
@@ -202,6 +202,9 @@ def main() -> None:
     print("  Press Ctrl+C to stop all services and exit.")
     print("=" * 60 + "\n")
 
+    _tail_logs(BASE_DIR / "logs")
+    print(f"[logs] All service logs are in {BASE_DIR / 'logs'} and streamed below.\n")
+
     if open_browser:
         webbrowser.open(app_url)
 
@@ -241,6 +244,33 @@ def _shutdown(pg: PostgresManager, redis: RedisManager, celery: CeleryWorker | N
     except Exception as e:
         print(f"[postgres] Stop error: {e}")
     print("[launcher] All services stopped. Goodbye.")
+
+
+def _tail_logs(log_dir: Path) -> None:
+    """Stream every logs/*.log file to the console, prefixed with its name."""
+    import threading
+    pos: dict = {}
+
+    def loop():
+        while True:
+            try:
+                for f in log_dir.glob("*.log"):
+                    size = f.stat().st_size
+                    start = pos.get(f, max(0, size - 2000))
+                    if size < start:
+                        start = 0
+                    if size > start:
+                        with open(f, "rb") as fh:
+                            fh.seek(start)
+                            data = fh.read().decode("utf-8", "replace")
+                        for line in data.splitlines():
+                            print(f"[{f.stem}] {line}", flush=True)
+                    pos[f] = size
+            except Exception:
+                pass
+            time.sleep(1)
+
+    threading.Thread(target=loop, daemon=True).start()
 
 
 def run_celery_worker() -> None:

@@ -32,7 +32,7 @@ class CeleryWorker:
                    "--loglevel=info", "--pool=solo", "-Q", "celery"]
             cwd = backend_path
 
-        log_dir = Path(os.environ.get("UPLOAD_DIR", ".")).parent / "logs"
+        log_dir = Path(os.environ.get("UPLOAD_DIR", ".")).parent.parent / "logs"
         log_dir.mkdir(parents=True, exist_ok=True)
         self._log = open(log_dir / "celery.log", "ab")
 
