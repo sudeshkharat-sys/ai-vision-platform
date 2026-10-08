@@ -114,18 +114,18 @@ for pkg in [
     except Exception:
         pass
 
-# Backend source — copy only app code, never data/ (models & uploads are
-# created fresh at runtime and must never be bundled into the EXE)
+# Backend source — ALLOWLIST only. A developer's local backend/ folder can hold
+# huge untracked data (venvs, weights, training runs, uploads); copying "everything
+# except data/" once produced a ~90 GB bundle. Only app code is needed at runtime.
+_BACKEND_DIRS = {"app", "scripts"}
+_BACKEND_FILE_EXT = {".py", ".txt", ".ini", ".cfg", ".json", ".md", ".sql", ".yaml", ".yml"}
 for item in BACKEND.iterdir():
-    if item.name in ("data", "__pycache__", ".env", ".env.example"):
-        continue
-    if item.is_dir():
-        # Recursively add subdirectory, skipping any __pycache__ inside
+    if item.is_dir() and item.name in _BACKEND_DIRS:
         for f in item.rglob("*"):
             if f.is_file() and "__pycache__" not in f.parts:
                 rel_dest = "backend/" + str(f.relative_to(BACKEND).parent).replace("\\", "/")
                 datas += [(str(f), rel_dest)]
-    elif item.is_file():
+    elif item.is_file() and item.suffix.lower() in _BACKEND_FILE_EXT:
         datas += [(str(item), "backend")]
 
 # React build artefacts
