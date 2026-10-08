@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import axios from 'axios';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
-import { Layers, X, RefreshCw, Eye, Play, Upload, FolderUp, Inbox } from 'lucide-react';
+import { Layers, X, RefreshCw, Eye, Play, Upload, FolderUp, Inbox, Square } from 'lucide-react';
 import { CLS_MODEL_GROUPS, DEFAULT_CLS_MODEL } from '../constants/yoloModels';
 import AugmentationSettings, { useAug, augPayload } from './AugmentationSettings';
 // Reuse MainTrainingPanel's styling (mtp-* classes) — same visual language.
@@ -724,10 +724,6 @@ export default function ClassifierTrainingPanel({ project, onClose }) {
                                 A job is already running — a new one will wait for it (see the Jobs tab).
                             </p>
                         )}
-                        <button className="mtp-train-btn" style={{ marginTop: 4 }}
-                                disabled={!canRun} onClick={startTraining}>
-                            <Play size={16} /> Train classifier
-                        </button>
                     </section>
 
                     {/* ── Test ── */}
@@ -811,9 +807,9 @@ export default function ClassifierTrainingPanel({ project, onClose }) {
                                                 <span className="mtp-job-detail-time">{fmtTime(activeJob.startedAt)}</span>
                                                 {ACTIVE.includes(activeJob.status) && <span className="mtp-running-badge">● Live</span>}
                                                 {ACTIVE.includes(activeJob.status) && (
-                                                    <button className="mtp-refresh" style={{ marginLeft: 'auto' }}
+                                                    <button className="mtp-stop-btn" style={{ marginLeft: 'auto' }}
                                                             disabled={activeJob.stopping} onClick={() => stopJob(activeJob)}>
-                                                        {activeJob.stopping ? 'Stopping…' : 'Stop'}
+                                                        <Square size={14} /> {activeJob.stopping ? 'Stopping…' : 'Stop'}
                                                     </button>
                                                 )}
                                             </div>
@@ -877,6 +873,18 @@ export default function ClassifierTrainingPanel({ project, onClose }) {
                                 })()}
                             </div>
                         )
+                    )}
+                </div>
+
+                <div className="mtp-footer">
+                    <button className="mtp-train-btn" disabled={!canRun} onClick={startTraining}>
+                        <Play size={16} /> Train classifier
+                    </button>
+                    {anyRunning && (
+                        <button className="mtp-stop-btn" title="Stop all running and queued classifier jobs"
+                                onClick={() => jobs.filter(j => ACTIVE.includes(j.status) && !j.stopping).forEach(stopJob)}>
+                            <Square size={14} /> Stop All
+                        </button>
                     )}
                 </div>
             </div>
