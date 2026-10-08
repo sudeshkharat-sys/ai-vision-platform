@@ -162,6 +162,8 @@ class TrainValueRequest(BaseModel):
     # the actual text. Left None, any saturated color counts (works for
     # non-reflective badges of any ink color, no per-project setup).
     focus_color: Optional[str] = None
+    # Box classes that mark the plate / text region (None = built-in names)
+    region_classes: Optional[List[str]] = None
 
 
 @router.post("/train-value/{project_id}")
@@ -186,6 +188,7 @@ async def start_value_training(
         hard_image_ids=req.hard_image_ids, batch_size=req.batch_size,
         learning_rate=req.learning_rate, val_ratio=req.val_ratio,
         synthetic_per_class=req.synthetic_per_class, focus_color=req.focus_color,
+        region_classes=req.region_classes,
     )
     return {"task_id": task.id, "status": "queued"}
 
@@ -211,7 +214,7 @@ async def get_ocr_dataset_stats(
     )
     image_ids = [row[0] for row in img_q.fetchall()]
     if not image_ids:
-        return {"char_counts": {}, "total_chars": 0, "annotated_images": 0}
+        return {"char_counts": {}, "all_class_counts": {}, "total_chars": 0, "annotated_images": 0}
 
     ann_q = await db.execute(
         select(Annotation.class_name, func.count(Annotation.id))
@@ -220,13 +223,16 @@ async def get_ocr_dataset_stats(
     )
     _region_names = {"PLATE", "BADGE", "REGION", "SERIAL", "SERIAL_REGION"}
     char_counts = {}
+    all_class_counts = {}
     for name, count in ann_q.fetchall():
+        all_class_counts[str(name)] = all_class_counts.get(str(name), 0) + count
         label = str(name).strip().upper()
         if label and label not in _region_names:
             char_counts[label] = char_counts.get(label, 0) + count
 
     return {
         "char_counts": dict(sorted(char_counts.items())),
+        "all_class_counts": dict(sorted(all_class_counts.items())),
         "total_chars": sum(char_counts.values()),
         "annotated_images": len(image_ids),
     }

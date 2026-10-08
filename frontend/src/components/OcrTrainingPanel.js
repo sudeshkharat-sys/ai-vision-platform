@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import axios from 'axios';
 import { Type, X, Download, Play, Square, RefreshCw, Check, AlertTriangle } from 'lucide-react';
+import RegionClassPicker, { useRegionClasses, regionPayload } from './RegionClassPicker';
 import './OcrTrainingPanel.css';
 
 import { API_URL } from '../config';
@@ -27,6 +28,7 @@ function AccSparkline({ history }) {
 
 const OcrTrainingPanel = ({ project, onClose }) => {
     const [stats, setStats]       = useState(null);
+    const [regionClasses, setRegionClasses] = useRegionClasses(stats?.all_class_counts);
     const [modelInfo, setModelInfo] = useState(null);
     const [error, setError]       = useState(null);
 
@@ -150,6 +152,7 @@ const OcrTrainingPanel = ({ project, onClose }) => {
             const res = engine === 'value'
                 ? await axios.post(`${API_URL}/ocr/train-value/${project.id}`, {
                     epochs: crnnEpochs,
+                    region_classes: regionPayload(regionClasses),
                     ...(hardImageIds?.length ? { hard_image_ids: hardImageIds } : {}),
                 })
                 : engine === 'crnn'
@@ -321,9 +324,7 @@ const OcrTrainingPanel = ({ project, onClose }) => {
                                     onChange={() => { setEngine('cnn'); setResult(null); setTestResult(null); }} />
                                 <div>
                                     <b>TensorFlow character model (.tflite)</b>
-                                    <p>Reads one character at a time from your labeled boxes.
-                                       Pretrained on EMNIST + synthetic engraved characters.
-                                       Runs on-device with tflite_flutter.</p>
+                                    <p title="Reads one character at a time from your labeled boxes. Pretrained on EMNIST + synthetic engraved characters. Runs on-device with tflite_flutter.">Reads one character at a time from your labeled boxes.</p>
                                 </div>
                             </label>
                             <label className={`ocr-engine-card ${engine === 'crnn' ? 'selected' : ''}`}>
@@ -332,9 +333,7 @@ const OcrTrainingPanel = ({ project, onClose }) => {
                                     onChange={() => { setEngine('crnn'); setResult(null); setTestResult(null); }} />
                                 <div>
                                     <b>CRNN line reader (.tflite) — recommended</b>
-                                    <p>A real OCR: reads a whole cropped line at once (YOLO gives the
-                                       text area, this reads it). Knows all 0–9/A–Z out of the box and
-                                       fine-tunes on your engraved font. Exports to TFLite for Flutter.</p>
+                                    <p title="A real OCR: reads a whole cropped line at once (YOLO gives the text area, this reads it). Knows all 0–9/A–Z out of the box and fine-tunes on your engraved font. Exports to TFLite for Flutter.">Reads a whole cropped line at once; fine-tunes on your font.</p>
                                 </div>
                             </label>
                             <label className={`ocr-engine-card ${engine === 'value' ? 'selected' : ''}`}>
@@ -343,11 +342,7 @@ const OcrTrainingPanel = ({ project, onClose }) => {
                                     onChange={() => { setEngine('value'); setResult(null); setTestResult(null); }} />
                                 <div>
                                     <b>Value classifier (.tflite) — for badge / known-value plates</b>
-                                    <p>Not OCR: classifies the whole cropped line directly into one of
-                                       the values labeled in this project (e.g. 4, 6, 10, 11). No
-                                       character-by-character reading, so phantom or dropped digits are
-                                       impossible. The most robust choice when the plate can only say a
-                                       few known values and labeled photos are scarce.</p>
+                                    <p title="Not OCR: classifies the whole cropped line directly into one of the values labeled in this project (e.g. 4, 6, 10, 11). No character-by-character reading, so phantom or dropped digits are impossible. The most robust choice when the plate can only say a few known values and labeled photos are scarce.">Picks one of your known values (4, 6, 10…) for the whole line.</p>
                                 </div>
                             </label>
                             <label className={`ocr-engine-card ${engine === 'tesseract' ? 'selected' : ''}`}>
@@ -356,9 +351,7 @@ const OcrTrainingPanel = ({ project, onClose }) => {
                                     onChange={() => { setEngine('tesseract'); setResult(null); setTestResult(null); }} />
                                 <div>
                                     <b>Tesseract fine-tune (.traineddata)</b>
-                                    <p>Starts from Google's pretrained eng model (tessdata_best) and
-                                       fine-tunes it on your labeled boxes, grouped into text lines
-                                       (the tesstrain flow). Drop-in file for flutter_tesseract_ocr.</p>
+                                    <p title="Starts from Google's pretrained eng model (tessdata_best) and fine-tunes it on your labeled boxes, grouped into text lines (the tesstrain flow). Drop-in file for flutter_tesseract_ocr.">Fine-tunes Google's Tesseract on your labeled lines.</p>
                                 </div>
                             </label>
                             <label className={`ocr-engine-card ${engine === 'seg' ? 'selected' : ''}`}>
@@ -367,12 +360,7 @@ const OcrTrainingPanel = ({ project, onClose }) => {
                                     onChange={() => { setEngine('seg'); setResult(null); setTestResult(null); }} />
                                 <div>
                                     <b>Segment dot-reconnect — for dotted/engraved characters</b>
-                                    <p>For dot-peen engraved plates where a character is a cluster of dots
-                                       (a tilted "0" can read as 9/8/anything). Uses the trained segment
-                                       model to get each character's own dot mask, morphologically closes
-                                       the gaps between dots into one solid glyph at whatever angle the
-                                       stroke runs, then reads it with this same character model. Train
-                                       the segment model (with polygon masks) from the pipeline panel first.</p>
+                                    <p title="For dot-peen engraved plates where a character is a cluster of dots (a tilted 0 can read as 9/8/anything). Uses the trained segment model to get each character's own dot mask, closes the gaps between dots into one solid glyph, then reads it with this same character model. Train the segment model (with polygon masks) from the pipeline panel first.">Joins dot-peen dots into solid glyphs, then reads them.</p>
                                 </div>
                             </label>
                         </div>
@@ -381,6 +369,10 @@ const OcrTrainingPanel = ({ project, onClose }) => {
                     {/* ── Settings + start ──────────────────────── */}
                     <div className="ocr-section">
                         <h3>Training</h3>
+                        {engine === 'value' && (
+                            <RegionClassPicker classCounts={stats?.all_class_counts}
+                                selected={regionClasses} onChange={setRegionClasses} />
+                        )}
                         {engine === 'crnn' ? (
                         <>
                         <div className="ocr-settings">
@@ -400,16 +392,7 @@ const OcrTrainingPanel = ({ project, onClose }) => {
                                 <input type="checkbox" checked={useEmnist} disabled={running}
                                     onChange={e => setUseEmnist(e.target.checked)} />
                                 <span>
-                                    <b>Include EMNIST handwritten samples</b> — adds ~3000 real
-                                    handwritten-character images covering every 0–9/A–Z, even
-                                    characters you never boxed in this project. Good for general
-                                    robustness, but it also means the model can start reading a
-                                    character it was never actually shown in a real labeled box
-                                    (e.g. a letter skipped because a shadow hid it). Turn this off
-                                    if a mystery extra character keeps showing up in reads — the
-                                    model will then only ever see characters that actually appear
-                                    in your labeled boxes, synthetic-rendered text, and composites
-                                    built from your own crops.
+                                    <b>Include EMNIST handwritten samples</b> — extra real digits/letters for robustness. Turn off if a phantom extra character shows up in reads.
                                 </span>
                             </label>
                         </div>
@@ -450,12 +433,7 @@ const OcrTrainingPanel = ({ project, onClose }) => {
                                     <input type="checkbox" checked={usePretrained} disabled={running}
                                         onChange={e => setUsePretrained(e.target.checked)} />
                                     <span>
-                                        <b>Head start with character knowledge (recommended)</b> —
-                                        the model first learns 0–9/A–Z from the EMNIST dataset (~700k real
-                                        labeled character images from NIST) plus this platform's own
-                                        computer-drawn engraved-style characters; your labeled photos then
-                                        teach it your exact font and metal. First use downloads EMNIST
-                                        (~0.5 GB) and builds the base once, then it's reused instantly.
+                                        <b>Head start with character knowledge (recommended)</b> — pre-learns 0–9/A–Z from EMNIST first (one-time ~0.5 GB download).
                                     </span>
                                 </label>
                             </div>

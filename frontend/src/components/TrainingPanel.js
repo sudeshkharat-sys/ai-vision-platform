@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import axios from 'axios';
 import ClassPicker from './ClassPicker';
+import RegionClassPicker, { useRegionClasses, regionPayload } from './RegionClassPicker';
 import AugmentationSettings, { useAug, augPayload } from './AugmentationSettings';
 import {
     LineChart, Line, XAxis, YAxis, CartesianGrid,
@@ -198,6 +199,7 @@ const TrainingPanel = ({ project, onClose }) => {
     const [aug, setAug] = useAug({ copyPaste: 0.05 });
     const [classAgnostic, setClassAgnostic] = useState(false);
     const [trainClasses, setTrainClasses] = useState([]);   // [] = all classes
+    const [regionClasses, setRegionClasses] = useRegionClasses(stats?.class_breakdown);
     const [clahePreview, setClahePreview] = useState(null);   // { original, enhanced, filename }
     const [previewLoading, setPreviewLoading] = useState(false);
     const [modelSource, setModelSource] = useState('yolo');   // 'yolo' | 'upload'
@@ -502,6 +504,9 @@ const TrainingPanel = ({ project, onClose }) => {
             const res = await axios.post(`${API_URL}/pipeline/train-seed/${next.projectId}`, {
                 model_name: next.modelName, epochs: next.epochs, preprocess: next.preprocess,
                 imgsz: next.imgsz, batch: next.batch,
+                class_agnostic: !!next.classAgnostic,
+                train_classes: next.trainClasses?.length ? next.trainClasses : null,
+                ...(next.classAgnostic ? { region_classes: regionPayload(next.regionClasses) } : {}),
                 ...augPayload(next.aug),
                 ...(next.customWeights ? { custom_weights: next.customWeights } : {}),
             });
@@ -567,7 +572,7 @@ const TrainingPanel = ({ project, onClose }) => {
                 logs: ['📋  Job queued — waiting for a free slot…'],
                 epochMeta: null, result: null, error: null, startedAt: new Date(),
             };
-            queueRef.current.push({ jobId: placeholder.id, projectId: project.id, modelName: activeModelName, epochs, preprocess, imgsz, batch, customWeights: modelSource === 'upload' ? selectedWeight : null, aug: { ...aug }, classAgnostic, trainClasses });
+            queueRef.current.push({ jobId: placeholder.id, projectId: project.id, modelName: activeModelName, epochs, preprocess, imgsz, batch, customWeights: modelSource === 'upload' ? selectedWeight : null, aug: { ...aug }, classAgnostic, trainClasses, regionClasses });
             setJobs(prev => [...prev, placeholder]);
             setActiveJobId(placeholder.id);
             setLaunching(false);
@@ -577,6 +582,9 @@ const TrainingPanel = ({ project, onClose }) => {
         try {
             const res = await axios.post(`${API_URL}/pipeline/train-seed/${project.id}`, {
                 model_name: selectedModel, epochs, preprocess, imgsz, batch,
+                class_agnostic: classAgnostic,
+                train_classes: trainClasses.length ? trainClasses : null,
+                ...(classAgnostic ? { region_classes: regionPayload(regionClasses) } : {}),
                 ...augPayload(aug),
                 ...(modelSource === 'upload' && selectedWeight ? { custom_weights: selectedWeight } : {}),
             });
@@ -956,6 +964,10 @@ const TrainingPanel = ({ project, onClose }) => {
                                                     <span title="Trains a SEPARATE detector (seed_char_only_best.pt) that only finds character boxes, without trying to identify WHICH character each one is. On tightly-spaced or touching engraved characters, this tends to find tighter/more complete boxes than the normal per-character detector, because it only has one job instead of two. Character identity still comes from the CRNN/value classifier/CNN reading the boxes it finds. Does not replace or overwrite your normal seed_best.pt." style={{ cursor: 'help', color: '#aaa', fontSize: 11 }}>ⓘ</span>
                                                 </label>
                                             </div>
+                                            {classAgnostic && (
+                                                <RegionClassPicker classCounts={stats?.class_breakdown}
+                                                    selected={regionClasses} onChange={setRegionClasses} />
+                                            )}
 
                                 <AugmentationSettings aug={aug} onChange={setAug} kind="detect" />
                             </section>

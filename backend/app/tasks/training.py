@@ -306,7 +306,7 @@ def _polygon_tight_bbox(ann):
 _REGION_CLASS_NAMES = {"plate", "badge", "region", "serial", "serial_region"}
 
 
-def _class_agnostic_view(classes, anns_by_image):
+def _class_agnostic_view(classes, anns_by_image, region_classes=None):
     """Collapse every non-region character class (0-9, A-Z, ...) into one
     generic "char" class, keeping any plate/badge/region class distinct.
 
@@ -325,7 +325,10 @@ def _class_agnostic_view(classes, anns_by_image):
     Returns (new_classes, new_anns_by_image); does not mutate the inputs,
     so a caller can build both the normal and class-agnostic datasets
     from the same fetched annotations."""
-    has_region = any(str(c).strip().lower() in _REGION_CLASS_NAMES for c in classes)
+    # region_classes (picked in the UI) replaces the built-in name list
+    region_names = ({str(c).strip().lower() for c in region_classes}
+                    if region_classes else _REGION_CLASS_NAMES)
+    has_region = any(str(c).strip().lower() in region_names for c in classes)
     new_classes = (["plate"] if has_region else []) + ["char"]
     new_anns_by_image = {}
     for img_id, anns in anns_by_image.items():
@@ -333,7 +336,7 @@ def _class_agnostic_view(classes, anns_by_image):
         for ann in anns:
             name = str(ann.get("class_name", "")).strip().lower()
             new_ann = dict(ann)
-            new_ann["class_name"] = "plate" if name in _REGION_CLASS_NAMES else "char"
+            new_ann["class_name"] = "plate" if name in region_names else "char"
             new_anns.append(new_ann)
         new_anns_by_image[img_id] = new_anns
     return new_classes, new_anns_by_image
@@ -746,6 +749,7 @@ def train_seed_model(
     train_classes: list = None,
     augment: bool = True,
     aug_rotate_360: bool = False,
+    region_classes: list = None,
 ):
     """
     Quick seed-training on manually annotated images.
@@ -815,7 +819,7 @@ def train_seed_model(
     # project) but BEFORE dataset build, so the detector itself never
     # sees character identity.
     if class_agnostic:
-        classes, anns_by_image = _class_agnostic_view(classes, anns_by_image)
+        classes, anns_by_image = _class_agnostic_view(classes, anns_by_image, region_classes)
 
     # ── Phase 2: Build dataset ───────────────────────────────────
     dataset_path, n_train, n_val, n_test = _build_yolo_dataset(

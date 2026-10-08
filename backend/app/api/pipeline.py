@@ -134,6 +134,9 @@ class TrainSeedRequest(BaseModel):
     # Master switch (False = no augmentation at all) and full-circle rotation.
     augment: bool = True
     aug_rotate_360: bool = False
+    # Box classes that are the plate / text region (class-agnostic detector);
+    # every other class becomes the generic "char". None = built-in names.
+    region_classes: Optional[List[str]] = None
 
 
 @router.post("/train-seed/{project_id}")
@@ -152,6 +155,7 @@ async def start_seed_training(
         req.aug_scale, req.aug_mixup, req.aug_copy_paste, req.class_agnostic,
         train_classes=req.train_classes,
         augment=req.augment, aug_rotate_360=req.aug_rotate_360,
+        region_classes=req.region_classes,
     )
     return {"task_id": task.id, "status": "queued"}
 

@@ -45,7 +45,7 @@ import redis as redis_lib
 _REGION_CLASS_NAMES = {"plate", "badge", "region", "serial", "serial_region"}
 
 
-def _plate_region_bbox(anns, iw, ih):
+def _plate_region_bbox(anns, iw, ih, region_names=None):
     """Pixel (x1,y1,x2,y2) of this image's "plate"/region annotation (a
     multi-character label like "plate" or "badge"), or None. A box drawn
     once around the whole badge, unlike per-character boxes, doesn't move
@@ -56,7 +56,7 @@ def _plate_region_bbox(anns, iw, ih):
     "wider crop" as a proxy for "more digits" and get fooled by it."""
     for ann in anns:
         name = str(ann.get("class_name", "")).strip().lower()
-        if name in _REGION_CLASS_NAMES and ann.get("bbox"):
+        if name in (region_names or _REGION_CLASS_NAMES) and ann.get("bbox"):
             xc, yc, w, h = ann["bbox"]
             x1, y1 = (xc - w / 2) * iw, (yc - h / 2) * ih
             x2, y2 = (xc + w / 2) * iw, (yc + h / 2) * ih
@@ -65,7 +65,7 @@ def _plate_region_bbox(anns, iw, ih):
     return None
 
 
-def _direct_value_bbox(anns):
+def _direct_value_bbox(anns, region_names=None):
     """A single box drawn around the WHOLE badge and labeled with the
     value itself ("10", "11", "4", "6" -- not a single character) --
     the simpler alternative to per-character boxes + a region box.
@@ -81,7 +81,7 @@ def _direct_value_bbox(anns):
         if not ann.get("bbox"):
             continue
         label = str(ann["class_name"]).strip().upper()
-        if len(label) <= 1 or label.lower() in _REGION_CLASS_NAMES:
+        if len(label) <= 1 or label.lower() in (region_names or _REGION_CLASS_NAMES):
             continue
         return ann["bbox"], label
     return None
@@ -116,7 +116,8 @@ def _dedupe_char_boxes(chars, iou_thresh: float = 0.5):
     return kept
 
 
-def _line_crops_for_project(img_rows, anns_by_image, progress=None, focus_color=None):
+def _line_crops_for_project(img_rows, anns_by_image, progress=None, focus_color=None,
+                            region_names=None):
     """Cut every annotated text line. Prefers the image's whole "plate"
     region box (stable width, immune to per-character detection noise)
     over the character-box-extent crop; falls back to the extent crop
@@ -139,7 +140,7 @@ def _line_crops_for_project(img_rows, anns_by_image, progress=None, focus_color=
         gray_full = _color_aware_gray(img, focus_color=focus_color)
         anns = anns_by_image.get(img_row["id"], [])
 
-        direct = _direct_value_bbox(anns)
+        direct = _direct_value_bbox(anns, region_names)
         if direct is not None:
             (xc, yc, w, h), text = direct
             x1, y1 = max(0, int((xc - w / 2) * iw)), max(0, int((yc - h / 2) * ih))
@@ -154,7 +155,7 @@ def _line_crops_for_project(img_rows, anns_by_image, progress=None, focus_color=
         if not chars:
             continue
 
-        region = _plate_region_bbox(anns, iw, ih)
+        region = _plate_region_bbox(anns, iw, ih, region_names)
         if region is not None:
             rx1, ry1, rx2, ry2 = region
             # Only characters whose center actually falls INSIDE this
@@ -315,6 +316,7 @@ def train_value_model(
     val_ratio: float = 0.2,
     synthetic_per_class: int = 150,
     focus_color: str = None,
+    region_classes: list = None,
 ):
     """Train the whole-value classifier and export ocr_value.tflite +
     value_labels.txt. Classes = the distinct line texts actually labeled
@@ -354,7 +356,9 @@ def train_value_model(
         except Exception:
             pass
 
-    crops = _line_crops_for_project(img_rows, anns_by_image, progress, focus_color=focus_color)
+    region_names = {str(c).strip().lower() for c in region_classes} if region_classes else None
+    crops = _line_crops_for_project(img_rows, anns_by_image, progress, focus_color=focus_color,
+                                    region_names=region_names)
     by_value = defaultdict(list)
     for im, text, img_id in crops:
         by_value[text].append((im, img_id))
