@@ -214,6 +214,10 @@ def _process_image(root: Path, split: str, n: int, img_row, anns, mode, margin, 
         img = clahe_gamma_sharpen(img)
     h, w = img.shape[:2]
 
+    def n_copies(state):
+        # rotate_copies is an int, or {state: n} when classes are balanced
+        return rotate_copies.get(state, 0) if isinstance(rotate_copies, dict) else rotate_copies
+
     def aug_args():
         return (rng.uniform(-degrees, degrees),
                 (rng.uniform(-translate, translate), rng.uniform(-translate, translate)))
@@ -224,7 +228,7 @@ def _process_image(root: Path, split: str, n: int, img_row, anns, mode, margin, 
         big = max(anns, key=lambda a: a["bbox"][2] * a["bbox"][3])
         items.append((big["state"], img))
         if split == "train":
-            for _ in range(rotate_copies):
+            for _ in range(n_copies(big["state"])):
                 ang, sh = aug_args()
                 rot = rotated_crop(img, (0, 0, w, h), 0.0, ang, sh)
                 if rot is not None:
@@ -237,7 +241,7 @@ def _process_image(root: Path, split: str, n: int, img_row, anns, mode, margin, 
                 continue
             items.append((a["state"], crop))
             if split == "train":
-                for _ in range(rotate_copies):
+                for _ in range(n_copies(a["state"])):
                     ang, sh = aug_args()
                     rot = rotated_crop(img, xyxy, margin, ang, sh)
                     if rot is not None:
@@ -253,6 +257,34 @@ def _process_image(root: Path, split: str, n: int, img_row, anns, mode, margin, 
             failed += 1
             note = note or f"could not encode a crop (shape {getattr(crop, 'shape', None)}, dtype {getattr(crop, 'dtype', None)})"
     return written, failed, note
+
+
+def _balanced_copies(train_imgs, anns_by_image, mode, base: int, cap: int = 10) -> dict:
+    """Extra augmented copies per class so every class ends up with about as
+    many TRAIN samples as the biggest one (YOLO-cls has no class weights, so
+    oversampling the rare classes with rotated/shifted copies does the job).
+    A class never gets fewer than `base` copies."""
+    cnt = Counter()
+    for row in train_imgs:
+        anns = anns_by_image.get(row["id"]) or []
+        if mode == "whole" and anns:
+            cnt[max(anns, key=lambda a: a["bbox"][2] * a["bbox"][3])["state"]] += 1
+        else:
+            cnt.update(a["state"] for a in anns)
+    if not cnt:
+        return {}
+    top = max(cnt.values())
+    limit = max(base, cap)
+    return {s: min(limit, max(base, round((1 + base) * top / c) - 1)) for s, c in cnt.items()}
+
+
+def _recommended_epochs(n_train: int, batch: int, target_steps: int = 4000,
+                        lo: int = 25, hi: int = 100) -> int:
+    """Epochs so training makes ~target_steps optimizer steps: big (augmented)
+    datasets need few epochs, small ones many. Clamped; early-stopping
+    (patience) ends it sooner if the validation accuracy stops improving."""
+    steps_per_epoch = max(1, -(-n_train // max(1, batch)))
+    return int(min(hi, max(lo, round(target_steps / steps_per_epoch))))
 
 
 def _build_cls_dataset(split_map, anns_by_image, root: Path, mode, margin, preprocess,
@@ -422,7 +454,8 @@ def train_crop_cls_model(
     detector: str | None = None,           # "main" | "seed" | None = Main if trained, else Seed
     cls_model_name: str = "yolo11s-cls.pt",
     custom_weights: str | None = None,
-    cls_epochs: int = 40,
+    cls_epochs: int = 0,                   # 0 = Auto: sized from the number of training crops
+    balance_classes: bool = True,          # oversample rare classes with augmented copies
     cls_imgsz: int = 0,                    # 0 = Auto: sized from the crops
     margin: float = 0.12,
     preprocess: bool = True,
@@ -527,8 +560,14 @@ def train_crop_cls_model(
         split_map = {"train": train_i, "val": val_i}
         if test_i:
             split_map["test"] = test_i
+        copies_map = copies
+        if balance_classes:
+            copies_map = _balanced_copies(train_i, anns_by_image, mode, copies)
         tl.log(f"Images per split: train {len(train_i)}, val {len(val_i)}, test {len(test_i)}"
                + (f"; each train crop gets {copies} rotated/shifted copies" if copies else ""))
+        if balance_classes and len(set(copies_map.values())) > 1:
+            tl.log(f"Class balancing: extra copies per class {copies_map} "
+                   "(rare classes get more so every class has a similar number of training samples)")
         tl.check_stop()
         tl.set("dataset", epoch=0, total_epochs=cls_epochs, history=[])
         shutil.rmtree(cls_root, ignore_errors=True)
@@ -544,7 +583,7 @@ def train_crop_cls_model(
         build_stats: dict = {}
         counts = _build_cls_dataset(
             split_map, anns_by_image, cls_root, mode, margin, preprocess,
-            rotate_copies=copies, degrees=deg, translate=tr, progress=_progress, stats=build_stats)
+            rotate_copies=copies_map, degrees=deg, translate=tr, progress=_progress, stats=build_stats)
         tl.check_stop()
         tl.log("Dataset built: " + "; ".join(f"{k} {dict(v)}" for k, v in counts.items()))
         if build_stats.get("failed"):
@@ -566,6 +605,11 @@ def train_crop_cls_model(
             cls_imgsz = _auto_imgsz(cls_root)
         # Auto batch = 90% of GPU memory (same as the detection trainers); CPU can't auto-size.
         run_batch = batch if batch != -1 else (0.9 if device == 0 else 16)
+        if not cls_epochs or cls_epochs < 1:
+            n_train = sum(counts["train"].values())
+            cls_epochs = _recommended_epochs(n_train, batch if batch > 0 else 32)
+            tl.log(f"Epochs: Auto -> {cls_epochs} ({n_train} training samples; "
+                   "stops earlier if validation accuracy stops improving)")
         history, starts, stop = [], [], {"value": False}
         tl.log(f"Image size {cls_imgsz}, batch {run_batch}, device {'GPU' if device == 0 else 'CPU'}")
         tl.check_stop()

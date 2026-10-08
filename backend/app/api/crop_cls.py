@@ -40,7 +40,8 @@ class TrainCropClsRequest(BaseModel):
     detector: Optional[str] = None
     cls_model_name: str = "yolo11s-cls.pt"
     custom_weights: Optional[str] = None
-    cls_epochs: int = 40
+    cls_epochs: int = 0      # 0 = Auto (sized from the number of training crops)
+    balance_classes: bool = True   # oversample rare classes with augmented copies
     cls_imgsz: int = 0       # 0 = Auto (sized from the crops)
     margin: float = 0.12
     preprocess: bool = True

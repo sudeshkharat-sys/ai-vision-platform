@@ -155,7 +155,8 @@ export default function ClassifierTrainingPanel({ project, onClose }) {
 
     // Training config — same shape as the Main / Segmentation panels
     const [selectedModel, setSelectedModel] = useState(DEFAULT_CLS_MODEL);
-    const [epochs, setEpochs] = useState(40);
+    const [balance, setBalance] = useState(true);
+    const [epochs, setEpochs] = useState(0);          // 0 = Auto (recommended)
     const [imgsz, setImgsz] = useState(0);      // 0 = Auto (sized from the crops)
     const [batch, setBatch] = useState(-1);     // -1 = Auto (fits the GPU)
     const [preprocess, setPreprocess] = useState(true);
@@ -372,7 +373,7 @@ export default function ClassifierTrainingPanel({ project, onClose }) {
         setError(null);
         try {
             const common = {
-                cls_model_name: selectedModel, cls_epochs: epochs, cls_imgsz: imgsz,
+                cls_model_name: selectedModel, cls_epochs: epochs, balance_classes: balance, cls_imgsz: imgsz,
                 batch, preprocess, ...augPayload(aug),
             };
             const body = source === 'folders'
@@ -678,11 +679,24 @@ export default function ClassifierTrainingPanel({ project, onClose }) {
                                 ))}
                             </select>
                         </div>
-                        <div className="mtp-epochs-row">
-                            <span>Epochs: {epochs}</span>
-                            <input type="range" min="10" max="200" step="5" value={epochs}
-                                   className="mtp-epochs-slider" onChange={e => setEpochs(+e.target.value)} />
+                        <div className="mtp-model-row">
+                            <label className="mtp-model-label">
+                                Epochs
+                                <span className="mtp-model-hint"> (Auto sizes it from your training crops, incl. augmented copies)</span>
+                            </label>
+                            <select className="mtp-model-select mtp-model-select--sm" value={epochs === 0 ? 0 : 1}
+                                    onChange={e => setEpochs(+e.target.value === 0 ? 0 : 40)}>
+                                <option value={0}>Auto (recommended)</option>
+                                <option value={1}>Manual</option>
+                            </select>
                         </div>
+                        {epochs > 0 && (
+                            <div className="mtp-epochs-row">
+                                <span>Epochs: {epochs}</span>
+                                <input type="range" min="10" max="200" step="5" value={epochs}
+                                       className="mtp-epochs-slider" onChange={e => setEpochs(+e.target.value)} />
+                            </div>
+                        )}
                         <div className="mtp-model-row">
                             <label className="mtp-model-label">
                                 Image Size
@@ -705,6 +719,9 @@ export default function ClassifierTrainingPanel({ project, onClose }) {
                                 {[2, 4, 8, 16, 32, 64].map(b => <option key={b} value={b}>{b}</option>)}
                             </select>
                         </div>
+                        <CheckRow checked={balance} onChange={e => setBalance(e.target.checked)}>
+                            Balance classes (rare classes get extra augmented copies)
+                        </CheckRow>
                         <CheckRow checked={preprocess} onChange={e => setPreprocess(e.target.checked)}>
                             Enhance images (CLAHE / gamma / sharpen) before training
                         </CheckRow>
