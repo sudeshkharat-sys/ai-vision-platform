@@ -31,10 +31,19 @@ SCRIPTS   = REPO_ROOT / "scripts"
 _stdlib_dir = sysconfig.get_path("stdlib")
 _platstdlib_dir = sysconfig.get_path("platstdlib")
 datas = []
+# NOTE: in a Conda env the stdlib dir (Lib/) CONTAINS site-packages, so adding
+# the whole dir would copy the user's entire environment (tens of GB) into the
+# EXE. Bundle only the real stdlib and skip site-packages and other bulk.
+_STDLIB_SKIP = {"site-packages", "test", "tests", "idlelib", "turtledemo",
+                "__pycache__", "ensurepip", "lib2to3", "venv"}
 if _stdlib_dir and os.path.isdir(_stdlib_dir):
-    datas += [(_stdlib_dir, "lib-stdlib")]
-if _platstdlib_dir and os.path.isdir(_platstdlib_dir) and _platstdlib_dir != _stdlib_dir:
-    datas += [(_platstdlib_dir, "lib-platstdlib")]
+    for _entry in sorted(Path(_stdlib_dir).iterdir()):
+        if _entry.name in _STDLIB_SKIP:
+            continue
+        if _entry.is_dir():
+            datas += [(str(_entry), "lib-stdlib/" + _entry.name)]
+        else:
+            datas += [(str(_entry), "lib-stdlib")]
 # ---------------------------------------------------------------------------
 binaries  = []
 hiddenimports = []
