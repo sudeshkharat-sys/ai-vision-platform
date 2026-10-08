@@ -95,7 +95,7 @@ def _boxes_to_lines(anns, iw, ih):
     return _group_chars_into_lines(_anns_to_chars(anns, iw, ih))
 
 
-def _anns_to_chars(anns, iw, ih):
+def _anns_to_chars(anns, iw, ih, region_names=None):
     """Annotation dicts -> (label, x1, y1, x2, y2, points_px) tuples in pixels.
 
     Split out of _boxes_to_lines so a caller that needs to transform the
@@ -107,7 +107,7 @@ def _anns_to_chars(anns, iw, ih):
         if not ann["bbox"]:
             continue
         label = str(ann["class_name"]).strip().upper()
-        if len(label) != 1:
+        if len(label) != 1 or (region_names and label.lower() in region_names):
             continue  # region boxes like "plate" don't belong to OCR
         xc, yc, w, h = ann["bbox"]
         x1 = (xc - w / 2) * iw

@@ -151,7 +151,7 @@ def _line_crops_for_project(img_rows, anns_by_image, progress=None, focus_color=
                 progress(idx + 1, total, len(crops))
             continue
 
-        chars = _dedupe_char_boxes(_anns_to_chars(anns, iw, ih))
+        chars = _dedupe_char_boxes(_anns_to_chars(anns, iw, ih, region_names))
         if not chars:
             continue
 

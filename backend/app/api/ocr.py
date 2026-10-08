@@ -65,6 +65,7 @@ class TrainOcrRequest(BaseModel):
     fine_tune: bool = False
     focus_classes: Optional[List[str]] = None
     use_pretrained: bool = True
+    region_classes: Optional[List[str]] = None   # plate/region classes (None = built-in names)
 
 
 @router.post("/train/{project_id}")
@@ -81,6 +82,7 @@ async def start_ocr_training(
         project_id, req.epochs, req.img_size, req.target_per_class,
         req.val_ratio, req.batch_size, req.learning_rate,
         req.fine_tune, req.focus_classes, req.use_pretrained,
+        region_classes=req.region_classes,
     )
     return {"task_id": task.id, "status": "queued"}
 
@@ -122,6 +124,7 @@ class TrainCrnnRequest(BaseModel):
     batch_size: int = 32
     learning_rate: float = 1e-3
     val_ratio: float = 0.15
+    region_classes: Optional[List[str]] = None
 
 
 @router.post("/train-crnn/{project_id}")
@@ -144,6 +147,7 @@ async def start_crnn_training(
         dotpeen_lines=req.dotpeen_lines, real_augment_copies=req.real_augment_copies,
         hard_image_ids=req.hard_image_ids, batch_size=req.batch_size,
         learning_rate=req.learning_rate, val_ratio=req.val_ratio,
+        region_classes=req.region_classes,
     )
     return {"task_id": task.id, "status": "queued"}
 

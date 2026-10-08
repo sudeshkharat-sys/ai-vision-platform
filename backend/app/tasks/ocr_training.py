@@ -416,6 +416,7 @@ def train_ocr_model(
     fine_tune: bool = False,
     focus_classes: list = None,
     use_pretrained: bool = True,
+    region_classes: list = None,
 ):
     """
     Train the single-character OCR classifier for a project.
@@ -429,6 +430,7 @@ def train_ocr_model(
     samples are oversampled ~2.5x so the model sees them far more often,
     without forgetting the rest.
     """
+    region_names = {str(c).strip().lower() for c in region_classes} if region_classes else None
     # TensorFlow is only needed by this task — import lazily so the
     # YOLO/torch workers don't pay the import cost (or conflict on GPU).
     import tensorflow as tf
@@ -473,7 +475,7 @@ def train_ocr_model(
             if not ann["bbox"]:
                 continue
             label = str(ann["class_name"]).strip().upper()
-            if len(label) != 1:
+            if len(label) != 1 or (region_names and label.lower() in region_names):
                 # Only single-character labels belong to the OCR classifier;
                 # boxes like "plate" or "serial_region" are skipped.
                 skipped_multichar[label] += 1

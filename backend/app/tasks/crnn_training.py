@@ -582,8 +582,10 @@ def train_crnn_model(
     batch_size: int = 32,
     learning_rate: float = 1e-3,
     val_ratio: float = 0.15,
+    region_classes: list = None,
 ):
     """Train the CRNN line recognizer and export ocr_crnn.tflite + charset."""
+    region_names = {str(c).strip().lower() for c in region_classes} if region_classes else None
     import tensorflow as tf
     from ..connectors.statedb_connector import StateDBConnector
 
@@ -619,7 +621,7 @@ def train_crnn_model(
             continue
         ih, iw = img.shape[:2]
         gray_full = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        chars = _anns_to_chars(anns_by_image.get(img_row["id"], []), iw, ih)
+        chars = _anns_to_chars(anns_by_image.get(img_row["id"], []), iw, ih, region_names)
         if not chars:
             continue
 

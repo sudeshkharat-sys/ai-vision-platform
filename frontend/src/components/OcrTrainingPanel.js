@@ -159,6 +159,7 @@ const OcrTrainingPanel = ({ project, onClose }) => {
                 ? await axios.post(`${API_URL}/ocr/train-crnn/${project.id}`, {
                     epochs: crnnEpochs,
                     emnist_lines: useEmnist ? 3000 : 0,
+                    region_classes: regionPayload(regionClasses),
                     ...(hardImageIds?.length ? { hard_image_ids: hardImageIds } : {}),
                 })
                 : engine === 'tesseract'
@@ -168,6 +169,7 @@ const OcrTrainingPanel = ({ project, onClose }) => {
                 : await axios.post(`${API_URL}/ocr/train/${project.id}`, {
                     epochs: fineTune ? Math.min(epochs, 25) : epochs,
                     target_per_class: target,
+                    region_classes: regionPayload(regionClasses),
                     img_size: imgSize,
                     fine_tune: fineTune,
                     focus_classes: fineTune ? focusChars : [],
@@ -369,7 +371,7 @@ const OcrTrainingPanel = ({ project, onClose }) => {
                     {/* ── Settings + start ──────────────────────── */}
                     <div className="ocr-section">
                         <h3>Training</h3>
-                        {engine === 'value' && (
+                        {(engine === 'value' || engine === 'crnn' || engine === 'cnn') && (
                             <RegionClassPicker classCounts={stats?.all_class_counts}
                                 selected={regionClasses} onChange={setRegionClasses} />
                         )}
