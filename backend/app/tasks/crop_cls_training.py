@@ -174,6 +174,13 @@ def _write_jpg(path: Path, img) -> bool:
     later crashes the size probe / the YOLO dataset loader. So check the
     buffer, fall back to PIL, and report failure to the caller."""
     import numpy as np
+    # Classifier input is ~224-640px; huge crops (2400+px) only waste disk/RAM and
+    # can fail to encode, so cap the long side.
+    long_side = max(img.shape[:2])
+    if long_side > 1280:
+        s = 1280.0 / long_side
+        img = cv2.resize(img, (max(1, int(img.shape[1] * s)), max(1, int(img.shape[0] * s))),
+                         interpolation=cv2.INTER_AREA)
     img = np.ascontiguousarray(img)
     try:
         ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 95])
@@ -547,7 +554,7 @@ def train_crop_cls_model(
         if len(train_states) < 2:
             return {"error": f"Need training samples for at least 2 classes, got {dict(counts['train'])}"}
         if sum(counts["val"].values()) == 0:   # tiny dataset: mirror train
-            shutil.copytree(cls_root / "train", cls_root / "val")
+            shutil.copytree(cls_root / "train", cls_root / "val", dirs_exist_ok=True)
             counts["val"] = counts["train"]
 
         if augment:
