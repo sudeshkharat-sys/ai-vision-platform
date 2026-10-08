@@ -3,6 +3,7 @@
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 
@@ -22,20 +23,30 @@ class CeleryWorker:
 
         env = {**os.environ, "PYTHONPATH": backend_path}
 
+        if getattr(sys, "frozen", False):
+            # sys.executable is the launcher exe itself: re-enter it in worker mode.
+            cmd = [python_exe, "--celery-worker"]
+            cwd = None
+        else:
+            cmd = [python_exe, "-m", "celery", "-A", "app.tasks.celery_app", "worker",
+                   "--loglevel=info", "--pool=solo", "-Q", "celery"]
+            cwd = backend_path
+
+        log_dir = Path(os.environ.get("UPLOAD_DIR", ".")).parent / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        self._log = open(log_dir / "celery.log", "ab")
+
         self.process = subprocess.Popen(
-            [
-                python_exe, "-m", "celery",
-                "-A", "app.tasks.celery_app", "worker",
-                "--loglevel=info",
-                "--pool=solo",
-                "-Q", "celery",
-            ],
-            cwd=backend_path,
+            cmd,
+            cwd=cwd,
             env=env,
-            stdout=subprocess.PIPE,
+            stdout=self._log,
             stderr=subprocess.STDOUT,
             creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
         )
+        time.sleep(3)
+        if self.process.poll() is not None:
+            print(f"[celery] ERROR: worker exited immediately (code {self.process.returncode}). See {log_dir / 'celery.log'}")
         print("[celery] Worker started.")
 
     def stop(self) -> None:

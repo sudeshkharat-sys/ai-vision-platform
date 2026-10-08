@@ -243,5 +243,25 @@ def _shutdown(pg: PostgresManager, redis: RedisManager, celery: CeleryWorker | N
     print("[launcher] All services stopped. Goodbye.")
 
 
+def run_celery_worker() -> None:
+    """Worker mode: the frozen exe re-invokes itself with --celery-worker."""
+    import multiprocessing
+    multiprocessing.freeze_support()
+    backend_path = str(Path(sys._MEIPASS) / "backend") if hasattr(sys, "_MEIPASS") \
+        else str(Path(__file__).parent.parent.parent / "backend")
+    if backend_path not in sys.path:
+        sys.path.insert(0, backend_path)
+    os.chdir(backend_path)
+    from app.tasks.celery_app import celery_app
+    celery_app.worker_main(
+        ["worker", "--loglevel=info", "--pool=solo", "-Q", "celery", "-n", "exe@%h"]
+    )
+
+
 if __name__ == "__main__":
-    main()
+    import multiprocessing
+    multiprocessing.freeze_support()
+    if "--celery-worker" in sys.argv:
+        run_celery_worker()
+    else:
+        main()
