@@ -294,4 +294,21 @@ if __name__ == "__main__":
     if "--celery-worker" in sys.argv:
         run_celery_worker()
     else:
-        main()
+        _log = BASE_DIR / "logs"
+        _log.mkdir(parents=True, exist_ok=True)
+        try:
+            main()
+        except SystemExit as e:
+            if e.code not in (0, None):
+                print(f"\n[launcher] Exited with code {e.code}. Scroll up for the reason.")
+                input("Press Enter to close this window...")
+            raise
+        except BaseException:
+            import traceback
+            tb = traceback.format_exc()
+            print("\n[launcher] CRASH:\n" + tb)
+            with open(_log / "launcher_crash.log", "a", encoding="utf-8") as f:
+                f.write(time.strftime("%Y-%m-%d %H:%M:%S") + "\n" + tb + "\n")
+            print(f"Saved to {_log / 'launcher_crash.log'}")
+            input("Press Enter to close this window...")
+            sys.exit(1)
