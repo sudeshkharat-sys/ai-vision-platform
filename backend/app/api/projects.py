@@ -297,6 +297,26 @@ async def get_class_images(
     return {"class_name": class_name, "image_ids": image_ids, "count": len(image_ids)}
 
 
+@router.get("/{project_id}/auto-annotated-images")
+async def get_auto_annotated_images(
+    project_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Images that still carry machine-made boxes (source other than manual /
+    folder-import), with how many, so Review can show only those."""
+    await get_owned_project(project_id, current_user, db)
+    rows = (await db.execute(
+        select(Annotation.image_id, func.count(Annotation.id))
+        .join(Image, Image.id == Annotation.image_id)
+        .where(Image.project_id == project_id,
+               Annotation.source.notin_(["manual", "folder"]))
+        .group_by(Annotation.image_id)
+    )).all()
+    counts = {r[0]: r[1] for r in rows}
+    return {"image_ids": list(counts), "counts": counts, "count": len(counts)}
+
+
 @router.get("/{project_id}/class-stats")
 async def get_class_stats(
     project_id: str,

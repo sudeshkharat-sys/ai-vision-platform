@@ -75,9 +75,23 @@ export default function ReviewPanel({ project, images, onClose, onAnnotationsUpd
 
     // If filterImageIds is provided (e.g. from AL suggestions or class-edit mode),
     // show only those images. Otherwise show the normal annotated/annotating queue.
+    // "Auto only" (default in the plain review queue): just the images that still
+    // hold machine-made boxes. The id list is a snapshot taken when the panel opens
+    // or the toggle is switched on, so images don't vanish while you verify them.
+    const plainQueue = !(activeImageIds?.size > 0) && !isClassEditMode;
+    const [autoOnly, setAutoOnly] = useState(true);
+    const [autoIds, setAutoIds] = useState(null);   // Set<string> | null while loading
+    const loadAutoIds = useCallback(() => {
+        axios.get(`${API_URL}/projects/${project.id}/auto-annotated-images`)
+            .then(res => setAutoIds(new Set((res.data.image_ids || []).map(String))))
+            .catch(() => { setAutoIds(null); setAutoOnly(false); });
+    }, [project.id]);
+    useEffect(() => { if (plainQueue && autoOnly) loadAutoIds(); }, [plainQueue, autoOnly, loadAutoIds]);
+
     const reviewImages = activeImageIds?.size > 0
         ? images.filter(img => activeImageIds.has(String(img.id)))
-        : images.filter(img => img.status === 'annotated' || img.status === 'annotating');
+        : images.filter(img => (img.status === 'annotated' || img.status === 'annotating')
+            && !(plainQueue && autoOnly && autoIds && !autoIds.has(String(img.id))));
 
     const [currentIdx, setCurrentIdx] = useState(0);
     const [annotations, setAnnotations] = useState([]);
@@ -547,13 +561,20 @@ export default function ReviewPanel({ project, images, onClose, onAnnotationsUpd
                     <div className="rp-empty-icon"><Check size={32} /></div>
                     <h3>Nothing to Review</h3>
                     <p>
-                        {isClassEditMode
-                            ? `No images use "${activeClassName}" right now — pick another class below.`
-                            : filterLabel
-                                ? 'None of these images could be loaded — they may have changed since the class list was refreshed.'
-                                : 'Run Auto-Annotate first, then come back to review the results here.'}
+                        {plainQueue && autoOnly && autoIds
+                            ? 'No auto-annotated boxes are waiting for review.'
+                            : isClassEditMode
+                                ? `No images use "${activeClassName}" right now — pick another class below.`
+                                : filterLabel
+                                    ? 'None of these images could be loaded — they may have changed since the class list was refreshed.'
+                                    : 'Run Auto-Annotate first, then come back to review the results here.'}
                     </p>
                     {classSwitcherEl}
+                    {plainQueue && autoOnly && autoIds && (
+                        <button className="rp-btn rp-btn-neutral" onClick={() => { setAutoOnly(false); setCurrentIdx(0); }}>
+                            Review all annotated images
+                        </button>
+                    )}
                     <button className="rp-btn rp-btn-neutral" onClick={onClose}>Close</button>
                 </div>
             </div>
@@ -591,6 +612,14 @@ export default function ReviewPanel({ project, images, onClose, onAnnotationsUpd
                     </div>
 
                     <div className="rp-header-right">
+                        {plainQueue && (
+                            <label className="rp-class-select" style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}
+                                title="Show only images that still have auto-annotated boxes to verify">
+                                <input type="checkbox" checked={autoOnly}
+                                    onChange={e => { setAutoOnly(e.target.checked); setCurrentIdx(0); if (!e.target.checked) setAutoIds(null); }} />
+                                Auto-annotated only{autoOnly && autoIds ? ` (${autoIds.size})` : ''}
+                            </label>
+                        )}
                         {isClassEditMode && (
                             <>
                                 {classSwitcherEl}
