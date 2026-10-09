@@ -177,3 +177,50 @@ async def create_segment_copy(
     await db.commit()
     return {"project_id": new_project.id, "name": final, "images": copied,
             "per_segment": summary["segments"], "left_out": summary["unmatched"]}
+
+
+class ImagesBody(BaseModel):
+    segments: Optional[List[dict]] = None   # default: the saved ones
+    segment: str                            # segment name, or "__unmatched__"
+    offset: int = 0
+    limit: int = 24
+
+
+@router.post("/{project_id}/images")
+async def segment_images(
+    project_id: str,
+    body: ImagesBody,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """The images a segment would take (or, with "__unmatched__", the ones no
+    segment takes), each with its boxes, so the selection can be checked by eye."""
+    project = await get_owned_project(project_id, current_user, db)
+    segments = _clean(body.segments if body.segments is not None else (project.segments or []))
+    imgs = (await db.execute(
+        select(Image).where(Image.project_id == project_id, Image.status == "annotated")
+        .order_by(Image.created_at, Image.id)
+    )).scalars().all()
+    anns = defaultdict(list)
+    if imgs:
+        for a in (await db.execute(
+                select(Annotation).where(Annotation.image_id.in_([i.id for i in imgs])))).scalars().all():
+            anns[a.image_id].append(a)
+    assignment, _ = assign_segments(
+        {k: [{"class_name": a.class_name} for a in v] for k, v in anns.items()},
+        segments, image_ids=[i.id for i in imgs])
+    if body.segment == "__unmatched__":
+        chosen = [i for i in imgs if i.id not in assignment]
+    else:
+        chosen = [i for i in imgs if assignment.get(i.id, {}).get("name") == body.segment]
+    limit = max(1, min(body.limit, 60))
+    page = chosen[max(0, body.offset): max(0, body.offset) + limit]
+    return {
+        "total": len(chosen),
+        "images": [{
+            "id": i.id, "filename": i.filename, "filepath": i.filepath,
+            "width": i.width, "height": i.height,
+            "annotations": [{"class_name": a.class_name, "bbox": a.bbox, "points": a.points,
+                             "annotation_type": a.annotation_type} for a in anns.get(i.id, [])],
+        } for i in page],
+    }

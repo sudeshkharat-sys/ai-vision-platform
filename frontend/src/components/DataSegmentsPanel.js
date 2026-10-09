@@ -84,6 +84,83 @@ function SegmentEditor({ seg, classes, onChange, onDelete }) {
     );
 }
 
+const PALETTE = ['#e6194b', '#3cb44b', '#4363d8', '#f58231', '#911eb4', '#0aa5a5', '#c8a400', '#f032e6'];
+const colorOf = (cls, all) => PALETTE[Math.max(0, all.indexOf(cls)) % PALETTE.length];
+
+/** Every image of one segment (or the left-out ones) with its boxes drawn on, to check the selection by eye. */
+function SegmentGallery({ project, segments, segment, label, classes, onClose }) {
+    const [items, setItems] = useState([]);
+    const [total, setTotal] = useState(0);
+    const [loading, setLoading] = useState(false);
+    const PAGE = 24;
+
+    const load = useCallback(async (offset) => {
+        setLoading(true);
+        try {
+            const { data } = await axios.post(`${API_URL}/segments/${project.id}/images`,
+                { segments, segment, offset, limit: PAGE });
+            setTotal(data.total);
+            setItems(prev => (offset === 0 ? data.images : [...prev, ...data.images]));
+        } catch (e) { /* leave the gallery as is */ } finally { setLoading(false); }
+    }, [project.id, segments, segment]);
+
+    useEffect(() => { load(0); }, [load]);
+
+    return (
+        <div className="hub-overlay" style={{ zIndex: 1100 }} onClick={onClose}>
+            <div className="hub-modal" style={{ maxWidth: 1000 }} onClick={e => e.stopPropagation()}>
+                <div className="hub-header">
+                    <div className="hub-header-left">
+                        <div>
+                            <h2 className="hub-title">{label}</h2>
+                            <p className="hub-subtitle">{total} images · showing {items.length}</p>
+                        </div>
+                    </div>
+                    <div className="hub-header-right"><button className="hub-icon-btn" onClick={onClose}><X size={18} /></button></div>
+                </div>
+                <div style={{ padding: 14, overflowY: 'auto', maxHeight: '72vh' }}>
+                    <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', fontSize: 11, marginBottom: 10 }}>
+                        {classes.map(c => (
+                            <span key={c} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                                <i style={{ width: 10, height: 10, background: colorOf(c, classes), display: 'inline-block' }} />{c}
+                            </span>
+                        ))}
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 10 }}>
+                        {items.map(im => (
+                            <div key={im.id} style={{ border: '1px solid #ddd', borderRadius: 6, overflow: 'hidden' }}>
+                                <div style={{ position: 'relative', lineHeight: 0 }}>
+                                    <img alt={im.filename} src={`${BASE_URL}${im.filepath}`} style={{ width: '100%' }} loading="lazy" />
+                                    <svg viewBox="0 0 1 1" preserveAspectRatio="none"
+                                        style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }}>
+                                        {im.annotations.filter(a => a.bbox && a.bbox.length === 4).map((a, k) => {
+                                            const [xc, yc, w, h] = a.bbox;
+                                            return <rect key={k} x={xc - w / 2} y={yc - h / 2} width={w} height={h} fill="none"
+                                                stroke={colorOf(a.class_name, classes)} strokeWidth="0.006" />;
+                                        })}
+                                    </svg>
+                                </div>
+                                <div style={{ fontSize: 11, padding: '4px 6px', color: '#444' }}>
+                                    {Object.entries(im.annotations.reduce((m, a) => ({ ...m, [a.class_name]: (m[a.class_name] || 0) + 1 }), {}))
+                                        .map(([c, n]) => `${c}${n > 1 ? ` ×${n}` : ''}`).join(' + ') || 'no annotations'}
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                    {items.length < total && (
+                        <div style={{ textAlign: 'center', marginTop: 12 }}>
+                            <button className="hub-btn" disabled={loading} onClick={() => load(items.length)}>
+                                {loading ? 'Loading…' : `Load more (${total - items.length} left)`}
+                            </button>
+                        </div>
+                    )}
+                    {!loading && total === 0 && <p style={{ fontSize: 12, color: '#888' }}>No images.</p>}
+                </div>
+            </div>
+        </div>
+    );
+}
+
 /**
  * Data Segments: define which annotated images belong together by what they
  * contain (e.g. door + 2 locks = "locked"), see the counts, and save. Training
@@ -96,6 +173,7 @@ export default function DataSegmentsPanel({ project, onClose }) {
     const [busy, setBusy] = useState(false);
     const [msg, setMsg] = useState(null);
     const [copyName, setCopyName] = useState('');
+    const [gallery, setGallery] = useState(null);   // { segment, label }
 
     useEffect(() => {
         axios.get(`${API_URL}/segments/${project.id}`).then(r => {
@@ -200,7 +278,10 @@ export default function DataSegmentsPanel({ project, onClose }) {
                             )}
                             {preview.segments.map(s => (
                                 <div key={s.name} style={{ marginBottom: 10 }}>
-                                    <div style={{ fontSize: 12, fontWeight: 600 }}>{s.name} → {s.label}: {s.images} images</div>
+                                    <div style={{ fontSize: 12, fontWeight: 600 }}>{s.name} → {s.label}: {s.images} images{' '}
+                                        {s.images > 0 && <button className="hub-btn" style={{ padding: '1px 8px', fontSize: 11 }}
+                                            onClick={() => setGallery({ segment: s.name, label: `${s.name} → ${s.label}` })}>View images</button>}
+                                    </div>
                                     <div style={{ display: 'flex', gap: 6, marginTop: 4, flexWrap: 'wrap' }}>
                                         {(s.samples || []).map(im => (
                                             <img key={im.id} alt={im.filename} title={im.filename}
@@ -212,13 +293,17 @@ export default function DataSegmentsPanel({ project, onClose }) {
                             ))}
                             {preview.unmatched > 0 && (
                                 <div style={{ fontSize: 12, color: '#666' }}>
-                                    Left out: {Object.entries(preview.unmatched_combos).map(([k, v]) => `${k} (${v})`).join(' · ')}
+                                    Left out: {Object.entries(preview.unmatched_combos).map(([k, v]) => `${k} (${v})`).join(' · ')}{' '}
+                                    <button className="hub-btn" style={{ padding: '1px 8px', fontSize: 11 }}
+                                        onClick={() => setGallery({ segment: '__unmatched__', label: 'Left out (match no segment)' })}>View images</button>
                                 </div>
                             )}
                         </div>
                     )}
                     {msg && <p style={{ fontSize: 12, color: msg.err ? '#c0392b' : '#2e7d32' }}>{msg.text}</p>}
                 </div>
+                {gallery && <SegmentGallery project={project} segments={segments} classes={classes}
+                    segment={gallery.segment} label={gallery.label} onClose={() => setGallery(null)} />}
                 <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, padding: '10px 18px', borderTop: '1px solid #eee' }}>
                     <input style={{ ...text, flex: 1, minWidth: 0 }} placeholder="Name for a new project copy (optional)"
                         value={copyName} onChange={e => setCopyName(e.target.value)} />
