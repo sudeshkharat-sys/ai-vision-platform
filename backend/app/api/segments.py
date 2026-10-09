@@ -16,6 +16,7 @@ from ..database import get_db
 from ..models.annotation import Annotation
 from ..models.image import Image
 from ..models.project import Project
+from ..services.image_files import resolve_image_file
 from ..models.user import User
 from ..services.data_segments import assign_segments, normalize_segments
 
@@ -154,14 +155,16 @@ async def create_segment_copy(
     dest_dir = settings.upload_dir / new_project.id
     dest_dir.mkdir(parents=True, exist_ok=True)
 
-    copied = 0
+    copied, missing = 0, []
     for img in imgs:
         if img.id not in assignment:
             continue
-        src_file = settings.upload_dir / project_id / Path(img.filepath).name
+        src_file = resolve_image_file(project_id, img.filepath)
+        if src_file is None:
+            missing.append(img.filename)      # never create a row without its picture
+            continue
         new_file = f"{uuid.uuid4()}{src_file.suffix}"
-        if src_file.exists():
-            shutil.copy2(src_file, dest_dir / new_file)
+        shutil.copy2(src_file, dest_dir / new_file)
         new_img = Image(project_id=new_project.id, filename=img.filename,
                         filepath=f"/uploads/{new_project.id}/{new_file}",
                         width=img.width, height=img.height, status=img.status)
@@ -176,7 +179,8 @@ async def create_segment_copy(
         copied += 1
     await db.commit()
     return {"project_id": new_project.id, "name": final, "images": copied,
-            "per_segment": summary["segments"], "left_out": summary["unmatched"]}
+            "per_segment": summary["segments"], "left_out": summary["unmatched"],
+            "missing_files": len(missing), "missing_examples": missing[:5]}
 
 
 class ImagesBody(BaseModel):

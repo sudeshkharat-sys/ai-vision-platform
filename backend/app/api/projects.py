@@ -13,6 +13,7 @@ from ..api.deps import get_owned_project
 from typing import List, Dict
 from pathlib import Path
 import shutil
+from ..services.image_files import resolve_image_file
 import uuid
 
 router = APIRouter(prefix="/projects", tags=["projects"])
@@ -158,11 +159,12 @@ async def duplicate_project(
             # filepath is stored as "/uploads/{project_id}/{filename}", not
             # an absolute path -- resolve back to the real file on disk via
             # the upload_dir the same way upload_images() writes it.
-            src_file = settings.upload_dir / project_id / Path(img.filepath).name
+            src_file = resolve_image_file(project_id, img.filepath)
+            if src_file is None:
+                continue          # file is gone: don't create a row with no picture
             new_filename = f"{uuid.uuid4()}{src_file.suffix}"
             dest_file = dest_dir / new_filename
-            if src_file.exists():
-                shutil.copy2(src_file, dest_file)
+            shutil.copy2(src_file, dest_file)
 
             new_image = Image(
                 project_id=new_project.id,

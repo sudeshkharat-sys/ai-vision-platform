@@ -205,7 +205,11 @@ export default function DataSegmentsPanel({ project, onClose }) {
     const createCopy = () => run(async () => {
         const { data } = await axios.post(`${API_URL}/segments/${project.id}/create-copy`,
             { segments, name: copyName.trim() || null });
-        setMsg({ text: `Created project "${data.name}" with ${data.images} images (${data.left_out} images left out). Find it in your project list.` });
+        setMsg({
+            err: data.missing_files > 0,
+            text: `Created project "${data.name}" with ${data.images} images (${data.left_out} images left out). Find it in your project list.`
+                + (data.missing_files ? ` ${data.missing_files} matching image file(s) were not found on disk and were skipped (e.g. ${data.missing_examples.join(', ')}).` : ''),
+        });
     });
 
     const addPreset = (kind) => {
