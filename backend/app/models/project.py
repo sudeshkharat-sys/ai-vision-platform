@@ -15,6 +15,9 @@ class Project(Base):
     # OCR + segmentation). Legacy "ocr" rows are migrated to "combined" in
     # database.init_db(); new projects can no longer be created as "ocr".
     project_type: Mapped[str] = mapped_column(String(20), default="combined")
+    # Data Segments: named rules over the annotations an image carries, used to
+    # pick training images and label them (see services/data_segments.py).
+    segments: Mapped[list | None] = mapped_column(JSON, default=list, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     user_id: Mapped[str | None] = mapped_column(
         String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True

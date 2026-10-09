@@ -116,6 +116,10 @@ async def init_db() -> None:
         await conn.execute(text(
             "ALTER TABLE annotations ADD COLUMN IF NOT EXISTS points JSONB"
         ))
+        # Migration: saved Data Segments rules per project
+        await conn.execute(text(
+            "ALTER TABLE projects ADD COLUMN IF NOT EXISTS segments JSONB"
+        ))
         # Migration: per-box state label for the crop+classify pipeline
         await conn.execute(text(
             "ALTER TABLE annotations ADD COLUMN IF NOT EXISTS state VARCHAR(100)"

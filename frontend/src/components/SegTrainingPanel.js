@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import axios from 'axios';
 import ClassPicker from './ClassPicker';
+import SegmentPicker, { segmentPayload } from './SegmentPicker';
 import AugmentationSettings, { useAug, augPayload } from './AugmentationSettings';
 import {
     LineChart, Line, XAxis, YAxis, CartesianGrid,
@@ -198,6 +199,7 @@ const SegTrainingPanel = ({ project, onClose }) => {
     const [statsLoading, setStatsLoading] = useState(true);
     const [segSeedStatus, setSegSeedStatus] = useState(null);
     const [trainClasses, setTrainClasses] = useState([]);   // [] = all classes
+    const [segmentNames, setSegmentNames] = useState([]);   // [] = no data-segment filter
     const [aug, setAug] = useAug({ copyPaste: 0.05 });
     const [segMainStatus, setSegMainStatus] = useState(null);
     const [segLegacyStatus, setSegLegacyStatus] = useState(null);
@@ -508,6 +510,7 @@ const SegTrainingPanel = ({ project, onClose }) => {
             const res = await axios.post(`${API_URL}/pipeline/train-seg/${next.projectId}`, {
                 model_name: next.modelName, model_type: next.modelType, epochs: next.epochs,
                 imgsz: next.imgsz, preprocess: next.preprocess, batch: next.batch,
+                ...segmentPayload(next.segmentNames),
                 ...augPayload(next.aug),
             });
             const taskId = res.data.task_id;
@@ -573,7 +576,7 @@ const SegTrainingPanel = ({ project, onClose }) => {
             queueRef.current.push({
                 jobId: placeholder.id, projectId: project.id, modelName: selectedModel, modelType,
                 epochs, preprocess, imgsz, batch,
-                aug: { ...aug }, trainClasses,
+                aug: { ...aug }, trainClasses, segmentNames,
             });
             setJobs(prev => [...prev, placeholder]);
             setActiveJobId(placeholder.id);
@@ -584,6 +587,7 @@ const SegTrainingPanel = ({ project, onClose }) => {
         try {
             const res = await axios.post(`${API_URL}/pipeline/train-seg/${project.id}`, {
                 model_name: selectedModel, model_type: modelType, epochs, imgsz, preprocess, batch,
+                ...segmentPayload(segmentNames),
                 ...augPayload(aug),
             });
             const taskId = res.data.task_id;
@@ -776,6 +780,7 @@ const SegTrainingPanel = ({ project, onClose }) => {
 
                             <section className="mtp-section">
                                 <p className="mtp-section-title">Training Config</p>
+                                <SegmentPicker projectId={project.id} selected={segmentNames} onChange={setSegmentNames} />
                                 <ClassPicker classCounts={stats?.class_breakdown} selected={trainClasses} onChange={setTrainClasses} />
 
                                 <div className="mtp-tabs" style={{ marginBottom: 12 }}>

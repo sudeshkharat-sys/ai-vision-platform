@@ -34,6 +34,8 @@ from .training import (
 from ..config import settings
 from ..connectors.statedb_connector import StateDBConnector
 from ..services.class_select import derive_dataset_labels
+from ..services.data_segments import filter_by_segments, label_samples
+from ..services.segments_store import load_segments
 from ..services.cls_model import CLS_FILES, cls_dir, crop_region, resolve_detector
 
 
@@ -478,6 +480,7 @@ def train_crop_cls_model(
     aug_translate: float = 0.1,
     aug_scale: float = 0.4,
     rotate_copies: int = 4,
+    segment_names: list | None = None,     # Data Segments: train only on these, labelled by segment
     **_ignored,                            # mosaic / mixup / copy_paste: no meaning for classification
 ):
     if mode not in ("crop", "whole"):
@@ -497,7 +500,32 @@ def train_crop_cls_model(
     derive_summary = None
     det_name = det_path = None
     detector_note = None
-    if mode == "crop":
+    seg_labels = None
+    if segment_names is not None:
+        # Data Segments: only images matching a chosen segment are used, and the
+        # segment's label (locked / unlocked / partial ...) is the class.
+        try:
+            segs = load_segments(project_id, segment_names)
+            img_rows, plain, seg_labels, seg_summary = filter_by_segments(img_rows, plain, segs)
+        except ValueError as e:
+            return {"error": str(e)}
+        tl.log("Data segments: " + ", ".join(
+            f"{s['name']} -> '{s['label']}': {s['images']}" for s in seg_summary["segments"])
+            + f"  (unmatched images skipped: {seg_summary['unmatched']})")
+        if not img_rows:
+            return {"error": "No annotated images match the selected data segments"}
+    if seg_labels is not None:
+        if mode == "crop" and not crop_class:
+            return {"error": "Choose the detector class to crop (crop_class)"}
+        if mode == "crop":
+            det_name, det_path = resolve_detector(project_id, detector)
+        anns_by_image = label_samples(plain, seg_labels, crop_class if mode == "crop" else None)
+        if mode == "crop":
+            per = Counter(a["state"] for v in anns_by_image.values() for a in v)
+            derive_summary = {"per_class": dict(per), "conflict": 0, "empty": 0,
+                              "images": len(anns_by_image)}
+            tl.log(f"Crops per class: {dict(per)}")
+    elif mode == "crop":
         if not crop_class:
             return {"error": "Choose the detector class to crop (crop_class)"}
         # The detector is NOT needed to train: crops are cut from the boxes you
@@ -544,6 +572,8 @@ def train_crop_cls_model(
     result: dict = {"status": "success", "mode": mode, "classes": states}
     if derive_summary:
         result["label_summary"] = derive_summary
+    if seg_labels is not None:
+        result["segments"] = segment_names
     if det_name:
         result["detector"] = det_name
     if detector_note:

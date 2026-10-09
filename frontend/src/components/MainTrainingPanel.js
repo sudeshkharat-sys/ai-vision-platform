@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import axios from 'axios';
 import ClassPicker from './ClassPicker';
+import SegmentPicker, { segmentPayload } from './SegmentPicker';
 import AugmentationSettings, { useAug, augPayload } from './AugmentationSettings';
 import {
     LineChart, Line, XAxis, YAxis, CartesianGrid,
@@ -187,6 +188,7 @@ const MainTrainingPanel = ({ project, onClose }) => {
     const [statsLoading, setStatsLoading] = useState(true);
     const [modelStatus, setModelStatus]   = useState(null);
     const [trainClasses, setTrainClasses] = useState([]);   // [] = all classes
+    const [segmentNames, setSegmentNames] = useState([]);   // [] = no data-segment filter
     const [aug, setAug] = useAug({ copyPaste: 0.1 });
     const [jobs, setJobs]                 = useState([]);
     const [activeJobId, setActiveJobId]   = useState(null);
@@ -510,6 +512,7 @@ const MainTrainingPanel = ({ project, onClose }) => {
                 model_name: next.modelName, epochs: next.epochs,
                 use_seed_weights: next.useSeedWeights, imgsz: next.imgsz,
                 preprocess: next.preprocess, batch: next.batch,
+                ...segmentPayload(next.segmentNames),
                 ...augPayload(next.aug),
                 ...(next.customWeights ? { custom_weights: next.customWeights } : {}),
             });
@@ -582,7 +585,7 @@ const MainTrainingPanel = ({ project, onClose }) => {
                 jobId: placeholder.id, projectId: project.id,
                 modelName: activeModelName, epochs, useSeedWeights, imgsz, preprocess, batch,
                 customWeights: modelSource === 'upload' ? selectedWeight : null,
-                aug: { ...aug }, trainClasses,
+                aug: { ...aug }, trainClasses, segmentNames,
             });
             setJobs(prev => [...prev, placeholder]);
             setActiveJobId(placeholder.id);
@@ -593,6 +596,7 @@ const MainTrainingPanel = ({ project, onClose }) => {
         try {
             const res = await axios.post(`${API_URL}/pipeline/train-main/${project.id}`, {
                 model_name: selectedModel, epochs, use_seed_weights: useSeedWeights, imgsz, preprocess, batch,
+                ...segmentPayload(segmentNames),
                 ...augPayload(aug),
                 ...(modelSource === 'upload' && selectedWeight ? { custom_weights: selectedWeight } : {}),
             });
@@ -730,6 +734,7 @@ const MainTrainingPanel = ({ project, onClose }) => {
 
                             {/* Training config */}
                             <section className="mtp-section">
+                                <SegmentPicker projectId={project.id} selected={segmentNames} onChange={setSegmentNames} />
                                 <ClassPicker classCounts={stats?.class_breakdown} selected={trainClasses} onChange={setTrainClasses} />
                                 <p className="mtp-section-title">Training Config</p>
 

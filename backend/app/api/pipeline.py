@@ -134,6 +134,8 @@ class TrainSeedRequest(BaseModel):
     # Master switch (False = no augmentation at all) and full-circle rotation.
     augment: bool = True
     aug_rotate_360: bool = False
+    # Data Segments to train on (saved names); None = every annotated image.
+    segment_names: Optional[List[str]] = None
     # Box classes that are the plate / text region (class-agnostic detector);
     # every other class becomes the generic "char". None = built-in names.
     region_classes: Optional[List[str]] = None
@@ -156,6 +158,7 @@ async def start_seed_training(
         train_classes=req.train_classes,
         augment=req.augment, aug_rotate_360=req.aug_rotate_360,
         region_classes=req.region_classes,
+        segment_names=req.segment_names,
     )
     return {"task_id": task.id, "status": "queued"}
 
@@ -183,6 +186,8 @@ class TrainMainRequest(BaseModel):
     # Master switch (False = no augmentation at all) and full-circle rotation.
     augment: bool = True
     aug_rotate_360: bool = False
+    # Data Segments to train on (saved names); None = every annotated image.
+    segment_names: Optional[List[str]] = None
 
 
 @router.post("/train-main/{project_id}")
@@ -202,6 +207,7 @@ async def start_main_training(
         req.aug_scale, req.aug_mixup, req.aug_copy_paste,
         train_classes=req.train_classes,
         augment=req.augment, aug_rotate_360=req.aug_rotate_360,
+        segment_names=req.segment_names,
     )
     return {"task_id": task.id, "status": "queued"}
 
@@ -229,6 +235,8 @@ class TrainSegRequest(BaseModel):
     # Master switch (False = no augmentation at all) and full-circle rotation.
     augment: bool = True
     aug_rotate_360: bool = False
+    # Data Segments to train on (saved names); None = every annotated image.
+    segment_names: Optional[List[str]] = None
 
 
 @router.post("/train-seg/{project_id}")
@@ -249,6 +257,7 @@ async def start_seg_training(
         req.aug_scale, req.aug_mixup, req.aug_copy_paste,
         train_classes=req.train_classes,
         augment=req.augment, aug_rotate_360=req.aug_rotate_360,
+        segment_names=req.segment_names,
     )
     return {"task_id": task.id, "status": "queued"}
 

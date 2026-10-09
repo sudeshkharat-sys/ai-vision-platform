@@ -4,6 +4,7 @@ import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, Responsi
 import { Layers, X, RefreshCw, Eye, Play, Upload, FolderUp, Inbox, Square } from 'lucide-react';
 import { CLS_MODEL_GROUPS, DEFAULT_CLS_MODEL } from '../constants/yoloModels';
 import AugmentationSettings, { useAug, augPayload } from './AugmentationSettings';
+import SegmentPicker, { segmentPayload } from './SegmentPicker';
 // Reuse MainTrainingPanel's styling (mtp-* classes) — same visual language.
 import './MainTrainingPanel.css';
 
@@ -161,6 +162,7 @@ export default function ClassifierTrainingPanel({ project, onClose }) {
     const [batch, setBatch] = useState(-1);     // -1 = Auto (fits the GPU)
     const [preprocess, setPreprocess] = useState(true);
     const [aug, setAug] = useAug();
+    const [segmentNames, setSegmentNames] = useState([]);   // [] = label by nested boxes (classic)
 
     // Preview / job state
     const [preview, setPreview] = useState(null);
@@ -299,7 +301,7 @@ export default function ClassifierTrainingPanel({ project, onClose }) {
 
     const canRun = source === 'folders'
         ? folderClasses.length >= 2
-        : !!(cropClass && labelClasses.length > 0);
+        : !!(cropClass && (segmentNames.length > 0 || labelClasses.length > 0));
 
     // ── Folder import ──
     const pickFolder = (fileList) => {
@@ -378,7 +380,7 @@ export default function ClassifierTrainingPanel({ project, onClose }) {
             };
             const body = source === 'folders'
                 ? { ...common, mode: 'whole', region_classes: folderClasses }
-                : { ...common, mode: 'crop', ...(detector ? { detector } : {}), ...rules() };
+                : { ...common, mode: 'crop', ...(detector ? { detector } : {}), ...rules(), ...segmentPayload(segmentNames) };
             const { data } = await axios.post(`${API_URL}/crop-cls/train/${project.id}`, body);
             const summary = source === 'folders'
                 ? `${selectedModel} · image folders (${folderClasses.length} classes)`
@@ -520,7 +522,14 @@ export default function ClassifierTrainingPanel({ project, onClose }) {
                                         </select>
                                     </div>
 
-                                    <div style={{ margin: '12px 0 4px', fontWeight: 600 }}>
+                                    <SegmentPicker projectId={project.id} selected={segmentNames} onChange={setSegmentNames} />
+                                    {segmentNames.length > 0 && (
+                                        <p style={{ fontSize: 12, opacity: 0.8, margin: '0 0 8px' }}>
+                                            Data segments on: only matching images are used, and each <b>{cropClass}</b> crop is labelled by its image's segment label. The class list below is ignored (the Preview button still shows the classic labelling).
+                                        </p>
+                                    )}
+
+                                    <div style={{ margin: '12px 0 4px', fontWeight: 600, opacity: segmentNames.length ? 0.4 : 1 }}>
                                         Classifier classes (all remaining classes)
                                     </div>
                                     {classNames.filter(c => c !== cropClass).map(c => (

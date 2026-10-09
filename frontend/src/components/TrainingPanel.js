@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import axios from 'axios';
 import ClassPicker from './ClassPicker';
+import SegmentPicker, { segmentPayload } from './SegmentPicker';
 import RegionClassPicker, { useRegionClasses, regionPayload } from './RegionClassPicker';
 import AugmentationSettings, { useAug, augPayload } from './AugmentationSettings';
 import {
@@ -199,6 +200,7 @@ const TrainingPanel = ({ project, onClose }) => {
     const [aug, setAug] = useAug({ copyPaste: 0.05 });
     const [classAgnostic, setClassAgnostic] = useState(false);
     const [trainClasses, setTrainClasses] = useState([]);   // [] = all classes
+    const [segmentNames, setSegmentNames] = useState([]);   // [] = no data-segment filter
     const [regionClasses, setRegionClasses] = useRegionClasses(stats?.class_breakdown);
     const [clahePreview, setClahePreview] = useState(null);   // { original, enhanced, filename }
     const [previewLoading, setPreviewLoading] = useState(false);
@@ -506,6 +508,7 @@ const TrainingPanel = ({ project, onClose }) => {
                 imgsz: next.imgsz, batch: next.batch,
                 class_agnostic: !!next.classAgnostic,
                 train_classes: next.trainClasses?.length ? next.trainClasses : null,
+                ...segmentPayload(next.segmentNames),
                 ...(next.classAgnostic ? { region_classes: regionPayload(next.regionClasses) } : {}),
                 ...augPayload(next.aug),
                 ...(next.customWeights ? { custom_weights: next.customWeights } : {}),
@@ -572,7 +575,7 @@ const TrainingPanel = ({ project, onClose }) => {
                 logs: ['📋  Job queued — waiting for a free slot…'],
                 epochMeta: null, result: null, error: null, startedAt: new Date(),
             };
-            queueRef.current.push({ jobId: placeholder.id, projectId: project.id, modelName: activeModelName, epochs, preprocess, imgsz, batch, customWeights: modelSource === 'upload' ? selectedWeight : null, aug: { ...aug }, classAgnostic, trainClasses, regionClasses });
+            queueRef.current.push({ jobId: placeholder.id, projectId: project.id, modelName: activeModelName, epochs, preprocess, imgsz, batch, customWeights: modelSource === 'upload' ? selectedWeight : null, aug: { ...aug }, classAgnostic, trainClasses, regionClasses, segmentNames });
             setJobs(prev => [...prev, placeholder]);
             setActiveJobId(placeholder.id);
             setLaunching(false);
@@ -584,6 +587,7 @@ const TrainingPanel = ({ project, onClose }) => {
                 model_name: selectedModel, epochs, preprocess, imgsz, batch,
                 class_agnostic: classAgnostic,
                 train_classes: trainClasses.length ? trainClasses : null,
+                ...segmentPayload(segmentNames),
                 ...(classAgnostic ? { region_classes: regionPayload(regionClasses) } : {}),
                 ...augPayload(aug),
                 ...(modelSource === 'upload' && selectedWeight ? { custom_weights: selectedWeight } : {}),
@@ -952,6 +956,7 @@ const TrainingPanel = ({ project, onClose }) => {
                                 )}
 
                                 {/* ── Augmentation Settings ── */}
+                                <SegmentPicker projectId={project.id} selected={segmentNames} onChange={setSegmentNames} />
                                 <ClassPicker classCounts={stats?.class_breakdown} selected={trainClasses} onChange={setTrainClasses} />
 
                                 {/* ── Detector mode ── */}

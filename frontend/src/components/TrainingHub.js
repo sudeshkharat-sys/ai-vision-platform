@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
-import { Rocket, Target, Scissors, Type, Layers, X, RefreshCw } from 'lucide-react';
+import { Rocket, Target, Scissors, Type, Layers, Filter, X, RefreshCw } from 'lucide-react';
 import { API_URL } from '../config';
 import './TrainingHub.css';
 
@@ -45,6 +45,12 @@ export default function TrainingHub({ project, onClose, onOpen }) {
     const go = (kind) => { onClose(); onOpen(kind); };
 
     const cards = [
+        {
+            key: 'segments', icon: <Filter size={20} />, title: 'Data Segments',
+            desc: 'Step 0: pick which annotated images to train on by what they contain (e.g. door + 2 locks = locked), and label them.',
+            chips: [],
+            actions: [{ label: 'Define Segments', onClick: () => go('segments') }],
+        },
         {
             key: 'detect', icon: <Target size={20} />, title: 'Object Detection',
             desc: 'Find objects with boxes. Train a quick seed model first, then the full main model.',

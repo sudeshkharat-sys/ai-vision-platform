@@ -135,6 +135,7 @@ async def duplicate_project(
         description=source.description,
         classes=list(source.classes or []),
         project_type=source.project_type,
+        segments=list(source.segments or []),
         user_id=current_user.id,
     )
     db.add(new_project)

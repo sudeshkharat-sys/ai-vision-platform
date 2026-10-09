@@ -67,6 +67,9 @@ class TrainCropClsRequest(BaseModel):
     aug_mixup: float = 0.0
     aug_copy_paste: float = 0.0
     rotate_copies: int = 4
+    # Data Segments (saved names) to train on; the segment label becomes the
+    # class. None = classic label logic over every annotated image.
+    segment_names: Optional[List[str]] = None
 
 
 class PreviewRequest(BaseModel):

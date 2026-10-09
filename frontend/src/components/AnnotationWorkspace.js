@@ -15,6 +15,7 @@ import OcrActiveLearningPanel from './OcrActiveLearningPanel';
 import OcrTrainingPanel from './OcrTrainingPanel';
 import SegTrainingPanel from './SegTrainingPanel';
 import ClassifierTrainingPanel from './ClassifierTrainingPanel';
+import DataSegmentsPanel from './DataSegmentsPanel';
 import TrainingHub from './TrainingHub';
 import './AnnotationWorkspace.css';
 import { Sparkles, AlertTriangle, X, Upload, Image as ImageIcon, Check, ArrowLeft, ArrowRight, Brain, Rocket, Eye, Target, Tag, Package, Film, Undo2, Redo2, ZoomIn, ZoomOut, Maximize2, Trash2, ImageOff, RotateCw, RotateCcw, Grid3x3, Wand2, Square, PenTool, RefreshCw, Scissors, Copy, ClipboardPaste, Info } from 'lucide-react';
@@ -331,6 +332,7 @@ const AnnotationWorkspace = ({ project, onProjectUpdated }) => {
     const [showSegPanel, setShowSegPanel] = useState(false);
     const [showClassifierPanel, setShowClassifierPanel] = useState(false);
     const [showTrainingHub, setShowTrainingHub] = useState(false);
+    const [showSegmentsPanel, setShowSegmentsPanel] = useState(false);
     const [alMenuOpen, setAlMenuOpen] = useState(false);
     const isCombined = project.project_type === 'combined' || project.project_type === 'ocr';
     const [ocrAutoLabeling, setOcrAutoLabeling] = useState(false);
@@ -2211,8 +2213,12 @@ Do you want to proceed?`;
                         else if (kind === 'seg') setShowSegPanel(true);
                         else if (kind === 'ocr') setShowOcrPanel(true);
                         else if (kind === 'classifier') setShowClassifierPanel(true);
+                        else if (kind === 'segments') setShowSegmentsPanel(true);
                     }}
                 />
+            )}
+            {showSegmentsPanel && (
+                <DataSegmentsPanel project={project} onClose={() => setShowSegmentsPanel(false)} />
             )}
             {showClassifierPanel && (
                 <ClassifierTrainingPanel

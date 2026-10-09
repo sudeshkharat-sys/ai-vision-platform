@@ -9,6 +9,8 @@ from pathlib import Path
 from ..config import settings
 from ..connectors.statedb_connector import StateDBConnector
 from ..services.class_select import select_train_classes
+from ..services.data_segments import filter_by_segments
+from ..services.segments_store import load_segments
 from collections import defaultdict
 import yaml
 import json
@@ -750,6 +752,7 @@ def train_seed_model(
     augment: bool = True,
     aug_rotate_360: bool = False,
     region_classes: list = None,
+    segment_names: list = None,
 ):
     """
     Quick seed-training on manually annotated images.
@@ -792,6 +795,16 @@ def train_seed_model(
         return {"error": "No annotated images found"}
 
     anns_by_image = _group_annotations(ann_rows)
+    if segment_names is not None:
+        # Data Segments: keep only images whose annotation mix matches a chosen
+        # segment (judged on ALL classes, before train_classes narrows them).
+        try:
+            img_rows, anns_by_image, _labels, _seg = filter_by_segments(
+                img_rows, anns_by_image, load_segments(project_id, segment_names))
+        except ValueError as e:
+            return {"error": str(e)}
+        if not img_rows:
+            return {"error": "No annotated images match the selected data segments"}
     try:
         classes, anns_by_image, img_rows = select_train_classes(
             classes, anns_by_image, img_rows, train_classes)
@@ -968,6 +981,7 @@ def train_main_model(
     train_classes: list = None,
     augment: bool = True,
     aug_rotate_360: bool = False,
+    segment_names: list = None,
 ):
     """
     Full/main training on ALL annotated images (manual + auto-annotated).
@@ -1013,6 +1027,16 @@ def train_main_model(
         pretrained = model_name
 
     anns_by_image = _group_annotations(ann_rows)
+    if segment_names is not None:
+        # Data Segments: keep only images whose annotation mix matches a chosen
+        # segment (judged on ALL classes, before train_classes narrows them).
+        try:
+            img_rows, anns_by_image, _labels, _seg = filter_by_segments(
+                img_rows, anns_by_image, load_segments(project_id, segment_names))
+        except ValueError as e:
+            return {"error": str(e)}
+        if not img_rows:
+            return {"error": "No annotated images match the selected data segments"}
     try:
         classes, anns_by_image, img_rows = select_train_classes(
             classes, anns_by_image, img_rows, train_classes)
@@ -1156,6 +1180,7 @@ def train_seg_model(
     train_classes: list = None,
     augment: bool = True,
     aug_rotate_360: bool = False,
+    segment_names: list = None,
 ):
     """
     Instance-segmentation training on annotations drawn with the 'segment'
@@ -1196,6 +1221,16 @@ def train_seg_model(
         return {"error": "No annotated images found"}
 
     anns_by_image = _group_annotations(ann_rows)
+    if segment_names is not None:
+        # Data Segments: keep only images whose annotation mix matches a chosen
+        # segment (judged on ALL classes, before train_classes narrows them).
+        try:
+            img_rows, anns_by_image, _labels, _seg = filter_by_segments(
+                img_rows, anns_by_image, load_segments(project_id, segment_names))
+        except ValueError as e:
+            return {"error": str(e)}
+        if not img_rows:
+            return {"error": "No annotated images match the selected data segments"}
     try:
         classes, anns_by_image, img_rows = select_train_classes(
             classes, anns_by_image, img_rows, train_classes)
