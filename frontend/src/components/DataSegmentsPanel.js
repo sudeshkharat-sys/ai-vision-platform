@@ -95,6 +95,7 @@ export default function DataSegmentsPanel({ project, onClose }) {
     const [preview, setPreview] = useState(null);
     const [busy, setBusy] = useState(false);
     const [msg, setMsg] = useState(null);
+    const [copyName, setCopyName] = useState('');
 
     useEffect(() => {
         axios.get(`${API_URL}/segments/${project.id}`).then(r => {
@@ -123,7 +124,21 @@ export default function DataSegmentsPanel({ project, onClose }) {
         setPreview(p.data);
     });
 
+    const createCopy = () => run(async () => {
+        const { data } = await axios.post(`${API_URL}/segments/${project.id}/create-copy`,
+            { segments, name: copyName.trim() || null });
+        setMsg({ text: `Created project "${data.name}" with ${data.images} images (${data.left_out} images left out). Find it in your project list.` });
+    });
+
     const addPreset = (kind) => {
+        if (kind === 'reglocks') {
+            const pick = (re, d) => classes.find(c => re.test(c)) || d;
+            const reg = pick(/max/i, 'max_reg'), l = pick(/lhs/i, 'lhs_lock'), r = pick(/rhs/i, 'rhs_lock');
+            setSegments(s => [...s, { ...blank(), name: 'Region + both locks', label: 'region_locks',
+                counts: { [reg]: { min: 1, max: 1 }, [l]: { min: 1, max: 1 }, [r]: { min: 1, max: 1 } },
+                total: { min: 3, max: 3 } }]);
+            return;
+        }
         const lock = classes.find(c => /^lock/i.test(c)) || 'lock';
         const unlock = classes.find(c => /^unlock/i.test(c)) || 'unlock';
         const door = classes.find(c => /door/i.test(c)) || 'door';
@@ -165,6 +180,7 @@ export default function DataSegmentsPanel({ project, onClose }) {
                     ))}
                     <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 14 }}>
                         <button className="hub-btn" onClick={() => setSegments(s => [...s, blank()])}><Plus size={13} /> New segment</button>
+                        <button className="hub-btn" onClick={() => addPreset('reglocks')}>+ 1 region + LHS + RHS lock</button>
                         <button className="hub-btn" onClick={() => addPreset('locked')}>+ Locked</button>
                         <button className="hub-btn" onClick={() => addPreset('unlocked')}>+ Unlocked</button>
                         <button className="hub-btn" onClick={() => addPreset('partial')}>+ Partial</button>
@@ -204,6 +220,10 @@ export default function DataSegmentsPanel({ project, onClose }) {
                     {msg && <p style={{ fontSize: 12, color: msg.err ? '#c0392b' : '#2e7d32' }}>{msg.text}</p>}
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, padding: '10px 18px', borderTop: '1px solid #eee' }}>
+                    <input style={{ ...text, flex: 1, minWidth: 0 }} placeholder="Name for a new project copy (optional)"
+                        value={copyName} onChange={e => setCopyName(e.target.value)} />
+                    <button className="hub-btn" disabled={busy || !segments.length} onClick={createCopy}
+                        title="New project containing only the matching images">Create project copy</button>
                     <button className="hub-btn" disabled={busy} onClick={doPreview}><Eye size={13} /> Preview counts</button>
                     <button className="hub-btn" disabled={busy} onClick={save}><Save size={13} /> Save</button>
                 </div>

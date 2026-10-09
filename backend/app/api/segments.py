@@ -1,4 +1,7 @@
+import shutil
+import uuid
 from collections import defaultdict
+from pathlib import Path
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -8,9 +11,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..api.auth import get_current_user
 from ..api.deps import get_owned_project
+from ..config import settings
 from ..database import get_db
 from ..models.annotation import Annotation
 from ..models.image import Image
+from ..models.project import Project
 from ..models.user import User
 from ..services.data_segments import assign_segments, normalize_segments
 
@@ -93,3 +98,82 @@ async def preview_segments(
         s["samples"] = samples.get(s["name"], [])
     summary["annotated_images"] = len(ids)
     return summary
+
+
+class CopyBody(BaseModel):
+    segments: Optional[List[dict]] = None      # default: the saved ones
+    segment_names: Optional[List[str]] = None  # only these (default: all given)
+    name: Optional[str] = None
+
+
+@router.post("/{project_id}/create-copy")
+async def create_segment_copy(
+    project_id: str,
+    body: CopyBody,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Make a NEW project holding only the images that match the chosen
+    segments (files copied, every annotation on those images kept, image
+    status kept). The source project is not touched. Models and jobs are not
+    copied; the copy starts untrained like any new project."""
+    source = await get_owned_project(project_id, current_user, db)
+    segments = _clean(body.segments if body.segments is not None else (source.segments or []))
+    if body.segment_names is not None:
+        segments = [s for s in segments if s["name"] in set(body.segment_names)]
+    if not segments:
+        raise HTTPException(status_code=422, detail="Pick at least one segment")
+
+    imgs = (await db.execute(
+        select(Image).where(Image.project_id == project_id, Image.status == "annotated")
+    )).scalars().all()
+    anns = defaultdict(list)
+    if imgs:
+        for a in (await db.execute(
+                select(Annotation).where(Annotation.image_id.in_([i.id for i in imgs])))).scalars().all():
+            anns[a.image_id].append(a)
+    assignment, summary = assign_segments(
+        {k: [{"class_name": a.class_name} for a in v] for k, v in anns.items()},
+        segments, image_ids=[i.id for i in imgs])
+    if not assignment:
+        raise HTTPException(status_code=422, detail="No annotated images match these segments")
+
+    name = (body.name or "").strip() or f"{source.name} ({', '.join(s['name'] for s in segments)})"[:250]
+    clash = (await db.execute(
+        select(Project.name).where(Project.user_id == current_user.id, Project.name.like(f"{name}%"))
+    )).scalars().all()
+    final, n = name, 2
+    while final in set(clash):
+        final, n = f"{name} {n}", n + 1
+
+    new_project = Project(name=final, description=source.description,
+                          classes=list(source.classes or []), project_type=source.project_type,
+                          segments=segments, user_id=current_user.id)
+    db.add(new_project)
+    await db.flush()
+    dest_dir = settings.upload_dir / new_project.id
+    dest_dir.mkdir(parents=True, exist_ok=True)
+
+    copied = 0
+    for img in imgs:
+        if img.id not in assignment:
+            continue
+        src_file = settings.upload_dir / project_id / Path(img.filepath).name
+        new_file = f"{uuid.uuid4()}{src_file.suffix}"
+        if src_file.exists():
+            shutil.copy2(src_file, dest_dir / new_file)
+        new_img = Image(project_id=new_project.id, filename=img.filename,
+                        filepath=f"/uploads/{new_project.id}/{new_file}",
+                        width=img.width, height=img.height, status=img.status)
+        db.add(new_img)
+        await db.flush()
+        for a in anns.get(img.id, []):
+            db.add(Annotation(
+                image_id=new_img.id, class_name=a.class_name,
+                bbox=list(a.bbox) if a.bbox else None, source=a.source,
+                annotation_type=a.annotation_type,
+                points=list(a.points) if a.points else None, state=a.state))
+        copied += 1
+    await db.commit()
+    return {"project_id": new_project.id, "name": final, "images": copied,
+            "per_segment": summary["segments"], "left_out": summary["unmatched"]}
