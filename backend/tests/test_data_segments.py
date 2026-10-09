@@ -36,6 +36,7 @@ def test_assigns_each_image_to_its_segment():
     asg, summ = ds.assign_segments(ANNS, SEGS)
     assert {i: s["label"] for i, s in asg.items()} == {1: "locked", 2: "unlocked", 3: "partial"}
     assert summ["matched"] == 3 and summ["unmatched"] == 3
+    assert summ["by_annotation_count"] == {"0": 1, "2": 1, "3": 3, "4": 1}
     assert [s["images"] for s in summ["segments"]] == [1, 1, 1]
     assert summ["unmatched_combos"]["door + lock"] == 1
 

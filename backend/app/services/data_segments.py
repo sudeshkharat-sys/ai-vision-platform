@@ -100,8 +100,10 @@ def assign_segments(anns_by_image: dict, segments: list, image_ids=None):
     ids = list(image_ids) if image_ids is not None else list(anns_by_image)
     per_seg, assignment = Counter(), {}
     overlaps, unmatched, combos = 0, 0, Counter()
+    by_total = Counter()
     for iid in ids:
         counts = Counter(a.get("class_name") for a in anns_by_image.get(iid, []))
+        by_total[sum(counts.values())] += 1
         hits = [s for s in segments if image_matches(counts, s)]
         if not hits:
             unmatched += 1
@@ -119,6 +121,8 @@ def assign_segments(anns_by_image: dict, segments: list, image_ids=None):
         "unmatched": unmatched,
         "overlaps": overlaps,
         "unmatched_combos": dict(combos.most_common(8)),
+        # images per number of annotations, e.g. {1: 12, 2: 40, 3: 300}
+        "by_annotation_count": {str(k): v for k, v in sorted(by_total.items())},
     }
 
 

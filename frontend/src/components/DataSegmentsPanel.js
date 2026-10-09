@@ -22,6 +22,11 @@ function SegmentEditor({ seg, classes, onChange, onDelete }) {
         else counts[cls] = { min: next.min ?? 0, max: next.max };
         set({ counts });
     };
+    const setTotal = (key, val) => {
+        const cur = seg.total || { min: null, max: null };
+        const next = { ...cur, [key]: numOrNull(val) };
+        set({ total: next.min == null && next.max == null ? null : { min: next.min ?? 0, max: next.max } });
+    };
     // Same number in both boxes: exactly N.
     const exact = (cls, val) => {
         const n = numOrNull(val);
@@ -67,11 +72,14 @@ function SegmentEditor({ seg, classes, onChange, onDelete }) {
                 <input type="checkbox" checked={seg.allow_other} onChange={e => set({ allow_other: e.target.checked })} />
                 Allow other classes on the image (unticked: classes not set above must be absent)
             </label>
-            <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 12, marginTop: 6, color: '#555' }}>
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 12, marginTop: 8, color: '#333', fontWeight: 600 }}>
                 Total annotations on the image:
-                <input style={input} type="number" min="0" placeholder="exactly" value={seg.total && seg.total.min === seg.total.max ? seg.total.min : ''}
-                    onChange={e => { const n = numOrNull(e.target.value); set({ total: n == null ? null : { min: n, max: n } }); }} />
-            </label>
+                min <input style={input} type="number" min="0" placeholder="any" value={seg.total?.min ?? ''}
+                    onChange={e => setTotal('min', e.target.value)} />
+                max <input style={input} type="number" min="0" placeholder="any" value={seg.total?.max ?? ''}
+                    onChange={e => setTotal('max', e.target.value)} />
+                <span style={{ fontWeight: 400, color: '#888' }}>(set both to 3 to drop door + lock images)</span>
+            </div>
         </div>
     );
 }
@@ -119,12 +127,13 @@ export default function DataSegmentsPanel({ project, onClose }) {
         const lock = classes.find(c => /^lock/i.test(c)) || 'lock';
         const unlock = classes.find(c => /^unlock/i.test(c)) || 'unlock';
         const door = classes.find(c => /door/i.test(c)) || 'door';
-        const mk = (name, label, d) => ({ ...blank(), name, label, counts: d });
+        const mk = (name, label, d, total) => ({ ...blank(), name, label, counts: d, total });
         const ex = (n) => ({ min: n, max: n });
+        const tot = { min: 3, max: 3 };
         const presets = {
-            locked: mk('Fully locked', 'locked', { [door]: ex(1), [lock]: ex(2), [unlock]: ex(0) }),
-            unlocked: mk('Fully unlocked', 'unlocked', { [door]: ex(1), [lock]: ex(0), [unlock]: ex(2) }),
-            partial: mk('Partial', 'partial', { [door]: ex(1), [lock]: ex(1), [unlock]: ex(1) }),
+            locked: mk('Fully locked', 'locked', { [door]: ex(1), [lock]: ex(2), [unlock]: ex(0) }, tot),
+            unlocked: mk('Fully unlocked', 'unlocked', { [door]: ex(1), [lock]: ex(0), [unlock]: ex(2) }, tot),
+            partial: mk('Partial', 'partial', { [door]: ex(1), [lock]: ex(1), [unlock]: ex(1) }, tot),
         };
         setSegments(s => [...s, presets[kind]]);
     };
@@ -168,6 +177,11 @@ export default function DataSegmentsPanel({ project, onClose }) {
                                 <b>{preview.unmatched}</b> match no segment
                                 {preview.overlaps ? <> · <span style={{ color: '#b45309' }}>{preview.overlaps} match several (first wins)</span></> : null}
                             </p>
+                            {preview.by_annotation_count && (
+                                <p style={{ fontSize: 12, color: '#666', margin: '0 0 8px' }}>
+                                    Images by number of annotations: {Object.entries(preview.by_annotation_count).map(([n, c]) => `${n} → ${c}`).join(' · ')}
+                                </p>
+                            )}
                             {preview.segments.map(s => (
                                 <div key={s.name} style={{ marginBottom: 10 }}>
                                     <div style={{ fontSize: 12, fontWeight: 600 }}>{s.name} → {s.label}: {s.images} images</div>
