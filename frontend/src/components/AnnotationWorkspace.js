@@ -796,6 +796,11 @@ Do you want to proceed?`;
         }
     };
 
+    // Keyboard handler below is registered once per dependency change; the ref
+    // keeps it pointing at the latest handleDeleteImage (current image / list).
+    const deleteImageRef = useRef(null);
+    deleteImageRef.current = handleDeleteImage;
+
     const handleClearAllAnnotations = async () => {
         if (!currentImage || annotations.length === 0) return;
         if (!window.confirm(`Delete all ${annotations.length} annotation(s) on this image?`)) return;
@@ -1427,6 +1432,16 @@ Do you want to proceed?`;
             }
             if ((e.key === 'Delete' || e.key === 'Backspace') && selectedAnnId) {
                 handleRejectAnnotation(selectedAnnId);
+            } else if (
+                // Delete (not Backspace) with nothing selected: remove the current image,
+                // same as the toolbar button (it asks to confirm). Never while typing,
+                // drawing, or with a panel / popup open.
+                e.key === 'Delete' && !e.repeat && !inTextField && !selectedAnnId &&
+                !pendingAnnotation && !pendingPolyline && newPolylinePoints.length === 0 &&
+                !document.querySelector('[class*="-overlay"]:not([class^="drop-overlay"])')
+            ) {
+                e.preventDefault();
+                deleteImageRef.current?.();
             }
             // Jump between images — skip while mid-draw or a class picker is open,
             // same guard ReviewPanel uses so arrows don't fight the drawing tools.
