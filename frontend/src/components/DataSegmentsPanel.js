@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
-import { Filter, X, Plus, Trash2, Save, Eye } from 'lucide-react';
+import { Filter, X, Plus, Trash2, Save, Eye, Copy } from 'lucide-react';
 import { API_URL, BASE_URL } from '../config';
 import './TrainingHub.css';
 
@@ -11,7 +11,7 @@ const input = { width: 54, padding: '3px 6px', border: '1px solid #d0d0d0', bord
 const text = { padding: '5px 8px', border: '1px solid #d0d0d0', borderRadius: 4, fontSize: 13 };
 
 /** A rule row per project class: how many boxes of it an image must carry. */
-function SegmentEditor({ seg, classes, onChange, onDelete }) {
+function SegmentEditor({ seg, classes, onChange, onDelete, onDuplicate }) {
     const set = (patch) => onChange({ ...seg, ...patch });
     const setRange = (cls, key, val) => {
         const cur = seg.counts[cls] || { min: 0, max: null };
@@ -41,12 +41,13 @@ function SegmentEditor({ seg, classes, onChange, onDelete }) {
                     onChange={e => set({ name: e.target.value })} />
                 <input style={{ ...text, width: 140 }} placeholder="Label (e.g. locked)" value={seg.label}
                     onChange={e => set({ label: e.target.value })} />
+                <button className="hub-icon-btn" onClick={onDuplicate} title="Duplicate (then change its classes)"><Copy size={15} /></button>
                 <button className="hub-icon-btn" onClick={onDelete} title="Delete segment"><Trash2 size={15} /></button>
             </div>
             <table style={{ fontSize: 12, borderCollapse: 'collapse' }}>
                 <thead>
                     <tr style={{ color: '#888', textAlign: 'left' }}>
-                        <th style={{ paddingRight: 14 }}>Class</th><th>Exactly</th>
+                        <th style={{ paddingRight: 14 }}>Class</th><th>Exactly <span style={{ fontWeight: 400 }}>(empty = not allowed unless "allow other")</span></th>
                         <th style={{ paddingLeft: 14 }}>or min</th><th>max</th>
                     </tr>
                 </thead>
@@ -58,7 +59,7 @@ function SegmentEditor({ seg, classes, onChange, onDelete }) {
                             <tr key={c}>
                                 <td style={{ paddingRight: 14 }}>{c}</td>
                                 <td><input style={input} type="number" min="0" value={isExact ? r.min : ''}
-                                    placeholder="any" onChange={e => exact(c, e.target.value)} /></td>
+                                    placeholder={seg.allow_other ? 'any' : 'none'} onChange={e => exact(c, e.target.value)} /></td>
                                 <td style={{ paddingLeft: 14 }}><input style={input} type="number" min="0"
                                     value={r && !isExact ? r.min : ''} onChange={e => setRange(c, 'min', e.target.value)} /></td>
                                 <td><input style={input} type="number" min="0" value={r && !isExact && r.max != null ? r.max : ''}
@@ -78,7 +79,7 @@ function SegmentEditor({ seg, classes, onChange, onDelete }) {
                     onChange={e => setTotal('min', e.target.value)} />
                 max <input style={input} type="number" min="0" placeholder="any" value={seg.total?.max ?? ''}
                     onChange={e => setTotal('max', e.target.value)} />
-                <span style={{ fontWeight: 400, color: '#888' }}>(set both to 3 to drop door + lock images)</span>
+                <span style={{ fontWeight: 400, color: '#888' }}>(set both to the same number for an exact count, e.g. 3 = exactly three boxes on the image)</span>
             </div>
         </div>
     );
@@ -212,43 +213,23 @@ export default function DataSegmentsPanel({ project, onClose }) {
         });
     });
 
-    const addPreset = (kind) => {
-        if (kind === 'closed' || kind === 'open') {
-            // region + the two locks, found by name (e.g. Max_reg, LHS_Closed, RHS_Closed)
-            const word = kind === 'closed' ? /clos/i : /open/i;
-            const reg = classes.find(c => /max|reg/i.test(c) && !/lhs|rhs/i.test(c));
-            const l = classes.find(c => /lhs/i.test(c) && word.test(c));
-            const r = classes.find(c => /rhs/i.test(c) && word.test(c));
-            if (!reg || !l || !r) {
-                setMsg({ err: true, text: `Could not find the region and both ${kind} lock classes by name — use New segment and set them by hand.` });
-                return;
-            }
-            const one = { min: 1, max: 1 };
-            setSegments(s => [...s, { ...blank(), name: kind === 'closed' ? 'Locked (closed locks)' : 'Unlocked (open locks)',
-                label: kind === 'closed' ? 'locked' : 'unlocked', counts: { [reg]: one, [l]: one, [r]: one }, total: { min: 3, max: 3 } }]);
-            return;
-        }
-        if (kind === 'reglocks') {
-            const pick = (re, d) => classes.find(c => re.test(c)) || d;
-            const reg = pick(/max/i, 'max_reg'), l = pick(/lhs/i, 'lhs_lock'), r = pick(/rhs/i, 'rhs_lock');
-            setSegments(s => [...s, { ...blank(), name: 'Region + both locks', label: 'region_locks',
-                counts: { [reg]: { min: 1, max: 1 }, [l]: { min: 1, max: 1 }, [r]: { min: 1, max: 1 } },
-                total: { min: 3, max: 3 } }]);
-            return;
-        }
-        const lock = classes.find(c => /^lock/i.test(c)) || 'lock';
-        const unlock = classes.find(c => /^unlock/i.test(c)) || 'unlock';
-        const door = classes.find(c => /door/i.test(c)) || 'door';
-        const mk = (name, label, d, total) => ({ ...blank(), name, label, counts: d, total });
-        const ex = (n) => ({ min: n, max: n });
-        const tot = { min: 3, max: 3 };
-        const presets = {
-            locked: mk('Fully locked', 'locked', { [door]: ex(1), [lock]: ex(2), [unlock]: ex(0) }, tot),
-            unlocked: mk('Fully unlocked', 'unlocked', { [door]: ex(1), [lock]: ex(0), [unlock]: ex(2) }, tot),
-            partial: mk('Partial', 'partial', { [door]: ex(1), [lock]: ex(1), [unlock]: ex(1) }, tot),
-        };
-        setSegments(s => [...s, presets[kind]]);
+    // Quick builder: tick the classes an image must contain (exactly one each by
+    // default); the counts stay editable in the rule below. Works for any project.
+    const [picked, setPicked] = useState([]);
+    const togglePick = (c) => setPicked(p => (p.includes(c) ? p.filter(x => x !== c) : [...p, c]));
+    const addFromPicked = () => {
+        if (!picked.length) return;
+        const one = { min: 1, max: 1 };
+        setSegments(all => [...all, { ...blank(), name: `Segment ${all.length + 1}`, label: '',
+            counts: Object.fromEntries(picked.map(c => [c, one])), total: { min: picked.length, max: picked.length } }]);
+        setPicked([]);
     };
+    const duplicate = (idx) => setSegments(all => {
+        const src = all[idx];
+        const copy = JSON.parse(JSON.stringify(src));
+        copy.name = `${src.name} copy`;
+        return [...all.slice(0, idx + 1), copy, ...all.slice(idx + 1)];
+    });
 
     return (
         <div className="hub-overlay" onClick={onClose}>
@@ -273,16 +254,24 @@ export default function DataSegmentsPanel({ project, onClose }) {
                     {segments.map((s, i) => (
                         <SegmentEditor key={i} seg={s} classes={classes}
                             onChange={ns => setSegments(all => all.map((x, k) => (k === i ? ns : x)))}
-                            onDelete={() => setSegments(all => all.filter((_, k) => k !== i))} />
+                            onDelete={() => setSegments(all => all.filter((_, k) => k !== i))}
+                            onDuplicate={() => duplicate(i)} />
                     ))}
-                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 14 }}>
-                        <button className="hub-btn" onClick={() => setSegments(s => [...s, blank()])}><Plus size={13} /> New segment</button>
-                        <button className="hub-btn" onClick={() => addPreset('closed')}>+ Locked (region + closed locks)</button>
-                        <button className="hub-btn" onClick={() => addPreset('open')}>+ Unlocked (region + open locks)</button>
-                        <button className="hub-btn" onClick={() => addPreset('reglocks')}>+ 1 region + LHS + RHS lock</button>
-                        <button className="hub-btn" onClick={() => addPreset('locked')}>+ Locked</button>
-                        <button className="hub-btn" onClick={() => addPreset('unlocked')}>+ Unlocked</button>
-                        <button className="hub-btn" onClick={() => addPreset('partial')}>+ Partial</button>
+                    <div style={{ border: '1px dashed #cfcfcf', borderRadius: 8, padding: 10, marginBottom: 14 }}>
+                        <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>
+                            Add a segment: tick the classes an image must contain
+                        </div>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 14px', marginBottom: 8 }}>
+                            {classes.map(c => (
+                                <label key={c} style={{ display: 'flex', gap: 5, alignItems: 'center', fontSize: 12, cursor: 'pointer' }}>
+                                    <input type="checkbox" checked={picked.includes(c)} onChange={() => togglePick(c)} /> {c}
+                                </label>
+                            ))}
+                        </div>
+                        <button className="hub-btn" disabled={!picked.length} onClick={addFromPicked}>
+                            <Plus size={13} /> Add segment with exactly 1 of each ticked class
+                        </button>{' '}
+                        <button className="hub-btn" onClick={() => setSegments(all => [...all, blank()])}>Empty segment</button>
                     </div>
 
                     {preview && (
