@@ -757,6 +757,20 @@ async def get_training_stats(
     all_imgs = await db.execute(select(Image).where(Image.project_id == project_id))
     images = all_imgs.scalars().all()
 
+    # Self-heal: an image that carries boxes IS annotated. Imports / older data can
+    # leave such images "pending", which hides them (and their classes) from
+    # training, which only reads status = annotated.
+    stale = [img for img in images if img.status != "annotated"]
+    if stale:
+        with_boxes = set((await db.execute(
+            select(Annotation.image_id).where(Annotation.image_id.in_([i.id for i in stale])).distinct()
+        )).scalars().all())
+        for img in stale:
+            if img.id in with_boxes:
+                img.status = "annotated"
+        if with_boxes:
+            await db.commit()
+
     total = len(images)
     annotated = [img for img in images if img.status == "annotated"]
     pending = [img for img in images if img.status == "pending"]

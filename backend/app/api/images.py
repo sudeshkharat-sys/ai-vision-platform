@@ -592,7 +592,9 @@ async def import_dataset(
             filepath=f"/uploads/{project_id}/{unique_filename}",
             width=entry.get("width") or 0,
             height=entry.get("height") or 0,
-            status=entry.get("status", "pending"),
+            # Boxes make an image annotated, whatever status the exporting project
+            # had stored; training and the stats only count "annotated" images.
+            status="annotated" if entry.get("annotations") else entry.get("status", "pending"),
         )
         db.add(db_image)
         await db.flush()  # assigns db_image.id for its annotations below
