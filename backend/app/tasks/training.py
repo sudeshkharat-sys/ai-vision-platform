@@ -10,6 +10,7 @@ from ..config import settings
 from ..connectors.statedb_connector import StateDBConnector
 from ..services.class_select import select_train_classes
 from ..services.data_segments import filter_by_segments
+from ..services.train_metrics import trainer_losses
 from ..services.segments_store import load_segments
 from collections import defaultdict
 import yaml
@@ -657,12 +658,7 @@ def _make_epoch_callback(celery_task, total_epochs, epoch_history, epoch_start_t
 
         losses = {}
         try:
-            if hasattr(trainer, "loss_items") and trainer.loss_items is not None:
-                vals = trainer.loss_items
-                vals = vals.tolist() if hasattr(vals, "tolist") else list(vals)
-                names = getattr(trainer, "loss_names", ["box_loss", "cls_loss", "dfl_loss"])
-                for name, v in zip(names, vals):
-                    losses[name] = _safe_float(v)
+            losses = {n: _safe_float(v) for n, v in trainer_losses(trainer).items()}
         except Exception:
             pass
 
