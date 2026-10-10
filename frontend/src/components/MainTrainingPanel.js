@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import axios from 'axios';
 import ClassPicker from './ClassPicker';
 import SegmentPicker, { segmentPayload } from './SegmentPicker';
+import EpochRecommendation from './EpochRecommendation';
 import AugmentationSettings, { useAug, augPayload } from './AugmentationSettings';
 import {
     LineChart, Line, XAxis, YAxis, CartesianGrid,
@@ -869,6 +870,8 @@ const MainTrainingPanel = ({ project, onClose }) => {
                                         />
                                         <span className="mtp-epochs-val">{epochs}</span>
                                     </div>
+                                    <EpochRecommendation projectId={project.id} kind="main" images={stats?.annotated_images}
+                                        batch={batch} segmentNames={segmentNames} epochs={epochs} onUse={setEpochs} />
                                 </div>
 
                                 {/* Image size */}

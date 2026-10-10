@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import axios from 'axios';
 import ClassPicker from './ClassPicker';
 import SegmentPicker, { segmentPayload } from './SegmentPicker';
+import EpochRecommendation from './EpochRecommendation';
 import RegionClassPicker, { useRegionClasses, regionPayload } from './RegionClassPicker';
 import AugmentationSettings, { useAug, augPayload } from './AugmentationSettings';
 import {
@@ -840,6 +841,8 @@ const TrainingPanel = ({ project, onClose }) => {
                                         />
                                         <span className="tp-epochs-val">{epochs}</span>
                                     </div>
+                                    <EpochRecommendation projectId={project.id} kind="seed" images={stats?.annotated_images}
+                                        batch={batch} segmentNames={segmentNames} epochs={epochs} onUse={setEpochs} />
                                 </div>
 
                                 {/* ── Image Size ── */}
