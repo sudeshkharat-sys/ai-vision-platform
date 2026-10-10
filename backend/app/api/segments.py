@@ -95,8 +95,12 @@ async def preview_segments(
         if seg and len(samples[seg["name"]]) < _SAMPLES:
             samples[seg["name"]].append(
                 {"id": r.id, "filename": r.filename, "filepath": r.filepath})
+    known = set(project.classes or [])
+    by_name = {s["name"]: s for s in segments}
     for s in summary["segments"]:
         s["samples"] = samples.get(s["name"], [])
+        # class names in a rule that this project doesn't have (rules are case-sensitive)
+        s["unknown_classes"] = [c for c in by_name[s["name"]]["counts"] if c not in known]
     summary["annotated_images"] = len(ids)
     return summary
 

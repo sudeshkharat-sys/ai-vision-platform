@@ -804,7 +804,7 @@ def train_seed_model(
         except ValueError as e:
             return {"error": str(e)}
         if not img_rows:
-            return {"error": "No annotated images match the selected data segments"}
+            return {"error": "No annotated images match the selected data segments. Check the segment rules: class names are case-sensitive and must match the project classes exactly (open Data Segments > Preview counts)."}
     try:
         classes, anns_by_image, img_rows = select_train_classes(
             classes, anns_by_image, img_rows, train_classes)
@@ -1036,7 +1036,7 @@ def train_main_model(
         except ValueError as e:
             return {"error": str(e)}
         if not img_rows:
-            return {"error": "No annotated images match the selected data segments"}
+            return {"error": "No annotated images match the selected data segments. Check the segment rules: class names are case-sensitive and must match the project classes exactly (open Data Segments > Preview counts)."}
     try:
         classes, anns_by_image, img_rows = select_train_classes(
             classes, anns_by_image, img_rows, train_classes)
@@ -1230,7 +1230,7 @@ def train_seg_model(
         except ValueError as e:
             return {"error": str(e)}
         if not img_rows:
-            return {"error": "No annotated images match the selected data segments"}
+            return {"error": "No annotated images match the selected data segments. Check the segment rules: class names are case-sensitive and must match the project classes exactly (open Data Segments > Preview counts)."}
     try:
         classes, anns_by_image, img_rows = select_train_classes(
             classes, anns_by_image, img_rows, train_classes)

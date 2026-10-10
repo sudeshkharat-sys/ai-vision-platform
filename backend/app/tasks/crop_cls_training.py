@@ -513,7 +513,7 @@ def train_crop_cls_model(
             f"{s['name']} -> '{s['label']}': {s['images']}" for s in seg_summary["segments"])
             + f"  (unmatched images skipped: {seg_summary['unmatched']})")
         if not img_rows:
-            return {"error": "No annotated images match the selected data segments"}
+            return {"error": "No annotated images match the selected data segments. Check the segment rules: class names are case-sensitive and must match the project classes exactly (open Data Segments > Preview counts)."}
     if seg_labels is not None:
         if mode == "crop" and not crop_class:
             return {"error": "Choose the detector class to crop (crop_class)"}

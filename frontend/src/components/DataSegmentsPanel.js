@@ -213,6 +213,21 @@ export default function DataSegmentsPanel({ project, onClose }) {
     });
 
     const addPreset = (kind) => {
+        if (kind === 'closed' || kind === 'open') {
+            // region + the two locks, found by name (e.g. Max_reg, LHS_Closed, RHS_Closed)
+            const word = kind === 'closed' ? /clos/i : /open/i;
+            const reg = classes.find(c => /max|reg/i.test(c) && !/lhs|rhs/i.test(c));
+            const l = classes.find(c => /lhs/i.test(c) && word.test(c));
+            const r = classes.find(c => /rhs/i.test(c) && word.test(c));
+            if (!reg || !l || !r) {
+                setMsg({ err: true, text: `Could not find the region and both ${kind} lock classes by name — use New segment and set them by hand.` });
+                return;
+            }
+            const one = { min: 1, max: 1 };
+            setSegments(s => [...s, { ...blank(), name: kind === 'closed' ? 'Locked (closed locks)' : 'Unlocked (open locks)',
+                label: kind === 'closed' ? 'locked' : 'unlocked', counts: { [reg]: one, [l]: one, [r]: one }, total: { min: 3, max: 3 } }]);
+            return;
+        }
         if (kind === 'reglocks') {
             const pick = (re, d) => classes.find(c => re.test(c)) || d;
             const reg = pick(/max/i, 'max_reg'), l = pick(/lhs/i, 'lhs_lock'), r = pick(/rhs/i, 'rhs_lock');
@@ -262,6 +277,8 @@ export default function DataSegmentsPanel({ project, onClose }) {
                     ))}
                     <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 14 }}>
                         <button className="hub-btn" onClick={() => setSegments(s => [...s, blank()])}><Plus size={13} /> New segment</button>
+                        <button className="hub-btn" onClick={() => addPreset('closed')}>+ Locked (region + closed locks)</button>
+                        <button className="hub-btn" onClick={() => addPreset('open')}>+ Unlocked (region + open locks)</button>
                         <button className="hub-btn" onClick={() => addPreset('reglocks')}>+ 1 region + LHS + RHS lock</button>
                         <button className="hub-btn" onClick={() => addPreset('locked')}>+ Locked</button>
                         <button className="hub-btn" onClick={() => addPreset('unlocked')}>+ Unlocked</button>
@@ -282,6 +299,11 @@ export default function DataSegmentsPanel({ project, onClose }) {
                             )}
                             {preview.segments.map(s => (
                                 <div key={s.name} style={{ marginBottom: 10 }}>
+                                    {s.unknown_classes?.length > 0 && (
+                                        <div style={{ fontSize: 12, color: '#c0392b', marginBottom: 2 }}>
+                                            ⚠ "{s.name}" uses class names this project doesn't have: {s.unknown_classes.join(', ')} — fix the names in the rule (case matters).
+                                        </div>
+                                    )}
                                     <div style={{ fontSize: 12, fontWeight: 600 }}>{s.name} → {s.label}: {s.images} images{' '}
                                         {s.images > 0 && <button className="hub-btn" style={{ padding: '1px 8px', fontSize: 11 }}
                                             onClick={() => setGallery({ segment: s.name, label: `${s.name} → ${s.label}` })}>View images</button>}
