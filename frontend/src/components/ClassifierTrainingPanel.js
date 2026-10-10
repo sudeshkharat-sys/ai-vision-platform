@@ -525,11 +525,12 @@ export default function ClassifierTrainingPanel({ project, onClose }) {
                                     <SegmentPicker projectId={project.id} selected={segmentNames} onChange={setSegmentNames} />
                                     {segmentNames.length > 0 && (
                                         <p style={{ fontSize: 12, opacity: 0.8, margin: '0 0 8px' }}>
-                                            Data segments on: only matching images are used, and each <b>{cropClass}</b> crop is labelled by its image's segment label. The class list below is ignored (the Preview button still shows the classic labelling).
+                                            Data segments on: only matching images are used, and each <b>{cropClass}</b> crop is labelled by its image's segment label. No other class selection is needed.
                                         </p>
                                     )}
 
-                                    <div style={{ margin: '12px 0 4px', fontWeight: 600, opacity: segmentNames.length ? 0.4 : 1 }}>
+                                    {segmentNames.length === 0 && (<>
+                                    <div style={{ margin: '12px 0 4px', fontWeight: 600 }}>
                                         Classifier classes (all remaining classes)
                                     </div>
                                     {classNames.filter(c => c !== cropClass).map(c => (
@@ -554,16 +555,19 @@ export default function ClassifierTrainingPanel({ project, onClose }) {
                                         <input type="range" min="0.2" max="1" step="0.05" value={minOverlap} className="mtp-epochs-slider"
                                                onChange={e => { setMinOverlap(+e.target.value); setPreview(null); }} />
                                     </div>
+                                    </>)}
                                     <div className="mtp-epochs-row">
                                         <span>Crop margin: {Math.round(margin * 100)}%</span>
                                         <input type="range" min="0" max="0.4" step="0.02" value={margin} className="mtp-epochs-slider"
                                                onChange={e => { setMargin(+e.target.value); setPreview(null); }} />
                                     </div>
 
-                                    <button className="mtp-train-btn" style={{ marginTop: 12 }}
-                                            disabled={!canRun || previewing} onClick={runPreview}>
-                                        <Eye size={16} /> {previewing ? 'Building preview…' : 'Preview training data'}
-                                    </button>
+                                    {segmentNames.length === 0 && (
+                                        <button className="mtp-train-btn" style={{ marginTop: 12 }}
+                                                disabled={!canRun || previewing} onClick={runPreview}>
+                                            <Eye size={16} /> {previewing ? 'Building preview…' : 'Preview training data'}
+                                        </button>
+                                    )}
                                 </>
                             )
                         )}
