@@ -108,7 +108,7 @@ export default function AutoLabelPanel({ project, onClose, onImagesChanged }) {
                     <button className="vp-close" onClick={onClose}><X size={18} /></button>
                 </div>
 
-                <div style={{ padding: 18, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 16 }}>
+                <div style={{ padding: 18, overflowY: 'auto', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', gap: 16 }}>
                     <section>
                         <b>1. Detector model (.pt)</b>
                         <p style={{ margin: '4px 0 8px', color: '#666', fontSize: 13 }}>
@@ -136,14 +136,6 @@ export default function AutoLabelPanel({ project, onClose, onImagesChanged }) {
                             <label><input type="checkbox" checked={window_} onChange={e => setWindow(e.target.checked)} /> Show preview window</label>
                             <label><input type="checkbox" checked={dedupe} onChange={e => setDedupe(e.target.checked)} /> Skip near-identical frames</label>
                         </div>
-                        {!info.running ? (
-                            <button style={btn('#16a34a', busy || !info.model)} disabled={busy || !info.model} onClick={start}>
-                                <Play size={14} /> Start auto-label
-                            </button>
-                        ) : (
-                            <button style={btn('#dc2626', false)} onClick={stop}><Square size={14} /> Stop</button>
-                        )}
-                        {!info.model && <span style={{ marginLeft: 10, fontSize: 12, color: '#b45309' }}>Upload the detector .pt first</span>}
                         <p style={{ fontSize: 12, color: '#777', marginTop: 6 }}>
                             The preview window has Pause and Stop buttons (or press space / q). Only frames where something is detected are saved.
                         </p>
@@ -189,6 +181,18 @@ export default function AutoLabelPanel({ project, onClose, onImagesChanged }) {
                     </section>
 
                     {error && <div style={{ color: '#b91c1c', fontSize: 13 }}>{error}</div>}
+                </div>
+                <div style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 12, padding: '12px 18px',
+                              borderTop: '1px solid #e5e5e5', background: '#fafafa' }}>
+                        {!info.running ? (
+                        <button style={btn('#16a34a', busy || !info.model)} disabled={busy || !info.model} onClick={start}>
+                            <Play size={14} /> Start auto-label
+                        </button>
+                    ) : (
+                        <button style={btn('#dc2626', false)} onClick={stop}><Square size={14} /> Stop</button>
+                    )}
+                    {!info.model && <span style={{ marginLeft: 10, fontSize: 12, color: '#b45309' }}>Upload the detector .pt first</span>}
+                    {st && <span style={{ fontSize: 13, color: '#444' }}>{st.state}: {st.saved} frames saved, {st.boxes} boxes</span>}
                 </div>
             </div>
         </div>
