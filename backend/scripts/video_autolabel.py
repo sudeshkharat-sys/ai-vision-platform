@@ -75,6 +75,20 @@ def _same_as_last(rows, last, iou_same):
     return True
 
 
+def _draw_buttons(view, ui):
+    """Clickable Pause/Play and Stop buttons drawn on the preview (top-right)."""
+    h, w = view.shape[:2]
+    bw, bh, gap, top = 110, 34, 10, 8
+    x_stop = w - bw - gap
+    x_pause = x_stop - bw - gap
+    ui["btn"] = {"pause": (x_pause, top, x_pause + bw, top + bh), "stop": (x_stop, top, x_stop + bw, top + bh)}
+    for name, label, color in (("pause", "Play" if ui["paused"] else "Pause", (60, 160, 60)), ("stop", "Stop", (40, 40, 200))):
+        x1, y1, x2, y2 = ui["btn"][name]
+        cv2.rectangle(view, (x1, y1), (x2, y2), color, -1)
+        cv2.rectangle(view, (x1, y1), (x2, y2), (255, 255, 255), 1)
+        cv2.putText(view, label, (x1 + 18, y2 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--project-id", required=True)
@@ -123,6 +137,18 @@ def main():
 
         show = args.window
         new_classes, stopped = [], False
+        ui = {"paused": False, "stop": False, "btn": {}, "hooked": False}
+
+        def on_mouse(event, x, y, flags, param):
+            if event != cv2.EVENT_LBUTTONDOWN:
+                return
+            for name, (x1, y1, x2, y2) in ui["btn"].items():
+                if x1 <= x <= x2 and y1 <= y <= y2:
+                    if name == "pause":
+                        ui["paused"] = not ui["paused"]
+                    else:
+                        ui["stop"] = True
+
         for vi, v in enumerate(videos):
             path = _resolve_video_path(v["filepath"])
             cap = cv2.VideoCapture(str(path)) if path else None
@@ -135,14 +161,14 @@ def main():
             out_dir = settings.upload_dir / pid / "video_frames" / v["id"]
             out_dir.mkdir(parents=True, exist_ok=True)
             stem = Path(v["original_filename"]).stem
-            counts, last, idx, paused = Counter(), None, -1, False
+            counts, last, idx = Counter(), None, -1
             write(video=v["original_filename"])
 
             while True:
                 if stop.exists():
                     stopped = True
                     break
-                if not paused:
+                if not ui["paused"]:
                     ok, frame = cap.read()
                     if not ok:
                         break
@@ -194,20 +220,29 @@ def main():
                             cv2.rectangle(view, (x1, y1), (x2, y2), (0, 220, 0), 2)
                             cv2.putText(view, f"{a['class_name']} {a['conf']:.2f}", (x1, max(14, y1 - 4)),
                                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 220, 0), 2)
-                        cv2.putText(view, f"{v['original_filename']}  saved {status['saved']}  (q stop, space pause)",
+                        cv2.putText(view, f"{v['original_filename']}  saved {status['saved']}",
                                     (10, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 200, 255), 2)
+                        ui["base"] = view.copy()
+                        _draw_buttons(view, ui)
                         try:
                             cv2.imshow("Auto-label", view)
+                            if not ui["hooked"]:
+                                cv2.setMouseCallback("Auto-label", on_mouse)
+                                ui["hooked"] = True
                         except cv2.error:
                             show = False
                             write(message="No display available for the window; continuing without it")
                 if show:
                     k = cv2.waitKey(1) & 0xFF
-                    if k == ord("q"):
+                    if k == ord("q") or ui["stop"]:
                         stopped = True
                         break
                     if k == ord(" "):
-                        paused = not paused
+                        ui["paused"] = not ui["paused"]
+                    if ui.get("base") is not None:  # redraw so the Pause/Play label follows the state
+                        again = ui["base"].copy()
+                        _draw_buttons(again, ui)
+                        cv2.imshow("Auto-label", again)
             cap.release()
             if stopped:
                 break

@@ -1527,7 +1527,7 @@ Do you want to proceed?`;
                     <button
                         className="btn-action btn-action-review"
                         onClick={() => setShowReviewPanel(true)}
-                        disabled={images.filter(img => img.status === 'annotated').length === 0}
+                        disabled={images.length === 0}
                     >
                         <Eye size={14} /> Review Annotations
                     </button>

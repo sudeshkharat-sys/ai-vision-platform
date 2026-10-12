@@ -6,6 +6,14 @@ import { API_URL } from '../config';
 
 const POLL_MS = 2000;
 
+// Explicit styles so the buttons are visible inside the white modal (the sidebar's
+// .btn-action styling is made for the dark sidebar and was easy to miss here).
+const btn = (bg, disabled) => ({
+    display: 'inline-flex', alignItems: 'center', gap: 6, padding: '9px 16px', border: 'none',
+    borderRadius: 8, fontSize: 13, fontWeight: 600, color: '#fff', background: bg,
+    cursor: disabled ? 'not-allowed' : 'pointer', opacity: disabled ? 0.45 : 1, width: 'auto',
+});
+
 // Label this project's videos with a detector .pt on this PC, review the result
 // in Review Annotation, then copy the reviewed frames to a training project.
 export default function AutoLabelPanel({ project, onClose, onImagesChanged }) {
@@ -108,7 +116,7 @@ export default function AutoLabelPanel({ project, onClose, onImagesChanged }) {
                         </p>
                         <input ref={fileRef} type="file" accept=".pt" style={{ display: 'none' }}
                                onChange={e => { upload(e.target.files[0]); e.target.value = ''; }} />
-                        <button className="btn-action" disabled={busy || info.running} onClick={() => fileRef.current.click()}>
+                        <button style={btn('#dc143c', busy || info.running)} disabled={busy || info.running} onClick={() => fileRef.current.click()}>
                             <Upload size={14} /> {info.model ? 'Replace .pt' : 'Upload .pt'}
                         </button>
                         {info.model && (
@@ -129,14 +137,15 @@ export default function AutoLabelPanel({ project, onClose, onImagesChanged }) {
                             <label><input type="checkbox" checked={dedupe} onChange={e => setDedupe(e.target.checked)} /> Skip near-identical frames</label>
                         </div>
                         {!info.running ? (
-                            <button className="btn-action" disabled={busy || !info.model} onClick={start}>
+                            <button style={btn('#16a34a', busy || !info.model)} disabled={busy || !info.model} onClick={start}>
                                 <Play size={14} /> Start auto-label
                             </button>
                         ) : (
-                            <button className="btn-action" onClick={stop}><Square size={14} /> Stop</button>
+                            <button style={btn('#dc2626', false)} onClick={stop}><Square size={14} /> Stop</button>
                         )}
+                        {!info.model && <span style={{ marginLeft: 10, fontSize: 12, color: '#b45309' }}>Upload the detector .pt first</span>}
                         <p style={{ fontSize: 12, color: '#777', marginTop: 6 }}>
-                            Preview window: q = stop, space = pause. Only frames where something is detected are saved.
+                            The preview window has Pause and Stop buttons (or press space / q). Only frames where something is detected are saved.
                         </p>
                         {st && (
                             <div style={{ fontSize: 13, marginTop: 8 }}>
@@ -167,7 +176,7 @@ export default function AutoLabelPanel({ project, onClose, onImagesChanged }) {
                                 {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
                             </select>
                             {!target && <input placeholder="New project name" value={newName} onChange={e => setNewName(e.target.value)} />}
-                            <button className="btn-action" disabled={busy || info.running || (!target && !newName.trim())} onClick={send}>
+                            <button style={btn('#dc143c', busy || info.running || (!target && !newName.trim()))} disabled={busy || info.running || (!target && !newName.trim())} onClick={send}>
                                 <Send size={14} /> Send reviewed frames
                             </button>
                         </div>

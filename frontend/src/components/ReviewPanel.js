@@ -83,15 +83,22 @@ export default function ReviewPanel({ project, images, onClose, onAnnotationsUpd
     const [autoIds, setAutoIds] = useState(null);   // Set<string> | null while loading
     const loadAutoIds = useCallback(() => {
         axios.get(`${API_URL}/projects/${project.id}/auto-annotated-images`)
-            .then(res => setAutoIds(new Set((res.data.image_ids || []).map(String))))
+            .then(res => {
+                const ids = (res.data.image_ids || []).map(String);
+                setAutoIds(new Set(ids));
+                if (ids.length === 0) setAutoOnly(false);   // nothing machine-made to verify: show every frame
+            })
             .catch(() => { setAutoIds(null); setAutoOnly(false); });
     }, [project.id]);
     useEffect(() => { if (plainQueue && autoOnly) loadAutoIds(); }, [plainQueue, autoOnly, loadAutoIds]);
 
     const reviewImages = activeImageIds?.size > 0
         ? images.filter(img => activeImageIds.has(String(img.id)))
-        : images.filter(img => (img.status === 'annotated' || img.status === 'annotating')
-            && !(plainQueue && autoOnly && autoIds && !autoIds.has(String(img.id))));
+        : (plainQueue && autoOnly && autoIds)
+            ? images.filter(img => autoIds.has(String(img.id)))
+            : plainQueue
+                ? images                       // every frame of the project, annotated or not
+                : images.filter(img => img.status === 'annotated' || img.status === 'annotating');
 
     const [currentIdx, setCurrentIdx] = useState(0);
     const [annotations, setAnnotations] = useState([]);
@@ -568,12 +575,12 @@ export default function ReviewPanel({ project, images, onClose, onAnnotationsUpd
                                 ? `No images use "${activeClassName}" right now — pick another class below.`
                                 : filterLabel
                                     ? 'None of these images could be loaded — they may have changed since the class list was refreshed.'
-                                    : 'Run Auto-Annotate first, then come back to review the results here.'}
+                                    : 'This project has no images yet.'}
                     </p>
                     {classSwitcherEl}
                     {plainQueue && autoOnly && autoIds && (
                         <button className="rp-btn rp-btn-neutral" onClick={() => { setAutoOnly(false); setCurrentIdx(0); }}>
-                            Review all annotated images
+                            Review all frames
                         </button>
                     )}
                     <button className="rp-btn rp-btn-neutral" onClick={onClose}>Close</button>
