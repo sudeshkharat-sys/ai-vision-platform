@@ -9,6 +9,7 @@ import LabelsPanel from './LabelsPanel';
 import ModelsPanel from './ModelsPanel';
 import ReviewPanel from './ReviewPanel';
 import VideoPanel from './VideoPanel';
+import AutoLabelPanel from './AutoLabelPanel';
 import SequencePanel from './SequencePanel';
 import ActiveLearningPanel from './ActiveLearningPanel';
 import OcrActiveLearningPanel from './OcrActiveLearningPanel';
@@ -325,6 +326,7 @@ const AnnotationWorkspace = ({ project, onProjectUpdated }) => {
     const [showModelsPanel, setShowModelsPanel] = useState(false);
     const [showReviewPanel, setShowReviewPanel] = useState(false);
     const [showVideoPanel, setShowVideoPanel] = useState(false);
+    const [showAutoLabelPanel, setShowAutoLabelPanel] = useState(false);
     const [showSequencePanel, setShowSequencePanel] = useState(false);
     const [showActiveLearningPanel, setShowActiveLearningPanel] = useState(false);
     const [showOcrActiveLearningPanel, setShowOcrActiveLearningPanel] = useState(false);
@@ -1542,6 +1544,10 @@ Do you want to proceed?`;
                     <button className="btn-action btn-action-video" onClick={() => setShowVideoPanel(true)}>
                         <Film size={14} /> Import Video
                     </button>
+                    <button className="btn-action btn-action-video" onClick={() => setShowAutoLabelPanel(true)}
+                            title="Label this project's videos with a detector .pt on this PC">
+                        <Film size={14} /> Auto-label Videos
+                    </button>
                     <button
                         className="btn-action btn-action-sequence"
                         onClick={() => setShowSequencePanel(true)}
@@ -2239,6 +2245,17 @@ Do you want to proceed?`;
                 <ClassifierTrainingPanel
                     project={project}
                     onClose={() => setShowClassifierPanel(false)}
+                />
+            )}
+            {showAutoLabelPanel && (
+                <AutoLabelPanel
+                    project={project}
+                    onClose={() => setShowAutoLabelPanel(false)}
+                    onImagesChanged={() => {
+                        axios.get(`${API_URL}/images/project/${project.id}`)
+                            .then(res => setImages(res.data))
+                            .catch(() => {});
+                    }}
                 />
             )}
             {showVideoPanel && (
