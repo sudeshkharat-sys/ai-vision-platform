@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, delete
 from ..database import get_db
 from ..models.annotation import Annotation
 from ..models.image import Image
@@ -276,6 +276,33 @@ async def verify_annotation(
     ann.source = "manual"
     await db.commit()
     return {"status": "verified", "id": annotation_id}
+
+
+@router.delete("/image/{image_id}/auto")
+async def reject_image_auto_annotations(
+    image_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Reject ALL machine-made boxes of an image in one transaction.
+
+    Deleting them one request at a time raced: each delete saw the others'
+    boxes still there, so the image never went back to 'pending' and the
+    auto-annotator (which only takes pending images) skipped it. Here, if no
+    annotation is left afterwards, the image is set to 'pending'.
+    """
+    image = await get_owned_image(image_id, current_user, db)
+    result = await db.execute(
+        delete(Annotation)
+        .where(Annotation.image_id == image_id, Annotation.source.notin_(["manual", "folder"]))
+        .returning(Annotation.id)
+    )
+    deleted = len(result.fetchall())
+    remaining = await db.execute(select(Annotation.id).where(Annotation.image_id == image_id).limit(1))
+    if remaining.first() is None:
+        image.status = "pending"
+    await db.commit()
+    return {"deleted_count": deleted, "status": image.status}
 
 
 @router.delete("/{annotation_id}")

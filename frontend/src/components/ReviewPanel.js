@@ -281,14 +281,15 @@ export default function ReviewPanel({ project, images, onClose, onAnnotationsUpd
         const toDelete = annotations.filter(a => a.source !== 'manual');
         if (!toDelete.length) return;
         try {
-            await Promise.all(toDelete.map(a => axios.delete(`${API_URL}/annotations/${a.id}`)));
+            // One request: per-box deletes raced and left the image 'annotated' with no boxes.
+            await axios.delete(`${API_URL}/annotations/image/${currentImage.id}/auto`);
             setAnnotations(prev => prev.filter(a => a.source === 'manual'));
             markReviewed();
             showStatus(`✕ Removed ${toDelete.length} auto annotation${toDelete.length !== 1 ? 's' : ''}`);
         } catch {
             // silent
         }
-    }, [annotations, markReviewed, showStatus]);
+    }, [annotations, currentImage, markReviewed, showStatus]);
 
     const toggleSelected = useCallback((annId) => {
         setSelectedIds(prev => {
