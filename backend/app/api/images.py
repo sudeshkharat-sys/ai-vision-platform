@@ -266,30 +266,47 @@ def _detect_text_skew(file_path) -> float:
     return skew
 
 
-async def _rotate_image_obj(image, direction: str, db: AsyncSession):
-    """Rotate the image file 90° on disk and remap its boxes / polygon points.
-    Does not commit."""
+def _image_file(image):
     file_path = settings.upload_dir.parent / image.filepath.lstrip("/")
     if not file_path.exists():
         file_path = settings.upload_dir / image.filepath.replace("/uploads/", "", 1)
     if not file_path.exists():
         raise HTTPException(status_code=404, detail="Image file not found on disk")
+    return file_path
 
-    try:
-        from PIL import ImageOps
-        with PILImage.open(file_path) as img:
-            # Bake in any EXIF orientation first so the pixels match what
-            # the browser has been displaying, then rotate.
-            img = ImageOps.exif_transpose(img)
-            # PIL's rotate is counter-clockwise; expand=True swaps dimensions
-            rotated = img.rotate(-90 if direction == "cw" else 90, expand=True)
-            rotated.save(file_path)
-            new_w, new_h = rotated.size
-    except Exception as e:
-        raise HTTPException(status_code=422, detail=f"Could not rotate image: {e}")
 
-    image.width, image.height = new_w, new_h
+def _file_size(file_path):
+    """(width, height) as a browser shows the file (EXIF orientation applied)."""
+    with PILImage.open(file_path) as img:
+        w, h = img.size
+        if img.getexif().get(0x0112, 1) in (5, 6, 7, 8):
+            w, h = h, w
+    return w, h
 
+
+async def _rotate_image_obj(image, direction: str, db: AsyncSession, file: bool = True, labels: bool = True):
+    """Rotate the image file 90° on disk and/or remap its boxes / polygon
+    points (``file`` / ``labels`` pick which). Does not commit."""
+    file_path = _image_file(image)
+
+    if file:
+        try:
+            from PIL import ImageOps
+            with PILImage.open(file_path) as img:
+                # Bake in any EXIF orientation first so the pixels match what
+                # the browser has been displaying, then rotate.
+                img = ImageOps.exif_transpose(img)
+                # PIL's rotate is counter-clockwise; expand=True swaps dimensions
+                rotated = img.rotate(-90 if direction == "cw" else 90, expand=True)
+                rotated.save(file_path)
+                image.width, image.height = rotated.size
+        except Exception as e:
+            raise HTTPException(status_code=422, detail=f"Could not rotate image: {e}")
+    else:
+        image.width, image.height = _file_size(file_path)   # trust the real file
+
+    if not labels:
+        return
     # Remap normalized [xc, yc, w, h] boxes (and polygon / segment points) into the rotated frame
     result = await db.execute(select(Annotation).where(Annotation.image_id == image.id))
     for ann in result.scalars().all():
@@ -298,6 +315,68 @@ async def _rotate_image_obj(image, direction: str, db: AsyncSession):
             ann.bbox = [1 - yc, xc, h, w] if direction == "cw" else [yc, 1 - xc, h, w]
         if ann.points:
             ann.points = [[1 - y, x] if direction == "cw" else [y, 1 - x] for x, y in ann.points]
+
+
+@router.get("/project/{project_id}/size-mismatches")
+async def size_mismatches(
+    project_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Images whose real file shape differs from the stored width/height.
+    ``swapped`` = the file is landscape/portrait the other way round than the
+    database says - what you get when labels were rotated but the picture was not."""
+    await get_owned_project(project_id, current_user, db)
+    imgs = (await db.execute(select(Image).where(Image.project_id == project_id))).scalars().all()
+    swapped, other, missing = [], [], 0
+    for im in imgs:
+        try:
+            fw, fh = _file_size(_image_file(im))
+        except Exception:
+            missing += 1
+            continue
+        if (fw, fh) == (im.width, im.height):
+            continue
+        row = {"id": im.id, "filename": im.filename, "db": [im.width, im.height], "file": [fw, fh]}
+        (swapped if (fw, fh) == (im.height, im.width) else other).append(row)
+    return {"checked": len(imgs), "swapped": swapped, "other": other, "missing_files": missing}
+
+
+class FixSizeBody(BaseModel):
+    image_ids: List[str]
+    mode: str       # "rotate_files": rotate the pictures clockwise to match the (already rotated) labels
+                    # "revert_labels": rotate the labels back counter-clockwise to match the pictures
+
+
+@router.post("/project/{project_id}/fix-size-mismatch")
+async def fix_size_mismatch(
+    project_id: str,
+    body: FixSizeBody,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    if body.mode not in ("rotate_files", "revert_labels"):
+        raise HTTPException(status_code=400, detail="mode must be 'rotate_files' or 'revert_labels'")
+    await get_owned_project(project_id, current_user, db)
+    imgs = (await db.execute(
+        select(Image).where(Image.project_id == project_id, Image.id.in_(body.image_ids)))).scalars().all()
+    fixed, failed = [], []
+    for im in imgs:
+        try:
+            fw, fh = _file_size(_image_file(im))
+            if (fw, fh) != (im.height, im.width):      # only the clean "swapped" case is touched
+                failed.append({"id": im.id, "filename": im.filename, "error": "not a simple rotated-labels mismatch"})
+                continue
+            if body.mode == "rotate_files":
+                await _rotate_image_obj(im, "cw", db, file=True, labels=False)
+            else:
+                await _rotate_image_obj(im, "ccw", db, file=False, labels=True)
+            await db.commit()
+            fixed.append({"id": im.id, "width": im.width, "height": im.height})
+        except HTTPException as e:
+            await db.rollback()
+            failed.append({"id": im.id, "filename": im.filename, "error": e.detail})
+    return {"fixed": fixed, "failed": failed}
 
 
 @router.post("/{image_id}/rotate")

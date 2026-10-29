@@ -942,6 +942,51 @@ Do you want to proceed?`;
         }
     };
 
+    // Finds images whose real file is landscape/portrait the other way round than the
+    // stored size (labels rotated, picture not) and offers to repair them.
+    const handleCheckMismatch = async () => {
+        try {
+            const res = await axios.get(`${API_URL}/images/project/${project.id}/size-mismatches`);
+            const { swapped, other, checked } = res.data;
+            if (swapped.length === 0) {
+                window.alert(`Checked ${checked} images: no picture/label shape mismatch found.${other.length ? `\n(${other.length} images have other size differences - not touched.)` : ''}`);
+                return;
+            }
+            const ex = swapped.slice(0, 5).map(r => `${r.filename}: stored ${r.db.join('x')}, file ${r.file.join('x')}`).join('\n');
+            const choice = window.prompt(
+                `${swapped.length} image(s) have the picture turned differently from their labels:\n${ex}\n\n` +
+                `Type 1 = rotate these PICTURES clockwise to match the labels (labels stay)\n` +
+                `Type 2 = rotate the LABELS back counter-clockwise to match the pictures\n` +
+                `Anything else = cancel`, '1');
+            const mode = choice === '1' ? 'rotate_files' : choice === '2' ? 'revert_labels' : null;
+            if (!mode) return;
+            const fixRes = await axios.post(`${API_URL}/images/project/${project.id}/fix-size-mismatch`,
+                { image_ids: swapped.map(r => r.id), mode });
+            const imgRes = await axios.get(`${API_URL}/images/project/${project.id}`);
+            setImages(imgRes.data);
+            setImgVersion(prev => {
+                const next = { ...prev };
+                fixRes.data.fixed.forEach(r => { next[r.id] = (next[r.id] || 0) + 1; });
+                return next;
+            });
+            if (currentImage) {
+                const cur = imgRes.data.find(i => i.id === currentImage.id);
+                if (cur) {
+                    setCurrentImage(cur);
+                    setLoadedImageSize(null);
+                    const annRes = await axios.get(`${API_URL}/annotations/image/${cur.id}`);
+                    setAnnotations(annRes.data);
+                    setHistory([]); setRedoStack([]); setSelectedAnnId(null);
+                }
+            }
+            const bad = fixRes.data.failed.length;
+            setStatusMsg(`Fixed ${fixRes.data.fixed.length} image(s)${bad ? `, ${bad} could not be fixed` : ''}`);
+            setTimeout(() => setStatusMsg(null), 5000);
+        } catch (e) {
+            setError(e.response?.data?.detail || 'Mismatch check failed');
+        }
+    };
+
     // Filtered sidebar list -> ReviewPanel, restricted to exactly those images.
     const handleReviewFiltered = () => {
         const idSet = new Set(visibleImages.map(i => String(i.id)));
@@ -1686,7 +1731,7 @@ Do you want to proceed?`;
                                 </div>
                             )}
                             <ImageFilterBar filter={imgFilter} onChange={setImgFilter}
-                                total={images.length} shown={visibleImages.length} counts={orientationCounts} onReview={handleReviewFiltered} onRotate={handleRotateFiltered} />
+                                total={images.length} shown={visibleImages.length} counts={orientationCounts} onReview={handleReviewFiltered} onRotate={handleRotateFiltered} onCheckMismatch={handleCheckMismatch} />
                             {visibleImages.map(img => {
                                 const isSuggested = suggestedImageIds?.has(String(img.id));
                                 return (
