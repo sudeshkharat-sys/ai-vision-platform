@@ -285,6 +285,9 @@ const ClassPicker = ({ classes, usedClasses, onConfirm, onCancel, remaining = 0,
     );
 };
 
+// Changes on every page load, so a hard-cached (pre-rotation) copy of an image is never reused after a reload.
+const PAGE_LOAD_BUST = Date.now();
+
 // ── Main Workspace ──────────────────────────────────────────────
 const AnnotationWorkspace = ({ project, onProjectUpdated }) => {
     const [images, setImages] = useState([]);
@@ -2023,7 +2026,7 @@ Do you want to proceed?`;
                                         rotation={previewAngle}
                                     >
                                     <KonvaImage
-                                        src={`${API_URL.replace("/api/v1", "")}${currentImage.filepath}${imgVersion[currentImage.id] ? `?v=${imgVersion[currentImage.id]}` : ''}`}
+                                        src={`${API_URL.replace("/api/v1", "")}${currentImage.filepath}?r=${PAGE_LOAD_BUST}${imgVersion[currentImage.id] ? `&v=${imgVersion[currentImage.id]}` : ''}`}
                                         onLoad={handleImageLoad}
                                         listening={false}
                                     />

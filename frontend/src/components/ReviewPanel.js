@@ -61,6 +61,8 @@ const ClassPicker = ({ classes, onConfirm, onCancel }) => {
     );
 };
 
+const PAGE_LOAD_BUST = Date.now();   // see AnnotationWorkspace: skip pre-rotation cached copies
+
 export default function ReviewPanel({ project, images, onClose, onAnnotationsUpdated, filterImageIds, filterLabel, filterClassName }) {
     // Opened from LabelsPanel's "edit images" action — lets the user switch
     // which class they're targeting without leaving the panel, instead of
@@ -679,7 +681,7 @@ export default function ReviewPanel({ project, images, onClose, onAnnotationsUpd
                             >
                                 <div className="rp-strip-thumb">
                                     <img
-                                        src={`${BASE_URL}${img.filepath}`}
+                                        src={`${BASE_URL}${img.filepath}?r=${PAGE_LOAD_BUST}`}
                                         alt={img.filename}
                                     />
                                     {reviewedIds.has(img.id) && (
@@ -767,7 +769,7 @@ export default function ReviewPanel({ project, images, onClose, onAnnotationsUpd
                                         >
                                             <Layer>
                                                 <CanvasImage
-                                                    src={`${BASE_URL}${currentImage.filepath}`}
+                                                    src={`${BASE_URL}${currentImage.filepath}?r=${PAGE_LOAD_BUST}`}
                                                     onLoad={handleImageLoad}
                                                 />
 
