@@ -342,6 +342,34 @@ async def size_mismatches(
     return {"checked": len(imgs), "swapped": swapped, "other": other, "missing_files": missing}
 
 
+class IdsBody(BaseModel):
+    image_ids: List[str]
+
+
+@router.post("/project/{project_id}/reset-empty")
+async def reset_empty_status(
+    project_id: str,
+    body: IdsBody,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Of the listed images, set those with NO annotations back to 'pending'
+    (repairs images left 'annotated' after their boxes were deleted)."""
+    await get_owned_project(project_id, current_user, db)
+    imgs = (await db.execute(
+        select(Image).where(Image.project_id == project_id, Image.id.in_(body.image_ids),
+                            Image.status != "pending"))).scalars().all()
+    has_ann = set()
+    if imgs:
+        rows = await db.execute(select(Annotation.image_id).where(Annotation.image_id.in_([i.id for i in imgs])).distinct())
+        has_ann = {r[0] for r in rows.all()}
+    reset = [i for i in imgs if i.id not in has_ann]
+    for i in reset:
+        i.status = "pending"
+    await db.commit()
+    return {"reset": [i.id for i in reset]}
+
+
 class FixSizeBody(BaseModel):
     image_ids: List[str]
     mode: str       # "rotate_files": rotate the pictures clockwise to match the (already rotated) labels

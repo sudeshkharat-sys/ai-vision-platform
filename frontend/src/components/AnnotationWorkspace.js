@@ -466,6 +466,11 @@ const AnnotationWorkspace = ({ project, onProjectUpdated }) => {
         setRedoStack([]);
     }, []);
 
+    // Keep the sidebar status in step with the boxes (the server already does this in the DB).
+    const setImageStatus = useCallback((imageId, status) => {
+        setImages(prev => prev.map(im => (im.id === imageId && im.status !== status ? { ...im, status } : im)));
+    }, []);
+
     const handleUndo = useCallback(async () => {
         setHistory(prev => {
             if (!prev.length) return prev;
@@ -476,7 +481,11 @@ const AnnotationWorkspace = ({ project, onProjectUpdated }) => {
                 try {
                     if (action.type === 'add') {
                         await axios.delete(`${API_URL}/annotations/${action.ann.id}`);
-                        setAnnotations(a => a.filter(x => x.id !== action.ann.id));
+                        setAnnotations(a => {
+                            const left = a.filter(x => x.id !== action.ann.id);
+                            if (left.length === 0) setImageStatus(action.ann.image_id, 'pending');
+                            return left;
+                        });
                     } else if (action.type === 'delete') {
                         const res = await axios.post(`${API_URL}/annotations`, {
                             image_id: action.ann.image_id, class_name: action.ann.class_name,
@@ -512,9 +521,14 @@ const AnnotationWorkspace = ({ project, onProjectUpdated }) => {
                             annotation_type: action.ann.annotation_type, points: action.ann.points,
                         });
                         setAnnotations(a => [...a, res.data]);
+                        setImageStatus(action.ann.image_id, 'annotated');
                     } else if (action.type === 'delete') {
                         await axios.delete(`${API_URL}/annotations/${action.ann.id}`);
-                        setAnnotations(a => a.filter(x => x.id !== action.ann.id));
+                        setAnnotations(a => {
+                            const left = a.filter(x => x.id !== action.ann.id);
+                            if (left.length === 0) setImageStatus(action.ann.image_id, 'pending');
+                            return left;
+                        });
                     } else if (action.type === 'bbox') {
                         await axios.patch(`${API_URL}/annotations/${action.id}`, { bbox: action.newBbox });
                         setAnnotations(a => a.map(x => x.id === action.id ? { ...x, bbox: action.newBbox } : x));
@@ -742,6 +756,9 @@ Do you want to proceed?`;
         try {
             await axios.delete(`${API_URL}/annotations/${annId}`);
             if (ann) pushHistory({ type: 'delete', ann });
+            if (currentImage && annotations.filter(a => a.id !== annId).length === 0) {
+                setImageStatus(currentImage.id, 'pending');     // last box gone -> pending, like the server
+            }
             setAnnotations(prev => prev.filter(a => a.id !== annId));
             if (selectedAnnId === annId) setSelectedAnnId(null);
         } catch (e) {
@@ -819,7 +836,9 @@ Do you want to proceed?`;
         if (!currentImage || annotations.length === 0) return;
         if (!window.confirm(`Delete all ${annotations.length} annotation(s) on this image?`)) return;
         try {
-            await Promise.all(annotations.map(a => axios.delete(`${API_URL}/annotations/${a.id}`)));
+            // One request: parallel per-box deletes raced on the server and left the image 'annotated'.
+            await axios.post(`${API_URL}/images/${currentImage.id}/wipe`);
+            setImageStatus(currentImage.id, 'pending');
             setAnnotations([]);
             setSelectedAnnId(null);
             setHistory([]);
@@ -939,6 +958,22 @@ Do you want to proceed?`;
             setTimeout(() => setStatusMsg(null), 4000);
         } catch (e) {
             setError(e.response?.data?.detail || 'Bulk rotate failed');
+        }
+    };
+
+    // Shown images that carry no boxes but are still 'annotated' -> 'pending'.
+    const handleResetEmpty = async () => {
+        const ids = visibleImages.filter(i => i.status !== 'pending').map(i => i.id);
+        if (ids.length === 0) { window.alert('Nothing to reset: every shown image is already pending.'); return; }
+        if (!window.confirm(`Check ${ids.length} shown image(s) and set those with NO boxes back to pending?\n\n(Images you marked as "empty / no objects" on purpose would also go back to pending.)`)) return;
+        try {
+            const res = await axios.post(`${API_URL}/images/project/${project.id}/reset-empty`, { image_ids: ids });
+            const set = new Set(res.data.reset);
+            setImages(prev => prev.map(im => (set.has(im.id) ? { ...im, status: 'pending' } : im)));
+            setStatusMsg(`${set.size} image(s) set to pending`);
+            setTimeout(() => setStatusMsg(null), 4000);
+        } catch (e) {
+            setError(e.response?.data?.detail || 'Reset failed');
         }
     };
 
@@ -1731,7 +1766,7 @@ Do you want to proceed?`;
                                 </div>
                             )}
                             <ImageFilterBar filter={imgFilter} onChange={setImgFilter}
-                                total={images.length} shown={visibleImages.length} counts={orientationCounts} onReview={handleReviewFiltered} onRotate={handleRotateFiltered} onCheckMismatch={handleCheckMismatch} />
+                                total={images.length} shown={visibleImages.length} counts={orientationCounts} onReview={handleReviewFiltered} onRotate={handleRotateFiltered} onCheckMismatch={handleCheckMismatch} onResetEmpty={handleResetEmpty} />
                             {visibleImages.map(img => {
                                 const isSuggested = suggestedImageIds?.has(String(img.id));
                                 return (

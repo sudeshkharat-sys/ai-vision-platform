@@ -49,7 +49,7 @@ export function filterImages(images, f) {
 
 const field = { fontSize: 12, padding: '4px 6px', borderRadius: 6, border: '1px solid #ddd', minWidth: 0 };
 
-export default function ImageFilterBar({ filter, onChange, total, shown, counts, onReview, onRotate, onCheckMismatch }) {
+export default function ImageFilterBar({ filter, onChange, total, shown, counts, onReview, onRotate, onCheckMismatch, onResetEmpty }) {
     const set = (k, v) => onChange({ ...filter, [k]: v });
     return (
         <div style={{ padding: '6px 10px', borderBottom: '1px solid #eee', display: 'grid', gap: 5 }}>
@@ -115,6 +115,10 @@ export default function ImageFilterBar({ filter, onChange, total, shown, counts,
             {onCheckMismatch && (
                 <button style={{ ...field, cursor: 'pointer' }} onClick={onCheckMismatch}
                     title="Finds images whose picture is landscape/portrait the other way round than their labels">Check picture vs label mismatch</button>
+            )}
+            {onResetEmpty && shown > 0 && isFilterActive(filter) && (
+                <button style={{ ...field, cursor: 'pointer' }} onClick={onResetEmpty}
+                    title="Shown images that have no boxes but still say annotated go back to pending">Reset shown with no boxes → pending</button>
             )}
             {onRotate && shown > 0 && isFilterActive(filter) && (
                 <button style={{ ...field, cursor: 'pointer' }} onClick={onRotate}
