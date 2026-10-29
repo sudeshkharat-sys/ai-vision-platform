@@ -1,11 +1,11 @@
 import React from 'react';
 
 export const DEFAULT_IMAGE_FILTER = {
-    name: '', nameMode: 'contains', orientation: 'all', status: 'all', minW: '', maxW: '', sort: 'upload',
+    name: '', nameMode: 'contains', orientation: 'all', status: 'all', minW: '', maxW: '', from: '', to: '', sort: 'upload',
 };
 
 export const isFilterActive = (f) =>
-    !!f.name || f.orientation !== 'all' || f.status !== 'all' || f.minW !== '' || f.maxW !== '' || f.sort !== 'upload';
+    !!f.name || f.orientation !== 'all' || f.status !== 'all' || f.minW !== '' || f.maxW !== '' || f.from !== '' || f.to !== '' || f.sort !== 'upload';
 
 export const orientationOf = (img) => {
     if (!img.width || !img.height) return 'square';
@@ -23,11 +23,16 @@ export function filterImages(images, f) {
         if (q && !(f.nameMode === 'starts' ? fn.startsWith(q) : f.nameMode === 'ends' ? fn.replace(/\.[^.]+$/, '').endsWith(q) || fn.endsWith(q) : fn.includes(q))) return false;
         if (f.orientation !== 'all' && orientationOf(img) !== f.orientation) return false;
         if (f.status !== 'all' && img.status !== f.status) return false;
+        if (f.from || f.to) {
+            const d = (img.created_at || '').slice(0, 10);          // upload date, YYYY-MM-DD
+            if (!d || (f.from && d < f.from) || (f.to && d > f.to)) return false;
+        }
         if (minW != null && img.width < minW) return false;
         if (maxW != null && img.width > maxW) return false;
         return true;
     });
     const by = {
+        date: (a, b) => (a.created_at || '').localeCompare(b.created_at || ''),
         name: (a, b) => (a.filename || '').localeCompare(b.filename || '', undefined, { numeric: true }),
         width: (a, b) => a.width - b.width,
         height: (a, b) => a.height - b.height,
@@ -74,9 +79,14 @@ export default function ImageFilterBar({ filter, onChange, total, shown, counts,
                 <input style={{ ...field, width: '50%' }} type="number" min="0" placeholder="max width px"
                     value={filter.maxW} onChange={e => set('maxW', e.target.value)} />
             </div>
+            <div style={{ display: 'flex', gap: 5 }} title="Upload date">
+                <input style={{ ...field, width: '50%' }} type="date" value={filter.from} onChange={e => set('from', e.target.value)} />
+                <input style={{ ...field, width: '50%' }} type="date" value={filter.to} onChange={e => set('to', e.target.value)} />
+            </div>
             <div style={{ display: 'flex', gap: 5, alignItems: 'center' }}>
                 <select style={{ ...field, flex: 1 }} value={filter.sort} onChange={e => set('sort', e.target.value)}>
                     <option value="upload">Sort: upload order</option>
+                    <option value="date">Sort: upload date</option>
                     <option value="name">Sort: name</option>
                     <option value="width">Sort: width</option>
                     <option value="height">Sort: height</option>
