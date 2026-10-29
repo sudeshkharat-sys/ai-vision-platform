@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import axios from 'axios';
 import { Stage, Layer, Rect, Text, Image, Group, Transformer, Line, Circle } from 'react-konva';
 import useImage from 'use-image';
@@ -18,6 +18,7 @@ import SegTrainingPanel from './SegTrainingPanel';
 import ClassifierTrainingPanel from './ClassifierTrainingPanel';
 import DataSegmentsPanel from './DataSegmentsPanel';
 import TrainingHub from './TrainingHub';
+import ImageFilterBar, { DEFAULT_IMAGE_FILTER, filterImages, orientationOf } from './ImageFilterBar';
 import './AnnotationWorkspace.css';
 import { Sparkles, AlertTriangle, X, Upload, Image as ImageIcon, Check, ArrowLeft, ArrowRight, Brain, Rocket, Eye, Target, Tag, Package, Film, Undo2, Redo2, ZoomIn, ZoomOut, Maximize2, Trash2, ImageOff, RotateCw, RotateCcw, Grid3x3, Wand2, Square, PenTool, RefreshCw, Scissors, Copy, ClipboardPaste, Info } from 'lucide-react';
 
@@ -389,6 +390,14 @@ const AnnotationWorkspace = ({ project, onProjectUpdated }) => {
     }, []);
 
     // ── Grid overlay + fine rotation ─────────────────────────────
+    const [imgFilter, setImgFilter] = useState(DEFAULT_IMAGE_FILTER);
+    // Sidebar list + prev/next follow the filter; the data itself is untouched.
+    const visibleImages = useMemo(() => filterImages(images, imgFilter), [images, imgFilter]);
+    const orientationCounts = useMemo(() => {
+        const c = { landscape: 0, portrait: 0, square: 0 };
+        images.forEach(i => { c[orientationOf(i)] += 1; });
+        return c;
+    }, [images]);
     const [showGrid, setShowGrid] = useState(false);
     const [gridSpacing, setGridSpacing] = useState(50); // image pixels between lines
     const [previewAngle, setPreviewAngle] = useState(0); // live rotation preview (degrees, CW+)
@@ -1008,12 +1017,12 @@ Do you want to proceed?`;
     }, []);
 
     const handleNavigateImage = (direction) => {
-        if (!currentImage || images.length === 0) return;
-        const idx = images.findIndex(img => img.id === currentImage.id);
-        if (idx === -1) return;
+        if (!currentImage || visibleImages.length === 0) return;
+        const idx = visibleImages.findIndex(img => img.id === currentImage.id);
+        if (idx === -1) { handleImageClick(visibleImages[0]); return; }   // current one is filtered out
         const nextIdx = direction === 'next' ? idx + 1 : idx - 1;
-        if (nextIdx < 0 || nextIdx >= images.length) return;
-        handleImageClick(images[nextIdx]);
+        if (nextIdx < 0 || nextIdx >= visibleImages.length) return;
+        handleImageClick(visibleImages[nextIdx]);
     };
 
     const handleImageClick = (image) => {
@@ -1630,7 +1639,9 @@ Do you want to proceed?`;
                                     <button className="al-filter-clear" onClick={() => setSuggestedImageIds(null)}>Clear</button>
                                 </div>
                             )}
-                            {images.map(img => {
+                            <ImageFilterBar filter={imgFilter} onChange={setImgFilter}
+                                total={images.length} shown={visibleImages.length} counts={orientationCounts} />
+                            {visibleImages.map(img => {
                                 const isSuggested = suggestedImageIds?.has(String(img.id));
                                 return (
                                 <div
@@ -1640,6 +1651,7 @@ Do you want to proceed?`;
                                 >
                                     <span className="image-item-dot"></span>
                                     <span className="image-item-name">{img.filename}</span>
+                                    <span style={{ fontSize: 10, color: '#999', whiteSpace: 'nowrap' }} title={orientationOf(img)}>{img.width}×{img.height}</span>
                                     {isSuggested && <span className="image-item-al-badge"><Target size={9} /></span>}
                                     <span className={`image-item-status status-${img.status}`}>
                                         {img.status}
@@ -1678,16 +1690,16 @@ Do you want to proceed?`;
                                 <button
                                     className="btn-toolbar"
                                     onClick={() => handleNavigateImage('prev')}
-                                    disabled={images.findIndex(img => img.id === currentImage.id) <= 0}
+                                    disabled={visibleImages.findIndex(img => img.id === currentImage.id) <= 0}
                                     title="Previous image (←)"
                                 ><ArrowLeft size={14} /></button>
                                 <span className="canvas-nav-count">
-                                    {images.findIndex(img => img.id === currentImage.id) + 1} / {images.length}
+                                    {visibleImages.findIndex(img => img.id === currentImage.id) + 1} / {visibleImages.length}
                                 </span>
                                 <button
                                     className="btn-toolbar"
                                     onClick={() => handleNavigateImage('next')}
-                                    disabled={images.findIndex(img => img.id === currentImage.id) >= images.length - 1}
+                                    disabled={visibleImages.findIndex(img => img.id === currentImage.id) >= visibleImages.length - 1}
                                     title="Next image (→)"
                                 ><ArrowRight size={14} /></button>
                             </div>

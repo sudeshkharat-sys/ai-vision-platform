@@ -5,6 +5,7 @@ import './ProjectList.css';
 import { API_URL } from '../config';
 import { FolderOpen, Tag, Plus, X, Trash2, AlertTriangle, ArrowRight, Calendar, Grid3X3, Sparkles, DatabaseZap, Copy, Wand2 } from 'lucide-react';
 import logoImg from '../logo.png';
+import TestingPanel from './TestingPanel';
 
 /* ── Per-project gradient palette ─────────────────────────────── */
 const CARD_PALETTES = [
@@ -404,6 +405,8 @@ const ProjectList = ({ onProjectSelect, user }) => {
         }
     };
 
+    const [dashTab, setDashTab] = useState('training');   // 'training' | 'testing'
+
     const firstName = user?.name?.split(' ')[0] || 'there';
     const totalClasses = projects.reduce((s, p) => s + (p.classes?.length || 0), 0);
 
@@ -468,6 +471,19 @@ const ProjectList = ({ onProjectSelect, user }) => {
             {/* ── Body ─────────────────────────────────────────── */}
             <div className="pl-body">
 
+                <div className="pl-tabs" style={{ display: 'flex', gap: 8, borderBottom: '1px solid #e5e5e5' }}>
+                    {[['training', 'Training panel'], ['testing', 'Testing panel']].map(([k, label]) => (
+                        <button key={k} onClick={() => setDashTab(k)} style={{
+                            background: 'none', border: 0, padding: '10px 20px', fontSize: 14, fontWeight: 700, cursor: 'pointer',
+                            color: dashTab === k ? '#dc143c' : '#888',
+                            borderBottom: dashTab === k ? '3px solid #dc143c' : '3px solid transparent',
+                        }}>{label}</button>
+                    ))}
+                </div>
+
+                {dashTab === 'testing' && <TestingPanel projects={projects} />}
+
+                {dashTab === 'training' && <>
                 {/* Error banner */}
                 {error && (
                     <div className="pl-error">
@@ -575,6 +591,7 @@ const ProjectList = ({ onProjectSelect, user }) => {
                         </div>
                     </>
                 )}
+                </>}
             </div>
         </div>
     );

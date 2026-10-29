@@ -1,0 +1,39 @@
+/* Testing panel (dashboard tab 2) — same light crimson theme as ProjectList */
+.tp-root { display: flex; flex-direction: column; gap: 18px; }
+.tp-card { background: #fff; border: 1px solid #e5e5e5; border-radius: 14px; padding: 18px 20px; }
+.tp-card h3 { margin: 0 0 4px; font-size: 15px; color: #222; }
+.tp-sub { margin: 0 0 12px; font-size: 12.5px; color: #888; }
+.tp-row { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; }
+.tp-field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: #666; }
+.tp-field input, .tp-field select { padding: 7px 9px; border: 1px solid #ddd; border-radius: 8px; font-size: 13px; min-width: 150px; background: #fff; }
+.tp-field input[type=number] { min-width: 80px; width: 90px; }
+.tp-btn { background: #dc143c; color: #fff; border: 0; border-radius: 8px; padding: 8px 16px; font-size: 13px; font-weight: 600; cursor: pointer; }
+.tp-btn:disabled { opacity: .45; cursor: not-allowed; }
+.tp-btn--ghost { background: #fff; color: #dc143c; border: 1px solid #dc143c; }
+.tp-tabs { display: flex; gap: 6px; border-bottom: 1px solid #e5e5e5; }
+.tp-tab { background: none; border: 0; padding: 9px 16px; font-size: 13px; font-weight: 600; color: #888; cursor: pointer; border-bottom: 2px solid transparent; }
+.tp-tab--on { color: #dc143c; border-bottom-color: #dc143c; }
+.tp-err { background: #fdecef; color: #b0102f; border-radius: 8px; padding: 8px 12px; font-size: 13px; }
+.tp-note { font-size: 12px; color: #888; }
+.tp-progress { height: 8px; background: #eee; border-radius: 4px; overflow: hidden; margin: 10px 0 4px; }
+.tp-progress > div { height: 100%; background: #dc143c; transition: width .3s; }
+.tp-tiles { display: flex; flex-wrap: wrap; gap: 10px; margin: 12px 0; }
+.tp-tile { border: 1px solid #eee; border-radius: 10px; padding: 8px 14px; min-width: 100px; }
+.tp-tile b { display: block; font-size: 20px; color: #222; }
+.tp-tile span { font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: .05em; }
+.tp-tile--bad b { color: #dc143c; }
+.tp-tile--good b { color: #1a9d55; }
+.tp-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 12px; margin-top: 10px; }
+.tp-thumb { border: 1px solid #e5e5e5; border-radius: 10px; overflow: hidden; cursor: pointer; background: #fafafa; }
+.tp-thumb img { width: 100%; display: block; aspect-ratio: 4/3; object-fit: cover; }
+.tp-thumb div { padding: 6px 9px; font-size: 12px; color: #444; }
+.tp-thumb--bad { border-color: #f1a5b3; }
+.tp-tag { display: inline-block; font-size: 10.5px; padding: 1px 6px; border-radius: 8px; background: #fdecef; color: #b0102f; margin-right: 4px; }
+.tp-results { display: grid; gap: 14px; margin-top: 12px; }
+.tp-result img { max-width: 100%; border-radius: 8px; border: 1px solid #e5e5e5; }
+.tp-modal { position: fixed; inset: 0; background: rgba(0,0,0,.6); z-index: 1000; display: flex; align-items: center; justify-content: center; padding: 20px; }
+.tp-modal-box { background: #fff; border-radius: 14px; max-width: 980px; width: 100%; max-height: 92vh; overflow: auto; padding: 16px; }
+.tp-overlay { position: relative; display: block; }
+.tp-overlay img { width: 100%; display: block; }
+.tp-overlay svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+.tp-legend { font-size: 12px; margin: 8px 0; color: #555; }

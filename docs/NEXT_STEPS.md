@@ -12,6 +12,11 @@ Branch: `claude/exe-update-data-safety-plk61b`. App-side notes: `NEXT_STEPS.md` 
 - Review: "Auto-annotated only" filter. Delete key removes the current image. Imports mark images with boxes as annotated.
 - Project copy / duplicate fixed for video-frame images (subfolder paths).
 
+- **Testing panel** (dashboard tab 2): test a project/uploaded model on images, videos, or the project's own labelled data
+  (pass/fail per image, failed list with labels vs prediction, "send failed images to a new project" incl. the tested
+  weights as custom weights for retraining). Detector, segmentation and classifier (classifier vs Data Segment labels).
+- Workspace image list filters: name search, landscape/portrait/square, status, width range, sort by name/size/ratio.
+
 ## Key finding
 Classifier validation was 100% but on-site results fail. Frames from the same video are near-identical and the split
 is **by image**, so validation measures memory, not generalisation. (Plus low-res phone frames, Preprocess ON in
