@@ -47,7 +47,7 @@ from ..models.annotation import Annotation
 from ..models.image import Image
 from ..models.project import Project
 from ..models.user import User
-from ..services.cls_model import _load_path, load_cls_meta, predict_crop_cls
+from ..services.cls_model import CLS_FILES, _load_path, cls_dir, load_cls_meta, predict_crop_cls
 from ..services.data_segments import assign_segments, normalize_segments
 from ..services.det_model import det_model_uses_preprocess, resolve_det_model_path
 from ..services.image_files import resolve_image_file
@@ -57,7 +57,7 @@ from ..services.test_eval import score_classification, score_detections, summari
 router = APIRouter(prefix="/testing", tags=["testing"])
 
 SOURCES = ("detector", "detector_main", "detector_seed", "segmentation", "seg_main", "seg_seed",
-           "classifier", "uploaded")
+           "seg_legacy", "char_only", "classifier", "uploaded")
 _jobs: dict = {}            # (project_id, "video" | "data") -> status dict
 _job_lock = threading.Lock()
 
@@ -109,6 +109,10 @@ def _resolve(pid: str, source: str, preprocess: Optional[bool] = None):
             p = base / ("seg_main_best.pt" if source == "seg_main" else "seg_seed_best.pt")
         p = p if p and p.exists() else None
         return p, (seg_model_uses_preprocess(p) if p else False)
+    if source in ("seg_legacy", "char_only"):
+        p = base / ("seg_best.pt" if source == "seg_legacy" else "seed_char_only_best.pt")
+        p = p if p.exists() else None
+        return p, (det_model_uses_preprocess(p) if (p and source == "char_only") else bool(p))
     if source.startswith("custom:"):
         name = Path(source[7:]).name                      # no path tricks
         p = _custom_dir(pid) / name
@@ -186,13 +190,29 @@ async def sources(project_id: str, current_user: User = Depends(get_current_user
     base = _pdir(project_id)
     meta = load_cls_meta(project_id)
     up = _uploaded_meta(project_id)
-    opts = [
-        ("detector_main", "Detector - Main", (base / "main_best.pt").exists(), "Detection"),
-        ("detector_seed", "Detector - Seed", (base / "seed_best.pt").exists(), "Detection"),
-        ("seg_main", "Segmentation - Main", (base / "seg_main_best.pt").exists(), "Segmentation"),
-        ("seg_seed", "Segmentation - Seed", (base / "seg_seed_best.pt").exists(), "Segmentation"),
-        ("classifier", "Classifier (crop + classify)", meta is not None, "Classifier"),
+    def info(path):
+        if not path.exists():
+            return None
+        st = path.stat()
+        return f"{st.st_size / (1024 * 1024):.1f} MB, {time.strftime('%Y-%m-%d', time.localtime(st.st_mtime))}"
+
+    # same models the Models section lists
+    files = [
+        ("detector_main", "Detector - Main", base / "main_best.pt", "Detection"),
+        ("detector_seed", "Detector - Seed", base / "seed_best.pt", "Detection"),
+        ("char_only", "Character locator (class-agnostic; every box is 'char')", base / "seed_char_only_best.pt", "Detection"),
+        ("seg_main", "Segmentation - Main", base / "seg_main_best.pt", "Segmentation"),
+        ("seg_seed", "Segmentation - Seed", base / "seg_seed_best.pt", "Segmentation"),
+        ("seg_legacy", "Segmentation - legacy", base / "seg_best.pt", "Segmentation"),
     ]
+    opts = []
+    for k, l, path, g in files:
+        i = info(path)
+        if k in ("char_only", "seg_legacy") and i is None:
+            continue                                   # only show these rare ones when they exist
+        opts.append((k, f"{l}{' (' + i + ')' if i else ''}", i is not None, g))
+    ci = info(cls_dir(project_id) / CLS_FILES["classifier"])
+    opts.append(("classifier", f"Classifier (crop + classify){' (' + ci + ')' if ci else ''}", meta is not None, "Classifier"))
     cd = _custom_dir(project_id)
     if cd.is_dir():
         opts += [(f"custom:{f.name}", f"Custom weights - {f.name}", True, "Custom / uploaded")
