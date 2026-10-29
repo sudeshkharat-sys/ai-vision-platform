@@ -47,3 +47,18 @@ def test_classification():
     assert score_classification("x", {"status": "ok", "state": "x"})["passed"]
     assert not score_classification("x", {"status": "uncertain", "state": "x"})["passed"]
     assert not score_classification("x", {"status": "ok", "state": "y"})["passed"]
+
+
+def test_variants_keep_shape_and_count():
+    import numpy as np
+    vp = pathlib.Path(__file__).resolve().parents[1] / "app/services/test_variants.py"
+    sp = importlib.util.spec_from_file_location("test_variants", vp)
+    tv = importlib.util.module_from_spec(sp)
+    sp.loader.exec_module(tv)
+    img = (np.random.default_rng(1).random((90, 160, 3)) * 255).astype(np.uint8)
+    for n in (0, 1, 2, 3, 9):
+        out = tv.make_variants(img, n)
+        assert len(out) == min(n, 3)
+        assert all(o.shape == img.shape and o.dtype == np.uint8 for o in out)
+    a, b = tv.make_variants(img, 2)
+    assert not np.array_equal(a, img) and not np.array_equal(b, img)

@@ -279,12 +279,14 @@ function DataTest({ projectId, projectName, opts, sourceReady }) {
     const [newName, setNewName] = useState('');
     const [sent, setSent] = useState(null);
     const [sending, setSending] = useState(false);
+    const [variants, setVariants] = useState(2);
+    const [addedBack, setAddedBack] = useState(null);
     const running = st?.state === 'running';
 
     const loadResults = useCallback(() => {
         axios.get(`${API_URL}/testing/${projectId}/training-data/results`).then(r => setData(r.data)).catch(() => setData(null));
     }, [projectId]);
-    useEffect(() => { setData(null); setSent(null); setSt(null); loadResults(); }, [projectId, loadResults]);
+    useEffect(() => { setData(null); setSent(null); setAddedBack(null); setSt(null); loadResults(); }, [projectId, loadResults]);
     useEffect(() => { setNewName(`${projectName} - failed`); }, [projectName]);
 
     usePolling(`${API_URL}/testing/${projectId}/training-data/status`, true, (d) => {
@@ -292,7 +294,7 @@ function DataTest({ projectId, projectName, opts, sourceReady }) {
     }, 1000);
 
     const start = async () => {
-        setErr(null); setSent(null);
+        setErr(null); setSent(null); setAddedBack(null);
         try {
             await axios.post(`${API_URL}/testing/${projectId}/training-data/run`, {
                 source: opts.source, conf: opts.conf, iou, allow_extra: allowExtra, preprocess: opts.preprocess,
@@ -301,6 +303,14 @@ function DataTest({ projectId, projectName, opts, sourceReady }) {
             setData(null);
             setSt({ state: 'running', done: 0, total: 1, failed: 0 });
         } catch (e) { setErr(errMsg(e)); }
+    };
+    const addBack = async () => {
+        if (!window.confirm(`Add the ${s.failed} failed images back into THIS project (original + ${variants} variant${variants === 1 ? '' : 's'} each)?\n\nThey are named failed_<model>_<date>_<name> and stored in their own folder.`)) return;
+        setSending(true); setErr(null);
+        try {
+            const r = await axios.post(`${API_URL}/testing/${projectId}/training-data/add-back`, { variants });
+            setAddedBack(r.data);
+        } catch (e) { setErr(errMsg(e)); } finally { setSending(false); }
     };
     const send = async () => {
         setSending(true); setErr(null);
@@ -370,6 +380,22 @@ function DataTest({ projectId, projectName, opts, sourceReady }) {
                             </label>
                             <button className="tp-btn" disabled={sending || !newName.trim()} onClick={send}>Create project &amp; send</button>
                         </div>
+                    )}
+                    {s.failed > 0 && (
+                        <div className="tp-row" style={{ background: '#fafafa', padding: 12, borderRadius: 10, marginTop: 8 }}>
+                            <label className="tp-field" title="Brightness / blur variants. Labels stay exactly the same; nothing is flipped or rotated.">Variants per image
+                                <select value={variants} onChange={e => setVariants(Number(e.target.value))}>
+                                    {[0, 1, 2, 3].map(n => <option key={n} value={n}>{n}{n === 2 ? ' (recommended)' : ''}</option>)}
+                                </select>
+                            </label>
+                            <button className="tp-btn" disabled={sending} onClick={addBack}>Add failed images back to this project</button>
+                        </div>
+                    )}
+                    {addedBack && (
+                        <p className="tp-note" style={{ color: '#1a9d55' }}>
+                            Added {addedBack.added} images ({addedBack.images} failed images, original{addedBack.variants ? ` + ${addedBack.variants} variants` : ''}) to this project{addedBack.missing_files ? `; ${addedBack.missing_files} files missing` : ''}.
+                            In the workspace filter by name “starts with” <b>{addedBack.name_prefix}</b> to find them. Train again from the previous weights.
+                        </p>
                     )}
                     {sent && (
                         <p className="tp-note" style={{ color: '#1a9d55' }}>

@@ -52,6 +52,7 @@ from ..services.data_segments import assign_segments, normalize_segments
 from ..services.det_model import det_model_uses_preprocess, resolve_det_model_path
 from ..services.image_files import resolve_image_file
 from ..services.seg_model import resolve_seg_model_path, seg_model_uses_preprocess
+from ..services.test_variants import make_variants
 from ..services.test_eval import score_classification, score_detections, summarize
 
 router = APIRouter(prefix="/testing", tags=["testing"])
@@ -635,3 +636,79 @@ async def send_failed(project_id: str, body: SendFailedBody, current_user: User 
             weights_copied = None
     return {"target_project_id": target.id, "target_name": target.name, "copied": copied,
             "missing_files": missing, "weights": weights_copied}
+
+
+class AddBackBody(BaseModel):
+    variants: int = 2                  # label-safe copies per failed image (0..3), on top of the original
+    image_ids: Optional[list] = None   # default: every failed image of the last test
+
+
+@router.post("/{project_id}/training-data/add-back")
+async def add_failed_back(project_id: str, body: AddBackBody, current_user: User = Depends(get_current_user),
+                          db: AsyncSession = Depends(get_db)):
+    """Add the failed images back into THIS project as new images named
+    ``failed_<model>_<date>_<name>`` (stored under failed_test/<run>/), each
+    with the original plus ``variants`` brightness / blur variants. Labels
+    are copied unchanged (variants never move or flip anything). An image
+    that was already added back after this test is skipped."""
+    await get_owned_project(project_id, current_user, db)
+    f = _data_results_file(project_id)
+    if not f.exists():
+        raise HTTPException(status_code=404, detail="No finished test yet")
+    data = json.loads(f.read_text())
+    failed = {r["id"] for r in data["rows"] if not r["passed"]}
+    if body.image_ids is not None:
+        failed &= set(body.image_ids)
+    already = set(data.get("added_back", []))
+    todo = failed - already
+    if not todo:
+        raise HTTPException(status_code=400, detail="No failed images to add (none failed, or all were already added back after this test)")
+
+    imgs = (await db.execute(select(Image).where(Image.project_id == project_id, Image.id.in_(todo)))).scalars().all()
+    anns = defaultdict(list)
+    for a in (await db.execute(select(Annotation).where(Annotation.image_id.in_([i.id for i in imgs])))).scalars().all():
+        anns[a.image_id].append(a)
+
+    tag = "".join(c if c.isalnum() else "_" for c in str(data.get("source", "model")).replace("custom:", "custom_"))[:24]
+    stamp = time.strftime("%Y%m%d_%H%M")
+    run = f"{tag}_{stamp}"
+    dest_dir = settings.upload_dir / project_id / "failed_test" / run
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    nvar = max(0, min(int(body.variants), 3))
+
+    def work():
+        made = []        # (src Image, display name, saved file name)
+        missing = 0
+        for n, img in enumerate(imgs):
+            src = resolve_image_file(project_id, img.filepath)
+            pic = cv2.imread(str(src)) if src else None
+            if pic is None:
+                missing += 1
+                continue
+            versions = [("", pic)] + [(f"_v{i + 1}", v) for i, v in enumerate(make_variants(pic, nvar, seed=n))]
+            for suffix, arr in versions:
+                fname = f"{uuid.uuid4()}.jpg"
+                cv2.imwrite(str(dest_dir / fname), arr, [cv2.IMWRITE_JPEG_QUALITY, 95])
+                stem = Path(img.filename).stem
+                made.append((img, f"failed_{tag}_{stamp}_{stem}{suffix}.jpg", fname))
+        return made, missing
+
+    made, missing = await run_in_threadpool(work)
+    for img, display, fname in made:
+        new_img = Image(project_id=project_id, filename=display,
+                        filepath=f"/uploads/{project_id}/failed_test/{run}/{fname}",
+                        width=img.width, height=img.height, status="annotated" if anns.get(img.id) else img.status)
+        db.add(new_img)
+        await db.flush()
+        for a in anns.get(img.id, []):
+            db.add(Annotation(image_id=new_img.id, class_name=a.class_name,
+                              bbox=list(a.bbox) if a.bbox else None, source=a.source,
+                              annotation_type=a.annotation_type, points=list(a.points) if a.points else None,
+                              state=a.state))
+    await db.commit()
+
+    done_ids = {img.id for img, _, _ in made}
+    data["added_back"] = sorted(already | done_ids)
+    f.write_text(json.dumps(data))
+    return {"images": len(done_ids), "added": len(made), "variants": nvar, "missing_files": missing,
+            "name_prefix": f"failed_{tag}_{stamp}_"}
