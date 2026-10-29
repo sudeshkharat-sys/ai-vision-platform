@@ -39,7 +39,7 @@ export function filterImages(images, f) {
 
 const field = { fontSize: 12, padding: '4px 6px', borderRadius: 6, border: '1px solid #ddd', minWidth: 0 };
 
-export default function ImageFilterBar({ filter, onChange, total, shown, counts }) {
+export default function ImageFilterBar({ filter, onChange, total, shown, counts, onReview }) {
     const set = (k, v) => onChange({ ...filter, [k]: v });
     return (
         <div style={{ padding: '6px 10px', borderBottom: '1px solid #eee', display: 'grid', gap: 5 }}>
@@ -80,6 +80,10 @@ export default function ImageFilterBar({ filter, onChange, total, shown, counts 
                 )}
             </div>
             <div style={{ fontSize: 11, color: '#888' }}>Showing {shown} of {total}</div>
+            {onReview && shown > 0 && isFilterActive(filter) && (
+                <button style={{ ...field, cursor: 'pointer', background: '#dc143c', color: '#fff', border: 0, fontWeight: 600 }}
+                    onClick={onReview}>Send {shown} shown to Review</button>
+            )}
         </div>
     );
 }

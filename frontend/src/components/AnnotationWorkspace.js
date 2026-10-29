@@ -909,6 +909,15 @@ Do you want to proceed?`;
         setShowReviewPanel(true);
     };
 
+    // Filtered sidebar list -> ReviewPanel, restricted to exactly those images.
+    const handleReviewFiltered = () => {
+        const idSet = new Set(visibleImages.map(i => String(i.id)));
+        setReviewFilterIds(idSet);
+        setReviewFilterLabel(`Filtered list — ${idSet.size} image${idSet.size !== 1 ? 's' : ''}`);
+        setReviewFilterClassName(null);
+        setShowReviewPanel(true);
+    };
+
     // Called from LabelsPanel's "edit images" action — jump into ReviewPanel
     // showing only the images that use a specific class, so a class that's
     // failing detection can be renamed, re-boxed, or reassigned without
@@ -1640,7 +1649,7 @@ Do you want to proceed?`;
                                 </div>
                             )}
                             <ImageFilterBar filter={imgFilter} onChange={setImgFilter}
-                                total={images.length} shown={visibleImages.length} counts={orientationCounts} />
+                                total={images.length} shown={visibleImages.length} counts={orientationCounts} onReview={handleReviewFiltered} />
                             {visibleImages.map(img => {
                                 const isSuggested = suggestedImageIds?.has(String(img.id));
                                 return (
