@@ -2365,7 +2365,13 @@ Do you want to proceed?`;
                     onClose={() => setShowSegPanel(false)}
                 />
             )}
-            {showTestingHub && <TestingHub project={project} onClose={() => setShowTestingHub(false)} />}
+            {showTestingHub && <TestingHub project={project} onClose={() => setShowTestingHub(false)}
+                onReviewImages={(ids, label) => {
+                    setReviewFilterIds(new Set(ids.map(String)));
+                    setReviewFilterLabel(label);
+                    setReviewFilterClassName(null);
+                    setShowReviewPanel(true);
+                }} />}
             {showTrainingHub && (
                 <TrainingHub
                     project={project}

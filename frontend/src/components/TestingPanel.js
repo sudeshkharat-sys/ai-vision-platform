@@ -267,7 +267,7 @@ function Viewer({ row, source, onClose }) {
 }
 
 /* ── Mode 3: test on the project's own training data ─────────── */
-function DataTest({ projectId, projectName, opts, sourceReady }) {
+function DataTest({ projectId, projectName, opts, sourceReady, onReviewImages }) {
     const [iou, setIou] = useState(0.5);
     const [allowExtra, setAllowExtra] = useState(false);
     const [limit, setLimit] = useState('');
@@ -302,6 +302,20 @@ function DataTest({ projectId, projectName, opts, sourceReady }) {
             });
             setData(null);
             setSt({ state: 'running', done: 0, total: 1, failed: 0 });
+        } catch (e) { setErr(errMsg(e)); }
+    };
+    // Step 2: after fixing labels in Review, re-test only the failed images and fold the result in.
+    const retest = async () => {
+        const ids = (data?.rows || []).filter(r => !r.passed).map(r => r.id);
+        if (ids.length === 0) return;
+        setErr(null); setAddedBack(null);
+        try {
+            await axios.post(`${API_URL}/testing/${projectId}/training-data/run`, {
+                source: data.source, conf: data.options?.conf ?? opts.conf, iou: data.options?.iou ?? iou,
+                allow_extra: data.options?.allow_extra ?? allowExtra, preprocess: data.options?.preprocess ?? opts.preprocess,
+                cls_threshold: data.options?.cls_threshold ?? opts.cls_threshold, image_ids: ids, merge: true,
+            });
+            setSt({ state: 'running', done: 0, total: ids.length, failed: 0 });
         } catch (e) { setErr(errMsg(e)); }
     };
     const addBack = async () => {
@@ -374,21 +388,39 @@ function DataTest({ projectId, projectName, opts, sourceReady }) {
                     {data.stopped && <p className="tp-note">Stopped early — only the images tested so far are counted.</p>}
 
                     {s.failed > 0 && (
-                        <div className="tp-row" style={{ background: '#fafafa', padding: 12, borderRadius: 10 }}>
-                            <label className="tp-field">Send the {s.failed} failed images (with labels) to a new project
-                                <input style={{ width: 280 }} value={newName} onChange={e => setNewName(e.target.value)} />
-                            </label>
-                            <button className="tp-btn" disabled={sending || !newName.trim()} onClick={send}>Create project &amp; send</button>
-                        </div>
-                    )}
-                    {s.failed > 0 && (
-                        <div className="tp-row" style={{ background: '#fafafa', padding: 12, borderRadius: 10, marginTop: 8 }}>
-                            <label className="tp-field" title="Brightness / blur variants. Labels stay exactly the same; nothing is flipped or rotated.">Variants per image
-                                <select value={variants} onChange={e => setVariants(Number(e.target.value))}>
-                                    {[0, 1, 2, 3].map(n => <option key={n} value={n}>{n}{n === 2 ? ' (recommended)' : ''}</option>)}
-                                </select>
-                            </label>
-                            <button className="tp-btn" disabled={sending} onClick={addBack}>Add failed images back to this project</button>
+                        <div style={{ background: '#fafafa', padding: 12, borderRadius: 10 }}>
+                            <b style={{ fontSize: 13 }}>What to do with the {s.failed} failed images</b>
+                            <p className="tp-note" style={{ margin: '4px 0 8px' }}>
+                                A failure is not always the model's fault - sometimes the label is wrong. Check first, then retrain.
+                            </p>
+                            <div className="tp-row">
+                                {onReviewImages && (
+                                    <button className="tp-btn" onClick={() => onReviewImages(data.rows.filter(r => !r.passed).map(r => r.id), `Failed test - ${s.failed} images`)}>
+                                        1 · Review &amp; fix labels
+                                    </button>
+                                )}
+                                <button className="tp-btn tp-btn--ghost" disabled={running || !sourceReady} onClick={retest}
+                                    title="Runs the model again on just these images, using your corrected labels">
+                                    {onReviewImages ? '2 · ' : ''}Re-test the failed ones
+                                </button>
+                            </div>
+                            <p className="tp-note" style={{ margin: '10px 0 6px' }}>
+                                {onReviewImages ? '3 · ' : ''}Then add what <b>still</b> fails to training:
+                            </p>
+                            <div className="tp-row">
+                                <label className="tp-field" title="Brightness / blur variants. Labels stay exactly the same; nothing is flipped or rotated.">Variants per image
+                                    <select value={variants} onChange={e => setVariants(Number(e.target.value))}>
+                                        {[0, 1, 2, 3].map(n => <option key={n} value={n}>{n}{n === 2 ? ' (recommended)' : ''}</option>)}
+                                    </select>
+                                </label>
+                                <button className="tp-btn" disabled={sending} onClick={addBack}>Add failed images back to this project</button>
+                            </div>
+                            <div className="tp-row" style={{ marginTop: 10 }}>
+                                <label className="tp-field">…or send them to a new project
+                                    <input style={{ width: 260 }} value={newName} onChange={e => setNewName(e.target.value)} />
+                                </label>
+                                <button className="tp-btn tp-btn--ghost" disabled={sending || !newName.trim()} onClick={send}>Create project &amp; send</button>
+                            </div>
                         </div>
                     )}
                     {addedBack && (
@@ -437,7 +469,7 @@ function DataTest({ projectId, projectName, opts, sourceReady }) {
 }
 
 /* ── Panel ───────────────────────────────────────────────────── */
-export default function TestingPanel({ projects, fixedProject }) {
+export default function TestingPanel({ projects, fixedProject, onReviewImages }) {
     const [projectId, setProjectId] = useState(() => {
         if (fixedProject) return fixedProject.id;
         try { return sessionStorage.getItem('testing_project') || ''; } catch { return ''; }
@@ -483,7 +515,7 @@ export default function TestingPanel({ projects, fixedProject }) {
                             <button key={k} className={`tp-tab ${mode === k ? 'tp-tab--on' : ''}`} onClick={() => setMode(k)}>{l}</button>
                         ))}
                     </div>
-                    {mode === 'data' && <DataTest projectId={projectId} projectName={project?.name || ''} opts={opts} sourceReady={ready} />}
+                    {mode === 'data' && <DataTest projectId={projectId} projectName={project?.name || ''} opts={opts} sourceReady={ready} onReviewImages={onReviewImages} />}
                     {mode === 'images' && <ImageTest projectId={projectId} opts={opts} />}
                     {mode === 'video' && <VideoTest projectId={projectId} opts={opts} />}
                 </>
@@ -493,7 +525,7 @@ export default function TestingPanel({ projects, fixedProject }) {
 }
 
 /** Testing Hub: the same panel as a popup for the project open in the workspace. */
-export function TestingHub({ project, onClose }) {
+export function TestingHub({ project, onClose, onReviewImages }) {
     return (
         <div className="hub-overlay" onClick={onClose}>
             <div className="hub-modal" style={{ width: 980, background: '#f5f5f5' }} onClick={e => e.stopPropagation()}>
@@ -505,7 +537,8 @@ export function TestingHub({ project, onClose }) {
                     <button className="hub-icon-btn" onClick={onClose}>✕</button>
                 </div>
                 <div style={{ padding: 16 }}>
-                    <TestingPanel projects={[project]} fixedProject={project} />
+                    <TestingPanel projects={[project]} fixedProject={project}
+                        onReviewImages={onReviewImages && ((ids, label) => { onClose(); onReviewImages(ids, label); })} />
                 </div>
             </div>
         </div>

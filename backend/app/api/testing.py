@@ -436,6 +436,8 @@ class DataRunBody(BaseModel):
     preprocess: bool = False        # only for an uploaded model
     cls_threshold: float = 0.6
     limit: Optional[int] = None     # test only the first N images (quick check)
+    image_ids: Optional[list] = None   # test only these images (re-test after fixing labels)
+    merge: bool = False             # fold the new rows into the previous result instead of replacing it
 
 
 def _data_results_file(pid):
@@ -476,16 +478,22 @@ async def run_data_test(project_id: str, body: DataRunBody, current_user: User =
         imgs = [i for i in imgs if i.id in labels]
     else:
         imgs = [i for i in imgs if any(a["bbox"] for a in anns.get(i.id, []))]
+    if body.image_ids is not None:
+        wanted = set(body.image_ids)
+        imgs = [i for i in imgs if i.id in wanted]
     if body.limit:
         imgs = imgs[: body.limit]
-    if not imgs:
+    if not imgs and not (body.merge and body.image_ids):
         raise HTTPException(status_code=400, detail="No labelled images to test on")
 
     items = [{"id": i.id, "filename": i.filename, "filepath": i.filepath, "width": i.width, "height": i.height,
               "gts": [a for a in anns.get(i.id, []) if a["bbox"]], "label": labels.get(i.id)} for i in imgs]
     _jobs[key] = {"state": "running", "stop": False, "done": 0, "total": len(items), "failed": 0,
                   "source": body.source, "started": time.time()}
-    _data_results_file(project_id).unlink(missing_ok=True)
+    if body.merge and not _data_results_file(project_id).exists():
+        raise HTTPException(status_code=404, detail="No earlier test to re-test against")
+    if not body.merge:
+        _data_results_file(project_id).unlink(missing_ok=True)
     threading.Thread(target=_data_worker, daemon=True, args=(project_id, key, items, path, pre, body)).start()
     return {"started": True, "total": len(items)}
 
@@ -516,9 +524,19 @@ def _data_worker(pid, key, items, path, pre, o: DataRunBody):
             rows.append(row)
             _write_status(key, done=len(rows), failed=sum(1 for r in rows if not r["passed"]))
         stopped = _jobs[key].get("stop")
+        added_back = []
+        if o.merge:
+            # fold the re-tested images into the earlier result; images that were asked for but
+            # are no longer testable (labels removed) drop out of it
+            prev = json.loads(_data_results_file(pid).read_text())
+            redo = set(o.image_ids or [])
+            kept = [r for r in prev["rows"] if r["id"] not in redo]
+            rows = kept + rows
+            added_back = [i for i in prev.get("added_back", []) if i not in redo]   # changed images may be added again
         summary = summarize(rows)
         _data_results_file(pid).write_text(json.dumps({
-            "source": o.source, "options": o.model_dump(), "summary": summary, "rows": rows,
+            "source": o.source, "options": {**o.model_dump(), "image_ids": None, "merge": False},
+            "summary": summary, "rows": rows, "added_back": added_back,
             "finished": time.time(), "stopped": bool(stopped)}))
         _write_status(key, state="stopped" if stopped else "done", summary=summary, finished=time.time())
     except Exception as e:  # noqa: BLE001
