@@ -76,6 +76,19 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+
+@app.middleware("http")
+async def uploads_revalidate(request, call_next):
+    """Image files are rewritten in place (rotate, straighten), so browsers must
+    revalidate them (ETag / Last-Modified -> cheap 304) instead of showing a
+    stale cached copy next to labels that were already remapped."""
+    response = await call_next(request)
+    if request.url.path.startswith("/uploads/"):
+        response.headers["Cache-Control"] = "no-cache"
+    return response
+
+
 app.include_router(auth.router, prefix="/api/v1")
 app.include_router(projects.router, prefix="/api/v1")
 app.include_router(images.router, prefix="/api/v1")
