@@ -56,7 +56,8 @@ from ..services.test_eval import score_classification, score_detections, summari
 
 router = APIRouter(prefix="/testing", tags=["testing"])
 
-SOURCES = ("detector", "segmentation", "classifier", "uploaded")
+SOURCES = ("detector", "detector_main", "detector_seed", "segmentation", "seg_main", "seg_seed",
+           "classifier", "uploaded")
 _jobs: dict = {}            # (project_id, "video" | "data") -> status dict
 _job_lock = threading.Lock()
 
@@ -83,18 +84,43 @@ def _uploaded_meta(pid: str) -> Optional[dict]:
         return None
 
 
+def _custom_dir(pid: str) -> Path:
+    return _pdir(pid) / "custom_weights"
+
+
 def _resolve(pid: str, source: str, preprocess: Optional[bool] = None):
-    """(weights path | None, preprocess flag) for a box-producing source."""
-    if source == "detector":
-        p = resolve_det_model_path(pid)
+    """(weights path | None, preprocess flag) for a box-producing source.
+
+    source: detector (Main, else Seed) | detector_main | detector_seed |
+            segmentation (best) | seg_main | seg_seed | custom:<file.pt> | uploaded
+    """
+    base = _pdir(pid)
+    if source in ("detector", "detector_main", "detector_seed"):
+        if source == "detector":
+            p = resolve_det_model_path(pid)
+        else:
+            p = base / ("main_best.pt" if source == "detector_main" else "seed_best.pt")
+        p = p if p and p.exists() else None
         return p, (det_model_uses_preprocess(p) if p else False)
-    if source == "segmentation":
-        p = resolve_seg_model_path(pid)
+    if source in ("segmentation", "seg_main", "seg_seed"):
+        if source == "segmentation":
+            p = resolve_seg_model_path(pid)
+        else:
+            p = base / ("seg_main_best.pt" if source == "seg_main" else "seg_seed_best.pt")
+        p = p if p and p.exists() else None
         return p, (seg_model_uses_preprocess(p) if p else False)
+    if source.startswith("custom:"):
+        name = Path(source[7:]).name                      # no path tricks
+        p = _custom_dir(pid) / name
+        return (p if p.is_file() and p.suffix == ".pt" else None), bool(preprocess)
     if source == "uploaded":
         p = _uploaded_path(pid)
         return (p if p.exists() else None), bool(preprocess)
     raise HTTPException(status_code=400, detail=f"Unknown source '{source}'")
+
+
+def _valid_source(source: str) -> bool:
+    return source in SOURCES or source.startswith("custom:")
 
 
 def _preprocess(img, on: bool):
@@ -155,17 +181,25 @@ def _get_model(path: Path):
 @router.get("/{project_id}/sources")
 async def sources(project_id: str, current_user: User = Depends(get_current_user),
                   db: AsyncSession = Depends(get_db)):
+    """Every model that can be tested: [{key, label, available, group}]."""
     await get_owned_project(project_id, current_user, db)
-    det, seg = resolve_det_model_path(project_id), resolve_seg_model_path(project_id)
-    cls_ready = load_cls_meta(project_id) is not None
-    return {
-        "detector": {"available": det is not None, "file": det.name if det else None},
-        "segmentation": {"available": seg is not None, "file": seg.name if seg else None},
-        "classifier": {"available": cls_ready,
-                       "detail": (load_cls_meta(project_id) or {}).get("mode")},
-        "uploaded": {"available": _uploaded_meta(project_id) is not None,
-                     "meta": _uploaded_meta(project_id)},
-    }
+    base = _pdir(project_id)
+    meta = load_cls_meta(project_id)
+    up = _uploaded_meta(project_id)
+    opts = [
+        ("detector_main", "Detector - Main", (base / "main_best.pt").exists(), "Detection"),
+        ("detector_seed", "Detector - Seed", (base / "seed_best.pt").exists(), "Detection"),
+        ("seg_main", "Segmentation - Main", (base / "seg_main_best.pt").exists(), "Segmentation"),
+        ("seg_seed", "Segmentation - Seed", (base / "seg_seed_best.pt").exists(), "Segmentation"),
+        ("classifier", "Classifier (crop + classify)", meta is not None, "Classifier"),
+    ]
+    cd = _custom_dir(project_id)
+    if cd.is_dir():
+        opts += [(f"custom:{f.name}", f"Custom weights - {f.name}", True, "Custom / uploaded")
+                 for f in sorted(cd.glob("*.pt"))]
+    opts.append(("uploaded", f"Uploaded for testing{' - ' + up['filename'] if up else ''}", up is not None, "Custom / uploaded"))
+    return {"options": [{"key": k, "label": l, "available": a, "group": g} for k, l, a, g in opts],
+            "uploaded": {"available": up is not None, "meta": up}}
 
 
 @router.post("/{project_id}/model")
@@ -176,7 +210,7 @@ async def upload_model(project_id: str, file: UploadFile = File(...),
         raise HTTPException(status_code=400, detail="Upload a YOLO .pt file")
     d = _pdir(project_id)
     d.mkdir(parents=True, exist_ok=True)
-    tmp = d / "test_model.upload"
+    tmp = d / "test_model_tmp.pt"   # must end in .pt: Ultralytics picks the loader from the extension
     with open(tmp, "wb") as f:
         shutil.copyfileobj(file.file, f)
     try:
@@ -248,7 +282,7 @@ async def test_video(project_id: str, source: str = "detector", conf: float = 0.
     key = (project_id, "video")
     if _jobs.get(key, {}).get("state") == "running":
         raise HTTPException(status_code=409, detail="A video test is already running for this project")
-    if source not in SOURCES:
+    if not _valid_source(source):
         raise HTTPException(status_code=400, detail=f"Unknown source '{source}'")
     if source == "classifier":
         if load_cls_meta(project_id) is None:
@@ -394,7 +428,7 @@ async def run_data_test(project_id: str, body: DataRunBody, current_user: User =
     key = (project_id, "data")
     if _jobs.get(key, {}).get("state") == "running":
         raise HTTPException(status_code=409, detail="A test is already running for this project")
-    if body.source not in SOURCES:
+    if not _valid_source(body.source):
         raise HTTPException(status_code=400, detail=f"Unknown source '{body.source}'")
 
     path, pre = (None, False)
@@ -569,13 +603,13 @@ async def send_failed(project_id: str, body: SendFailedBody, current_user: User 
     await db.commit()
 
     weights_copied = None
-    if body.include_model and data.get("source") in ("detector", "segmentation", "uploaded"):
+    if body.include_model and data.get("source") != "classifier":
         try:
             wp, _ = _resolve(project_id, data["source"])
             if wp is not None:
                 wd = settings.model_dir.resolve() / target.id / "custom_weights"
                 wd.mkdir(parents=True, exist_ok=True)
-                weights_copied = f"tested_{data['source']}_{wp.name}"
+                weights_copied = "tested_" + "".join(c if c.isalnum() or c in "._-" else "_" for c in f"{data['source']}_{wp.name}")
                 shutil.copy2(wp, wd / weights_copied)
         except Exception:  # noqa: BLE001  (the images are the important part)
             weights_copied = None

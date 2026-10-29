@@ -3,12 +3,6 @@ import axios from 'axios';
 import { API_URL, BASE_URL } from '../config';
 import './TestingPanel.css';
 
-const SOURCE_LABELS = {
-    detector: 'Detector (project Main / Seed)',
-    segmentation: 'Segmentation model',
-    classifier: 'Classifier (crop + classify)',
-    uploaded: 'Uploaded .pt',
-};
 const pct = (v) => (v == null ? '–' : `${(v * 100).toFixed(1)}%`);
 const errMsg = (e) => e?.response?.data?.detail || e?.message || 'Request failed';
 
@@ -65,7 +59,9 @@ function SourceBar({ projectId, sources, reload, value, onChange }) {
             onChange({ ...value, source: 'uploaded' });
         } catch (e) { setErr(errMsg(e)); } finally { setBusy(false); }
     };
-    const avail = (k) => sources?.[k]?.available;
+    const options = sources?.options || [];
+    const groups = [...new Set(options.map(o => o.group))];
+    const needsPre = value.source === 'uploaded' || value.source.startsWith('custom:');
     return (
         <div className="tp-card">
             <h3>Model to test</h3>
@@ -73,10 +69,14 @@ function SourceBar({ projectId, sources, reload, value, onChange }) {
             <div className="tp-row">
                 <label className="tp-field">Model
                     <select value={value.source} onChange={e => onChange({ ...value, source: e.target.value })}>
-                        {Object.keys(SOURCE_LABELS).map(k => (
-                            <option key={k} value={k} disabled={!avail(k)}>
-                                {SOURCE_LABELS[k]}{avail(k) ? '' : ' — not available'}
-                            </option>
+                        {groups.map(g => (
+                            <optgroup key={g} label={g}>
+                                {options.filter(o => o.group === g).map(o => (
+                                    <option key={o.key} value={o.key} disabled={!o.available}>
+                                        {o.label}{o.available ? '' : ' — not trained'}
+                                    </option>
+                                ))}
+                            </optgroup>
                         ))}
                     </select>
                 </label>
@@ -90,7 +90,7 @@ function SourceBar({ projectId, sources, reload, value, onChange }) {
                             onChange={e => onChange({ ...value, cls_threshold: Number(e.target.value) })} />
                     </label>
                 )}
-                {value.source === 'uploaded' && (
+                {needsPre && (
                     <label className="tp-field" title="Tick if the model was trained on CLAHE-preprocessed images">Preprocess
                         <select value={value.preprocess ? '1' : '0'} onChange={e => onChange({ ...value, preprocess: e.target.value === '1' })}>
                             <option value="0">Off (default)</option><option value="1">On (CLAHE)</option>
@@ -101,7 +101,7 @@ function SourceBar({ projectId, sources, reload, value, onChange }) {
                     <input type="file" accept=".pt" disabled={busy} onChange={e => upload(e.target.files[0])} />
                 </label>
             </div>
-            {sources?.uploaded?.meta && (
+            {sources?.uploaded?.meta && value.source === 'uploaded' && (
                 <p className="tp-note">Uploaded: {sources.uploaded.meta.filename} ({sources.uploaded.meta.task}, {sources.uploaded.meta.classes.length} classes)</p>
             )}
             {err && <div className="tp-err">{err}</div>}
@@ -417,7 +417,7 @@ export default function TestingPanel({ projects, fixedProject }) {
         try { return sessionStorage.getItem('testing_project') || ''; } catch { return ''; }
     });
     const [mode, setMode] = useState('data');
-    const [opts, setOpts] = useState({ source: 'detector', conf: 0.25, preprocess: false, cls_threshold: 0.6 });
+    const [opts, setOpts] = useState({ source: 'detector_main', conf: 0.25, preprocess: false, cls_threshold: 0.6 });
     const [sources, reload] = useSources(projectId);
 
     useEffect(() => {
@@ -428,13 +428,15 @@ export default function TestingPanel({ projects, fixedProject }) {
     }, [projectId]);
     // fall back to a source that exists for the chosen project
     useEffect(() => {
-        if (!sources || sources[opts.source]?.available) return;
-        const first = ['detector', 'segmentation', 'classifier', 'uploaded'].find(k => sources[k]?.available);
-        if (first) setOpts(o => ({ ...o, source: first }));
+        const list = sources?.options;
+        if (!list || list.find(o => o.key === opts.source)?.available) return;
+        const first = list.find(o => o.available);            // order: Detector Main, Seed, Segmentation, Classifier, custom
+        if (first) setOpts(o => ({ ...o, source: first.key }));
     }, [sources, opts.source]);
 
     const project = fixedProject || projects.find(p => p.id === projectId);
-    const ready = !!sources?.[opts.source]?.available;
+    const current = sources?.options?.find(o => o.key === opts.source);
+    const ready = !!current?.available;
     return (
         <div className="tp-root">
             {!fixedProject && <div className="tp-card">
@@ -449,7 +451,7 @@ export default function TestingPanel({ projects, fixedProject }) {
             {projectId && (
                 <>
                     <SourceBar projectId={projectId} sources={sources} reload={reload} value={opts} onChange={setOpts} />
-                    {!ready && sources && <div className="tp-err">No usable model for “{SOURCE_LABELS[opts.source]}”. Train one in the Training panel or upload a .pt.</div>}
+                    {!ready && sources && <div className="tp-err">No usable model selected. Train one in the Training panel, pick custom weights, or upload a .pt.</div>}
                     <div className="tp-tabs">
                         {[['data', 'Training data'], ['images', 'Upload images'], ['video', 'Upload video']].map(([k, l]) => (
                             <button key={k} className={`tp-tab ${mode === k ? 'tp-tab--on' : ''}`} onClick={() => setMode(k)}>{l}</button>
