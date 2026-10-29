@@ -2366,6 +2366,7 @@ Do you want to proceed?`;
                 />
             )}
             {showTestingHub && <TestingHub project={project} onClose={() => setShowTestingHub(false)}
+                onImagesChanged={() => axios.get(`${API_URL}/images/project/${project.id}`).then(res => setImages(res.data)).catch(() => {})}
                 onReviewImages={(ids, label) => {
                     setReviewFilterIds(new Set(ids.map(String)));
                     setReviewFilterLabel(label);

@@ -267,7 +267,7 @@ function Viewer({ row, source, onClose }) {
 }
 
 /* ── Mode 3: test on the project's own training data ─────────── */
-function DataTest({ projectId, projectName, opts, sourceReady, onReviewImages }) {
+function DataTest({ projectId, projectName, opts, sourceReady, onReviewImages, onImagesChanged }) {
     const [iou, setIou] = useState(0.5);
     const [allowExtra, setAllowExtra] = useState(false);
     const [limit, setLimit] = useState('');
@@ -324,6 +324,7 @@ function DataTest({ projectId, projectName, opts, sourceReady, onReviewImages })
         try {
             const r = await axios.post(`${API_URL}/testing/${projectId}/training-data/add-back`, { variants });
             setAddedBack(r.data);
+            if (onImagesChanged) onImagesChanged();        // the workspace image list must reload to show them
         } catch (e) { setErr(errMsg(e)); } finally { setSending(false); }
     };
     const send = async () => {
@@ -469,7 +470,7 @@ function DataTest({ projectId, projectName, opts, sourceReady, onReviewImages })
 }
 
 /* ── Panel ───────────────────────────────────────────────────── */
-export default function TestingPanel({ projects, fixedProject, onReviewImages }) {
+export default function TestingPanel({ projects, fixedProject, onReviewImages, onImagesChanged }) {
     const [projectId, setProjectId] = useState(() => {
         if (fixedProject) return fixedProject.id;
         try { return sessionStorage.getItem('testing_project') || ''; } catch { return ''; }
@@ -515,7 +516,7 @@ export default function TestingPanel({ projects, fixedProject, onReviewImages })
                             <button key={k} className={`tp-tab ${mode === k ? 'tp-tab--on' : ''}`} onClick={() => setMode(k)}>{l}</button>
                         ))}
                     </div>
-                    {mode === 'data' && <DataTest projectId={projectId} projectName={project?.name || ''} opts={opts} sourceReady={ready} onReviewImages={onReviewImages} />}
+                    {mode === 'data' && <DataTest projectId={projectId} projectName={project?.name || ''} opts={opts} sourceReady={ready} onReviewImages={onReviewImages} onImagesChanged={onImagesChanged} />}
                     {mode === 'images' && <ImageTest projectId={projectId} opts={opts} />}
                     {mode === 'video' && <VideoTest projectId={projectId} opts={opts} />}
                 </>
@@ -525,7 +526,7 @@ export default function TestingPanel({ projects, fixedProject, onReviewImages })
 }
 
 /** Testing Hub: the same panel as a popup for the project open in the workspace. */
-export function TestingHub({ project, onClose, onReviewImages }) {
+export function TestingHub({ project, onClose, onReviewImages, onImagesChanged }) {
     return (
         <div className="hub-overlay" onClick={onClose}>
             <div className="hub-modal" style={{ width: 980, background: '#f5f5f5' }} onClick={e => e.stopPropagation()}>
@@ -537,7 +538,7 @@ export function TestingHub({ project, onClose, onReviewImages }) {
                     <button className="hub-icon-btn" onClick={onClose}>✕</button>
                 </div>
                 <div style={{ padding: 16 }}>
-                    <TestingPanel projects={[project]} fixedProject={project}
+                    <TestingPanel projects={[project]} fixedProject={project} onImagesChanged={onImagesChanged}
                         onReviewImages={onReviewImages && ((ids, label) => { onClose(); onReviewImages(ids, label); })} />
                 </div>
             </div>
