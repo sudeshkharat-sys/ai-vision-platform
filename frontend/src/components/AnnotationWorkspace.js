@@ -912,6 +912,36 @@ Do you want to proceed?`;
         setShowReviewPanel(true);
     };
 
+    // Rotate exactly the images in the filtered list 90° clockwise (server remaps labels).
+    const handleRotateFiltered = async () => {
+        const ids = visibleImages.map(i => i.id);
+        if (ids.length === 0) return;
+        if (!window.confirm(`Rotate ${ids.length} image${ids.length !== 1 ? 's' : ''} 90° clockwise?\n\nThe image files are overwritten (labels move with them). Undo = rotate back 3 more times.`)) return;
+        try {
+            const res = await axios.post(`${API_URL}/images/project/${project.id}/rotate-bulk`, { image_ids: ids, direction: 'cw' });
+            const done = new Map(res.data.rotated.map(r => [r.id, r]));
+            setImages(prev => prev.map(im => (done.has(im.id) ? { ...im, width: done.get(im.id).width, height: done.get(im.id).height } : im)));
+            setImgVersion(prev => {
+                const next = { ...prev };
+                done.forEach((_, id) => { next[id] = (next[id] || 0) + 1; });
+                return next;
+            });
+            if (currentImage && done.has(currentImage.id)) {
+                const r = done.get(currentImage.id);
+                setCurrentImage({ ...currentImage, width: r.width, height: r.height });
+                setLoadedImageSize(null);
+                const annRes = await axios.get(`${API_URL}/annotations/image/${currentImage.id}`);
+                setAnnotations(annRes.data);
+                setHistory([]); setRedoStack([]); setSelectedAnnId(null);
+            }
+            const bad = res.data.failed.length;
+            setStatusMsg(`Rotated ${done.size} image${done.size !== 1 ? 's' : ''}${bad ? `, ${bad} failed` : ''}`);
+            setTimeout(() => setStatusMsg(null), 4000);
+        } catch (e) {
+            setError(e.response?.data?.detail || 'Bulk rotate failed');
+        }
+    };
+
     // Filtered sidebar list -> ReviewPanel, restricted to exactly those images.
     const handleReviewFiltered = () => {
         const idSet = new Set(visibleImages.map(i => String(i.id)));
@@ -1656,7 +1686,7 @@ Do you want to proceed?`;
                                 </div>
                             )}
                             <ImageFilterBar filter={imgFilter} onChange={setImgFilter}
-                                total={images.length} shown={visibleImages.length} counts={orientationCounts} onReview={handleReviewFiltered} />
+                                total={images.length} shown={visibleImages.length} counts={orientationCounts} onReview={handleReviewFiltered} onRotate={handleRotateFiltered} />
                             {visibleImages.map(img => {
                                 const isSuggested = suggestedImageIds?.has(String(img.id));
                                 return (

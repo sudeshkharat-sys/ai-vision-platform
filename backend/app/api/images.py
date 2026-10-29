@@ -12,6 +12,7 @@ from ..config import settings
 from ..api.auth import get_current_user
 from ..api.deps import get_owned_project, get_owned_image
 from typing import List
+from pydantic import BaseModel
 import os
 import re
 import io
@@ -265,22 +266,9 @@ def _detect_text_skew(file_path) -> float:
     return skew
 
 
-@router.post("/{image_id}/rotate")
-async def rotate_image(
-    image_id: str,
-    direction: str = "cw",
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """
-    Rotate the image file 90° on disk ('cw' or 'ccw') and remap every
-    annotation bbox so labels stay on their characters. Useful when a
-    plate was photographed in portrait but is easier to label landscape.
-    """
-    if direction not in ("cw", "ccw"):
-        raise HTTPException(status_code=400, detail="direction must be 'cw' or 'ccw'")
-
-    image = await get_owned_image(image_id, current_user, db)
+async def _rotate_image_obj(image, direction: str, db: AsyncSession):
+    """Rotate the image file 90° on disk and remap its boxes / polygon points.
+    Does not commit."""
     file_path = settings.upload_dir.parent / image.filepath.lstrip("/")
     if not file_path.exists():
         file_path = settings.upload_dir / image.filepath.replace("/uploads/", "", 1)
@@ -302,17 +290,33 @@ async def rotate_image(
 
     image.width, image.height = new_w, new_h
 
-    # Remap normalized [xc, yc, w, h] boxes into the rotated frame
-    result = await db.execute(select(Annotation).where(Annotation.image_id == image_id))
+    # Remap normalized [xc, yc, w, h] boxes (and polygon / segment points) into the rotated frame
+    result = await db.execute(select(Annotation).where(Annotation.image_id == image.id))
     for ann in result.scalars().all():
-        if not ann.bbox or len(ann.bbox) != 4:
-            continue
-        xc, yc, w, h = ann.bbox
-        if direction == "cw":
-            ann.bbox = [1 - yc, xc, h, w]
-        else:
-            ann.bbox = [yc, 1 - xc, h, w]
+        if ann.bbox and len(ann.bbox) == 4:
+            xc, yc, w, h = ann.bbox
+            ann.bbox = [1 - yc, xc, h, w] if direction == "cw" else [yc, 1 - xc, h, w]
+        if ann.points:
+            ann.points = [[1 - y, x] if direction == "cw" else [y, 1 - x] for x, y in ann.points]
 
+
+@router.post("/{image_id}/rotate")
+async def rotate_image(
+    image_id: str,
+    direction: str = "cw",
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Rotate the image file 90° on disk ('cw' or 'ccw') and remap every
+    annotation bbox so labels stay on their characters. Useful when a
+    plate was photographed in portrait but is easier to label landscape.
+    """
+    if direction not in ("cw", "ccw"):
+        raise HTTPException(status_code=400, detail="direction must be 'cw' or 'ccw'")
+
+    image = await get_owned_image(image_id, current_user, db)
+    await _rotate_image_obj(image, direction, db)
     await db.commit()
     await db.refresh(image)
     return {
@@ -322,6 +326,39 @@ async def rotate_image(
         "width": image.width,
         "height": image.height,
     }
+
+
+class BulkRotateBody(BaseModel):
+    image_ids: List[str]
+    direction: str = "cw"
+
+
+@router.post("/project/{project_id}/rotate-bulk")
+async def rotate_images_bulk(
+    project_id: str,
+    body: BulkRotateBody,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Rotate exactly the listed images of a project 90° (boxes and polygon
+    points remapped). Each image is committed on its own, so one bad file
+    does not undo the others; failures are reported."""
+    if body.direction not in ("cw", "ccw"):
+        raise HTTPException(status_code=400, detail="direction must be 'cw' or 'ccw'")
+    await get_owned_project(project_id, current_user, db)
+    result = await db.execute(
+        select(Image).where(Image.project_id == project_id, Image.id.in_(body.image_ids))
+    )
+    rotated, failed = [], []
+    for image in result.scalars().all():
+        try:
+            await _rotate_image_obj(image, body.direction, db)
+            await db.commit()
+            rotated.append({"id": image.id, "width": image.width, "height": image.height})
+        except HTTPException as e:
+            await db.rollback()
+            failed.append({"id": image.id, "filename": image.filename, "error": e.detail})
+    return {"rotated": rotated, "failed": failed}
 
 
 @router.post("/{image_id}/rotate-fine")
