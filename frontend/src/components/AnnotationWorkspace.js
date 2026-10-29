@@ -18,6 +18,8 @@ import SegTrainingPanel from './SegTrainingPanel';
 import ClassifierTrainingPanel from './ClassifierTrainingPanel';
 import DataSegmentsPanel from './DataSegmentsPanel';
 import TrainingHub from './TrainingHub';
+import { TestingHub } from './TestingPanel';
+import './TrainingHub.css';
 import ImageFilterBar, { DEFAULT_IMAGE_FILTER, filterImages, orientationOf } from './ImageFilterBar';
 import './AnnotationWorkspace.css';
 import { Sparkles, AlertTriangle, X, Upload, Image as ImageIcon, Check, ArrowLeft, ArrowRight, Brain, Rocket, Eye, Target, Tag, Package, Film, Undo2, Redo2, ZoomIn, ZoomOut, Maximize2, Trash2, ImageOff, RotateCw, RotateCcw, Grid3x3, Wand2, Square, PenTool, RefreshCw, Scissors, Copy, ClipboardPaste, Info } from 'lucide-react';
@@ -335,6 +337,7 @@ const AnnotationWorkspace = ({ project, onProjectUpdated }) => {
     const [showSegPanel, setShowSegPanel] = useState(false);
     const [showClassifierPanel, setShowClassifierPanel] = useState(false);
     const [showTrainingHub, setShowTrainingHub] = useState(false);
+    const [showTestingHub, setShowTestingHub] = useState(false);
     const [showSegmentsPanel, setShowSegmentsPanel] = useState(false);
     const [alMenuOpen, setAlMenuOpen] = useState(false);
     const isCombined = project.project_type === 'combined' || project.project_type === 'ocr';
@@ -1501,6 +1504,10 @@ Do you want to proceed?`;
                         title="Detection, Segmentation, OCR and Classifier training in one place">
                         <Rocket size={14} /> Training Hub
                     </button>
+                    <button className="btn-action" onClick={() => setShowTestingHub(true)}
+                        title="Test a model on images, videos or this project's training data; send failed images to retrain">
+                        <Target size={14} /> Testing Hub
+                    </button>
                     {isCombined && seedModelInfo && (
                         <p className="ocr-seed-status">
                             {seedModelInfo.exists
@@ -2245,6 +2252,7 @@ Do you want to proceed?`;
                     onClose={() => setShowSegPanel(false)}
                 />
             )}
+            {showTestingHub && <TestingHub project={project} onClose={() => setShowTestingHub(false)} />}
             {showTrainingHub && (
                 <TrainingHub
                     project={project}

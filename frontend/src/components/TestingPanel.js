@@ -411,8 +411,9 @@ function DataTest({ projectId, projectName, opts, sourceReady }) {
 }
 
 /* ── Panel ───────────────────────────────────────────────────── */
-export default function TestingPanel({ projects }) {
+export default function TestingPanel({ projects, fixedProject }) {
     const [projectId, setProjectId] = useState(() => {
+        if (fixedProject) return fixedProject.id;
         try { return sessionStorage.getItem('testing_project') || ''; } catch { return ''; }
     });
     const [mode, setMode] = useState('data');
@@ -432,11 +433,11 @@ export default function TestingPanel({ projects }) {
         if (first) setOpts(o => ({ ...o, source: first }));
     }, [sources, opts.source]);
 
-    const project = projects.find(p => p.id === projectId);
+    const project = fixedProject || projects.find(p => p.id === projectId);
     const ready = !!sources?.[opts.source]?.available;
     return (
         <div className="tp-root">
-            <div className="tp-card">
+            {!fixedProject && <div className="tp-card">
                 <h3>Project</h3>
                 <p className="tp-sub">Choose the project whose model you want to test.</p>
                 <label className="tp-field">Project
@@ -444,7 +445,7 @@ export default function TestingPanel({ projects }) {
                         {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
                     </select>
                 </label>
-            </div>
+            </div>}
             {projectId && (
                 <>
                     <SourceBar projectId={projectId} sources={sources} reload={reload} value={opts} onChange={setOpts} />
@@ -459,6 +460,26 @@ export default function TestingPanel({ projects }) {
                     {mode === 'video' && <VideoTest projectId={projectId} opts={opts} />}
                 </>
             )}
+        </div>
+    );
+}
+
+/** Testing Hub: the same panel as a popup for the project open in the workspace. */
+export function TestingHub({ project, onClose }) {
+    return (
+        <div className="hub-overlay" onClick={onClose}>
+            <div className="hub-modal" style={{ width: 980, background: '#f5f5f5' }} onClick={e => e.stopPropagation()}>
+                <div className="hub-header" style={{ background: '#fff' }}>
+                    <div>
+                        <h2 className="hub-title">Testing Hub</h2>
+                        <p className="hub-subtitle">{project.name}</p>
+                    </div>
+                    <button className="hub-icon-btn" onClick={onClose}>✕</button>
+                </div>
+                <div style={{ padding: 16 }}>
+                    <TestingPanel projects={[project]} fixedProject={project} />
+                </div>
+            </div>
         </div>
     );
 }
