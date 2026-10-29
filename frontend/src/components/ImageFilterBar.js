@@ -1,7 +1,7 @@
 import React from 'react';
 
 export const DEFAULT_IMAGE_FILTER = {
-    name: '', orientation: 'all', status: 'all', minW: '', maxW: '', sort: 'upload',
+    name: '', nameMode: 'contains', orientation: 'all', status: 'all', minW: '', maxW: '', sort: 'upload',
 };
 
 export const isFilterActive = (f) =>
@@ -19,7 +19,8 @@ export function filterImages(images, f) {
     const minW = f.minW === '' ? null : Number(f.minW);
     const maxW = f.maxW === '' ? null : Number(f.maxW);
     let out = images.filter(img => {
-        if (q && !(img.filename || '').toLowerCase().includes(q)) return false;
+        const fn = (img.filename || '').toLowerCase();
+        if (q && !(f.nameMode === 'starts' ? fn.startsWith(q) : f.nameMode === 'ends' ? fn.replace(/\.[^.]+$/, '').endsWith(q) || fn.endsWith(q) : fn.includes(q))) return false;
         if (f.orientation !== 'all' && orientationOf(img) !== f.orientation) return false;
         if (f.status !== 'all' && img.status !== f.status) return false;
         if (minW != null && img.width < minW) return false;
@@ -43,8 +44,15 @@ export default function ImageFilterBar({ filter, onChange, total, shown, counts,
     const set = (k, v) => onChange({ ...filter, [k]: v });
     return (
         <div style={{ padding: '6px 10px', borderBottom: '1px solid #eee', display: 'grid', gap: 5 }}>
-            <input style={field} placeholder="Search by name…" value={filter.name}
-                onChange={e => set('name', e.target.value)} />
+            <div style={{ display: 'flex', gap: 5 }}>
+                <select style={{ ...field, width: 92 }} value={filter.nameMode} onChange={e => set('nameMode', e.target.value)}>
+                    <option value="contains">contains</option>
+                    <option value="starts">starts with</option>
+                    <option value="ends">ends with</option>
+                </select>
+                <input style={{ ...field, flex: 1 }} placeholder="e.g. abc" value={filter.name}
+                    onChange={e => set('name', e.target.value)} />
+            </div>
             <div style={{ display: 'flex', gap: 5 }}>
                 <select style={{ ...field, flex: 1 }} value={filter.orientation} onChange={e => set('orientation', e.target.value)}
                     title="Landscape = wider than tall">
