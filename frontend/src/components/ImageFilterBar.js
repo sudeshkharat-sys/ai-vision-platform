@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 
 export const DEFAULT_IMAGE_FILTER = {
     name: '', nameMode: 'contains', orientation: 'all', status: 'all', minW: '', maxW: '', minH: '', maxH: '', from: '', to: '', sort: 'upload',
@@ -49,10 +49,16 @@ export function filterImages(images, f) {
 
 const field = { fontSize: 12, padding: '4px 6px', borderRadius: 6, border: '1px solid #ddd', minWidth: 0 };
 
-export default function ImageFilterBar({ filter, onChange, total, shown, counts, onReview, onRotate, onCheckMismatch, onResetEmpty }) {
+export default function ImageFilterBar({ filter, onChange, total, shown, counts, onReview, onRotate, onCopy, onCheckMismatch, onResetEmpty }) {
+    const [open, setOpen] = useState(false);          // filter fields collapsed by default so the image list gets the room
     const set = (k, v) => onChange({ ...filter, [k]: v });
     return (
         <div style={{ padding: '6px 10px', borderBottom: '1px solid #eee', display: 'grid', gap: 5 }}>
+            <button style={{ ...field, cursor: 'pointer', textAlign: 'left', fontWeight: 600 }} onClick={() => setOpen(o => !o)}>
+                {open ? '▾' : '▸'} Filters{isFilterActive(filter) ? ' (active)' : ''}
+            </button>
+            {open && (
+                <>
             <div style={{ display: 'flex', gap: 5 }}>
                 <select style={{ ...field, width: 92 }} value={filter.nameMode} onChange={e => set('nameMode', e.target.value)}>
                     <option value="contains">contains</option>
@@ -93,6 +99,8 @@ export default function ImageFilterBar({ filter, onChange, total, shown, counts,
                 <input style={{ ...field, width: '50%' }} type="date" value={filter.from} onChange={e => set('from', e.target.value)} />
                 <input style={{ ...field, width: '50%' }} type="date" value={filter.to} onChange={e => set('to', e.target.value)} />
             </div>
+                </>
+            )}
             <div style={{ display: 'flex', gap: 5, alignItems: 'center' }}>
                 <select style={{ ...field, flex: 1 }} value={filter.sort} onChange={e => set('sort', e.target.value)}>
                     <option value="upload">Sort: upload order</option>
@@ -111,6 +119,10 @@ export default function ImageFilterBar({ filter, onChange, total, shown, counts,
             {onReview && shown > 0 && isFilterActive(filter) && (
                 <button style={{ ...field, cursor: 'pointer', background: '#dc143c', color: '#fff', border: 0, fontWeight: 600 }}
                     onClick={onReview}>Send {shown} shown to Review</button>
+            )}
+            {onCopy && shown > 0 && isFilterActive(filter) && (
+                <button style={{ ...field, cursor: 'pointer' }} onClick={onCopy}
+                    title="Copies the shown images with their boxes into a new project">⧉ Copy {shown} shown to a new project</button>
             )}
             {onCheckMismatch && (
                 <button style={{ ...field, cursor: 'pointer' }} onClick={onCheckMismatch}

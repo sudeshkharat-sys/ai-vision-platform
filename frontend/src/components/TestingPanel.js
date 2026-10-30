@@ -327,6 +327,18 @@ function DataTest({ projectId, projectName, opts, sourceReady, onReviewImages, o
             if (onImagesChanged) onImagesChanged();        // the workspace image list must reload to show them
         } catch (e) { setErr(errMsg(e)); } finally { setSending(false); }
     };
+    const removeDuplicates = async () => {
+        setErr(null);
+        try {
+            const d = (await axios.post(`${API_URL}/testing/${projectId}/training-data/remove-duplicates?dry_run=true`)).data;
+            if (!d.duplicates) { window.alert('No double-inserted failed_* images found.'); return; }
+            if (!window.confirm(`Found ${d.duplicates} duplicate failed_* images (keeping ${d.kept} - the oldest of each).\n\nDelete the ${d.duplicates} extra copies with their labels? Normal images are not touched.`)) return;
+            setSending(true);
+            const r = await axios.post(`${API_URL}/testing/${projectId}/training-data/remove-duplicates`);
+            window.alert(`Deleted ${r.data.deleted} duplicate images.`);
+            if (onImagesChanged) onImagesChanged();
+        } catch (e) { setErr(errMsg(e)); } finally { setSending(false); }
+    };
     const send = async () => {
         setSending(true); setErr(null);
         try {
@@ -415,6 +427,8 @@ function DataTest({ projectId, projectName, opts, sourceReady, onReviewImages, o
                                     </select>
                                 </label>
                                 <button className="tp-btn" disabled={sending} onClick={addBack}>Add failed images back to this project</button>
+                                <button className="tp-btn" disabled={sending} onClick={removeDuplicates}
+                                    title="Deletes extra failed_* copies of the same image (keeps the oldest)">Remove double-inserted failed_* images</button>
                             </div>
                             <div className="tp-row" style={{ marginTop: 10 }}>
                                 <label className="tp-field">…or send them to a new project
@@ -426,7 +440,7 @@ function DataTest({ projectId, projectName, opts, sourceReady, onReviewImages, o
                     )}
                     {addedBack && (
                         <p className="tp-note" style={{ color: '#1a9d55' }}>
-                            Added {addedBack.added} images ({addedBack.images} failed images, original{addedBack.variants ? ` + ${addedBack.variants} variants` : ''}) to this project{addedBack.missing_files ? `; ${addedBack.missing_files} files missing` : ''}.
+                            Added {addedBack.added} images ({addedBack.images} failed images, original{addedBack.variants ? ` + ${addedBack.variants} variants` : ''}) to this project{addedBack.missing_files ? `; ${addedBack.missing_files} files missing` : ''}{addedBack.already_present ? `; ${addedBack.already_present} skipped (already in this project)` : ''}.
                             In the workspace filter by name “starts with” <b>{addedBack.name_prefix}</b> to find them. Train again from the previous weights.
                         </p>
                     )}

@@ -22,6 +22,7 @@ backend runs on the user's PC); one job per kind per project.
 
 import base64
 import json
+import re
 import shutil
 import threading
 import time
@@ -36,7 +37,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import delete as sql_delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..api.auth import get_current_user
@@ -52,7 +53,7 @@ from ..services.data_segments import assign_segments, normalize_segments
 from ..services.det_model import det_model_uses_preprocess, resolve_det_model_path
 from ..services.image_files import resolve_image_file
 from ..services.seg_model import resolve_seg_model_path, seg_model_uses_preprocess
-from ..services.test_variants import make_variants
+from ..services.test_variants import failed_copy_key, make_variants
 from ..services.test_eval import score_classification, score_detections, summarize
 
 router = APIRouter(prefix="/testing", tags=["testing"])
@@ -679,8 +680,19 @@ async def add_failed_back(project_id: str, body: AddBackBody, current_user: User
         failed &= set(body.image_ids)
     already = set(data.get("added_back", []))
     todo = failed - already
+
+    # Never add the same image twice: the record above is per test run, so also
+    # look at what the project already holds. failed_* copies are never copied
+    # again, and an original that already has its copies is skipped.
+    rows = (await db.execute(select(Image.id, Image.filename).where(Image.project_id == project_id))).all()
+    have = {k[0] for k in (failed_copy_key(n) for _, n in rows) if k}
+    name_of = {i: n for i, n in rows}
+    skipped_dupes = {i for i in todo
+                     if failed_copy_key(name_of.get(i)) is not None
+                     or re.sub(r"\.[^.]+$", "", name_of.get(i) or "") in have}
+    todo -= skipped_dupes
     if not todo:
-        raise HTTPException(status_code=400, detail="No failed images to add (none failed, or all were already added back after this test)")
+        raise HTTPException(status_code=400, detail="No new failed images to add (none failed, or they are already in this project as failed_* copies)")
 
     imgs = (await db.execute(select(Image).where(Image.project_id == project_id, Image.id.in_(todo)))).scalars().all()
     anns = defaultdict(list)
@@ -729,4 +741,37 @@ async def add_failed_back(project_id: str, body: AddBackBody, current_user: User
     data["added_back"] = sorted(already | done_ids)
     f.write_text(json.dumps(data))
     return {"images": len(done_ids), "added": len(made), "variants": nvar, "missing_files": missing,
-            "name_prefix": f"failed_{tag}_{stamp}_"}
+            "already_present": len(skipped_dupes), "name_prefix": f"failed_{tag}_{stamp}_"}
+
+
+@router.post("/{project_id}/training-data/remove-duplicates")
+async def remove_failed_duplicates(project_id: str, dry_run: bool = False,
+                                   current_user: User = Depends(get_current_user),
+                                   db: AsyncSession = Depends(get_db)):
+    """Delete the double-inserted failed_* copies: for each (original, variant)
+    only the oldest copy is kept; extra copies, their boxes and files are
+    removed. Normal (non failed_*) images are never touched."""
+    await get_owned_project(project_id, current_user, db)
+    imgs = (await db.execute(select(Image).where(Image.project_id == project_id, Image.filename.like("failed\\_%", escape="\\"))
+                             .order_by(Image.created_at, Image.id))).scalars().all()
+    seen, extra = set(), []
+    for im in imgs:
+        k = failed_copy_key(im.filename)
+        if k is None:
+            continue
+        if k in seen:
+            extra.append(im)
+        else:
+            seen.add(k)
+    if not dry_run and extra:
+        await db.execute(sql_delete(Annotation).where(Annotation.image_id.in_([i.id for i in extra])))
+        for im in extra:
+            try:
+                p = settings.upload_dir.parent / im.filepath.lstrip("/")
+                if p.exists():
+                    p.unlink()
+            except Exception:  # noqa: BLE001
+                pass
+            await db.delete(im)
+        await db.commit()
+    return {"duplicates": len(extra), "kept": len(seen), "deleted": 0 if dry_run else len(extra), "dry_run": dry_run}

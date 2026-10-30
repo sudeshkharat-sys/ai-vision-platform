@@ -11,6 +11,8 @@ the boxes of the original stay exactly right:
 
 from __future__ import annotations
 
+import re
+
 import cv2
 import numpy as np
 
@@ -39,3 +41,21 @@ def make_variants(img: np.ndarray, n: int, seed: int = 0) -> list:
         noisy = cv2.LUT(img, lut).astype(np.int16) + rng.normal(0, 6, img.shape).astype(np.int16)
         out.append(np.clip(noisy, 0, 255).astype(np.uint8))
     return out
+
+
+_FAILED_PREFIX = re.compile(r"^failed_.*?_\d{8}_\d{4}_")
+_VARIANT_SUFFIX = re.compile(r"_v\d$")
+
+
+def failed_copy_key(filename: str):
+    """For a ``failed_<model>_<date>_<time>_<name>[_vN].jpg`` copy return
+    ``(original stem, variant suffix)`` (nested prefixes from repeated
+    add-backs are stripped); ``None`` for a normal image."""
+    stem = re.sub(r"\.[^.]+$", "", filename or "")
+    if not stem.startswith("failed_"):
+        return None
+    while _FAILED_PREFIX.match(stem):
+        stem = _FAILED_PREFIX.sub("", stem, count=1)
+    m = _VARIANT_SUFFIX.search(stem)
+    suffix = m.group(0) if m else ""
+    return (stem[:len(stem) - len(suffix)], suffix)

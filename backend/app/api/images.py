@@ -468,6 +468,69 @@ async def rotate_images_bulk(
     return {"rotated": rotated, "failed": failed}
 
 
+class CopyToProjectBody(BaseModel):
+    image_ids: List[str]
+    new_name: str = ""
+    target_project_id: str = ""
+
+
+@router.post("/project/{project_id}/copy-to-project")
+async def copy_images_to_project(
+    project_id: str,
+    body: CopyToProjectBody,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Copy the listed images (file + all boxes/polygons) into a new project
+    (``new_name``) or an existing one (``target_project_id``). The source is
+    left untouched; classes are added to the target."""
+    import shutil
+    from ..services.image_files import resolve_image_file
+    source = await get_owned_project(project_id, current_user, db)
+    if body.target_project_id:
+        if body.target_project_id == project_id:
+            raise HTTPException(status_code=422, detail="Pick a different project")
+        target = await get_owned_project(body.target_project_id, current_user, db)
+    elif body.new_name.strip():
+        target = Project(name=body.new_name.strip()[:250], description=source.description, classes=[],
+                         project_type=source.project_type, segments=list(source.segments or []),
+                         user_id=current_user.id)
+        db.add(target)
+        await db.flush()
+    else:
+        raise HTTPException(status_code=422, detail="Choose a target project or a new project name")
+
+    imgs = (await db.execute(select(Image).where(Image.project_id == project_id, Image.id.in_(body.image_ids)))).scalars().all()
+    anns = {}
+    for a in (await db.execute(select(Annotation).where(Annotation.image_id.in_([i.id for i in imgs])))).scalars().all():
+        anns.setdefault(a.image_id, []).append(a)
+    dest_dir = settings.upload_dir / target.id
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    classes, copied, missing = list(target.classes or []), 0, 0
+    for img in imgs:
+        src = resolve_image_file(project_id, img.filepath)
+        if src is None:
+            missing += 1
+            continue
+        name = f"{uuid.uuid4()}{src.suffix}"
+        shutil.copy2(src, dest_dir / name)
+        new_img = Image(project_id=target.id, filename=img.filename, filepath=f"/uploads/{target.id}/{name}",
+                        width=img.width, height=img.height, status=img.status)
+        db.add(new_img)
+        await db.flush()
+        for a in anns.get(img.id, []):
+            db.add(Annotation(image_id=new_img.id, class_name=a.class_name,
+                              bbox=list(a.bbox) if a.bbox else None, source=a.source,
+                              annotation_type=a.annotation_type, points=list(a.points) if a.points else None,
+                              state=a.state))
+            if a.class_name and a.class_name not in classes:
+                classes.append(a.class_name)
+        copied += 1
+    target.classes = classes
+    await db.commit()
+    return {"target_project_id": target.id, "target_name": target.name, "copied": copied, "missing_files": missing}
+
+
 @router.post("/{image_id}/rotate-fine")
 async def rotate_image_fine(
     image_id: str,
