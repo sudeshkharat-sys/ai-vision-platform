@@ -866,7 +866,13 @@ def train_seed_model(
     # Data loading/augmentation runs in parallel worker processes so the GPU is not
     # left waiting on one CPU thread. The celery container uses --pool=solo (not
     # daemonic), so this is allowed; set TRAIN_WORKERS=0 to turn it off.
-    _workers = int(os.environ.get("TRAIN_WORKERS", min(8, os.cpu_count() or 2)))
+    # Default 2: each loader process costs RAM, and a RAM-cached dataset gets copied into
+    # every one of them (that ran machines out of memory). With workers the cache goes to
+    # disk (.npy next to the images) instead of RAM.
+    _workers = int(os.environ.get("TRAIN_WORKERS", min(2, os.cpu_count() or 1)))
+    _cache = os.environ.get("TRAIN_CACHE") or ("disk" if _workers > 0 else True)
+    if _cache in ("0", "false", "False", "none"):
+        _cache = False
     # (older note) cache=True so
     # all images are loaded into RAM once before training begins, eliminating
     # per-epoch disk I/O that would otherwise stall the GPU between batches.
@@ -878,7 +884,7 @@ def train_seed_model(
         epochs=total_epochs,
         imgsz=imgsz,
         batch=_batch,
-        cache=True,          # preload dataset into RAM — eliminates disk I/O stall with workers=0
+        cache=_cache,        # RAM when workers=0, disk cache with workers (no per-worker RAM copies)
         amp=True,            # FP16 mixed precision — halves VRAM per tensor, faster tensor cores
         device=0,            # explicit CUDA device
         lr0=settings.seed_learning_rate,
