@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, delete as sql_delete
+from sqlalchemy import select, func, delete as sql_delete
 from ..database import get_db
 from ..models.project import Project
 from ..models.image import Image
@@ -123,7 +123,16 @@ async def list_project_images(
 ):
     await get_owned_project(project_id, current_user, db)
     result = await db.execute(select(Image).where(Image.project_id == project_id))
-    return result.scalars().all()
+    images = result.scalars().all()
+    counts = dict((await db.execute(
+        select(Annotation.image_id, func.count(Annotation.id))
+        .join(Image, Image.id == Annotation.image_id)
+        .where(Image.project_id == project_id)
+        .group_by(Annotation.image_id)
+    )).all())
+    for img in images:
+        img.ann_count = counts.get(img.id, 0)      # plain attribute, read by ImageResponse
+    return images
 
 
 @router.patch("/{image_id}/mark-empty", response_model=ImageResponse)

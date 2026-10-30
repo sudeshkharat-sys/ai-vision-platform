@@ -62,6 +62,7 @@ class ImageResponse(BaseModel):
     height: int
     status: str
     created_at: datetime
+    ann_count: int = 0          # number of annotations on the image (filled by the list endpoint)
 
     class Config:
         from_attributes = True

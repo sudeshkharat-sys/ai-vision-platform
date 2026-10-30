@@ -1,11 +1,11 @@
 import React, { useState } from 'react';
 
 export const DEFAULT_IMAGE_FILTER = {
-    name: '', nameMode: 'contains', orientation: 'all', status: 'all', minW: '', maxW: '', minH: '', maxH: '', from: '', to: '', sort: 'upload',
+    name: '', nameMode: 'contains', orientation: 'all', status: 'all', minW: '', maxW: '', minH: '', maxH: '', from: '', to: '', sort: 'upload', annMin: '', annMax: '', annNot: '',
 };
 
 export const isFilterActive = (f) =>
-    !!f.name || f.orientation !== 'all' || f.status !== 'all' || f.minW !== '' || f.maxW !== '' || f.minH !== '' || f.maxH !== '' || f.from !== '' || f.to !== '' || f.sort !== 'upload';
+    !!f.name || f.orientation !== 'all' || f.status !== 'all' || f.minW !== '' || f.maxW !== '' || f.minH !== '' || f.maxH !== '' || f.from !== '' || f.to !== '' || f.sort !== 'upload' || f.annMin !== '' || f.annMax !== '' || f.annNot !== '';
 
 export const orientationOf = (img) => {
     if (!img.width || !img.height) return 'square';
@@ -29,6 +29,10 @@ export function filterImages(images, f) {
             const d = (img.created_at || '').slice(0, 10);          // upload date, YYYY-MM-DD
             if (!d || (f.from && d < f.from) || (f.to && d > f.to)) return false;
         }
+        const n = img.ann_count ?? 0;
+        if (f.annMin !== '' && n < Number(f.annMin)) return false;
+        if (f.annMax !== '' && n > Number(f.annMax)) return false;
+        if (f.annNot !== '' && n === Number(f.annNot)) return false;      // "not the required number"
         if (minW != null && img.width < minW) return false;
         if (maxW != null && img.width > maxW) return false;
         if (minH != null && img.height < minH) return false;
@@ -42,6 +46,8 @@ export function filterImages(images, f) {
         height: (a, b) => a.height - b.height,
         pixels: (a, b) => a.width * a.height - b.width * b.height,
         ratio: (a, b) => a.width / a.height - b.width / b.height,
+        annAsc: (a, b) => (a.ann_count ?? 0) - (b.ann_count ?? 0),
+        annDesc: (a, b) => (b.ann_count ?? 0) - (a.ann_count ?? 0),
     }[f.sort];
     if (by) out = [...out].sort(by);
     return out;
@@ -95,6 +101,14 @@ export default function ImageFilterBar({ filter, onChange, total, shown, counts,
                 <input style={{ ...field, width: '50%' }} type="number" min="0" placeholder="max height px"
                     value={filter.maxH} onChange={e => set('maxH', e.target.value)} />
             </div>
+            <div style={{ display: 'flex', gap: 5 }} title="Number of annotations (boxes) on the image. 'not' = every image that does NOT have exactly that many">
+                <input style={{ ...field, width: '33%' }} type="number" min="0" placeholder="min boxes"
+                    value={filter.annMin} onChange={e => set('annMin', e.target.value)} />
+                <input style={{ ...field, width: '33%' }} type="number" min="0" placeholder="max boxes"
+                    value={filter.annMax} onChange={e => set('annMax', e.target.value)} />
+                <input style={{ ...field, width: '34%' }} type="number" min="0" placeholder="not = N"
+                    value={filter.annNot} onChange={e => set('annNot', e.target.value)} />
+            </div>
             <div style={{ display: 'flex', gap: 5 }} title="Upload date">
                 <input style={{ ...field, width: '50%' }} type="date" value={filter.from} onChange={e => set('from', e.target.value)} />
                 <input style={{ ...field, width: '50%' }} type="date" value={filter.to} onChange={e => set('to', e.target.value)} />
@@ -110,6 +124,8 @@ export default function ImageFilterBar({ filter, onChange, total, shown, counts,
                     <option value="height">Sort: height</option>
                     <option value="pixels">Sort: total pixels</option>
                     <option value="ratio">Sort: wide → tall ratio</option>
+                    <option value="annAsc">Sort: boxes per image (few → many)</option>
+                    <option value="annDesc">Sort: boxes per image (many → few)</option>
                 </select>
                 {isFilterActive(filter) && (
                     <button style={{ ...field, cursor: 'pointer' }} onClick={() => onChange(DEFAULT_IMAGE_FILTER)}>Reset</button>

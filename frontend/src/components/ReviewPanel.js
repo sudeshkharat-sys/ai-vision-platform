@@ -94,13 +94,15 @@ export default function ReviewPanel({ project, images, onClose, onAnnotationsUpd
     }, [project.id]);
     useEffect(() => { if (plainQueue && autoOnly) loadAutoIds(); }, [plainQueue, autoOnly, loadAutoIds]);
 
-    const reviewImages = activeImageIds?.size > 0
+    const [deletedImageIds, setDeletedImageIds] = useState(new Set());   // removed in this panel (parent list refreshes later)
+    const reviewImagesAll = activeImageIds?.size > 0
         ? images.filter(img => activeImageIds.has(String(img.id)))
         : (plainQueue && autoOnly && autoIds)
             ? images.filter(img => autoIds.has(String(img.id)))
             : plainQueue
                 ? images                       // every frame of the project, annotated or not
                 : images.filter(img => img.status === 'annotated' || img.status === 'annotating');
+    const reviewImages = deletedImageIds.size ? reviewImagesAll.filter(img => !deletedImageIds.has(img.id)) : reviewImagesAll;
 
     const [currentIdx, setCurrentIdx] = useState(0);
     const [annotations, setAnnotations] = useState([]);
@@ -332,14 +334,52 @@ export default function ReviewPanel({ project, images, onClose, onAnnotationsUpd
         if (!annotations.length) return;
         if (!window.confirm(`Delete all ${annotations.length} annotation(s) on this image? This cannot be undone.`)) return;
         try {
-            await Promise.all(annotations.map(a => axios.delete(`${API_URL}/annotations/${a.id}`)));
+            await axios.post(`${API_URL}/images/${currentImage.id}/wipe`);     // one request: per-box deletes raced
             setAnnotations([]);
             markReviewed();
             showStatus('All annotations deleted');
+            onAnnotationsUpdated?.();
         } catch {
             // silent
         }
-    }, [annotations, markReviewed, showStatus]);
+    }, [annotations, currentImage, markReviewed, showStatus, onAnnotationsUpdated]);
+
+    // One key / click: wipe every annotation (verified or not) on this image in a single request.
+    const handleWipeImage = useCallback(async () => {
+        if (!currentImage || !annotations.length) return;
+        try {
+            await axios.post(`${API_URL}/images/${currentImage.id}/wipe`);
+            setAnnotations([]); setSelectedIds(new Set());
+            markReviewed();
+            showStatus('All annotations deleted (image back to pending)');
+            onAnnotationsUpdated?.();
+        } catch {
+            showStatus('Failed to delete annotations');
+        }
+    }, [currentImage, annotations.length, markReviewed, showStatus, onAnnotationsUpdated]);
+
+    // One key / click: delete the whole image (file + annotations). Asks once per open panel.
+    const askedDeleteImage = useRef(false);
+    const handleDeleteImage = useCallback(async () => {
+        if (!currentImage) return;
+        if (!askedDeleteImage.current) {
+            if (!window.confirm(`Delete this image "${currentImage.filename}" with its ${annotations.length} annotation(s)?\n\nThis cannot be undone. You will not be asked again while this review window stays open.`)) return;
+            askedDeleteImage.current = true;
+        }
+        try {
+            await axios.delete(`${API_URL}/images/${currentImage.id}`);
+            setDeletedImageIds(prev => new Set([...prev, currentImage.id]));
+            setAnnotations([]); setSelectedIds(new Set());
+            showStatus(`✕ Image deleted: ${currentImage.filename}`);
+            onAnnotationsUpdated?.();
+        } catch {
+            showStatus('Failed to delete image');
+        }
+    }, [currentImage, annotations.length, showStatus, onAnnotationsUpdated]);
+
+    useEffect(() => {      // after a delete the next image slides into this index; keep it in range
+        if (reviewImages.length > 0 && currentIdx >= reviewImages.length) setCurrentIdx(reviewImages.length - 1);
+    }, [reviewImages.length, currentIdx]);
 
     const handleDeleteAllProjectAnnotations = useCallback(async () => {
         if (!window.confirm(
@@ -410,11 +450,13 @@ export default function ReviewPanel({ project, images, onClose, onAnnotationsUpd
             if (e.key === 'ArrowLeft')  { e.preventDefault(); navigate(-1); }
             if (e.key === 'e' || e.key === 'E') handleAcceptAll();
             if (e.key === 'r' || e.key === 'R') handleRejectAll();
+            if (e.key === 'd' || e.key === 'D') handleWipeImage();
+            if (e.key === 'x' || e.key === 'X' || e.key === 'Delete') handleDeleteImage();
             if (e.key === 'Escape') { onAnnotationsUpdated?.(); onClose(); }
         };
         window.addEventListener('keydown', handler);
         return () => window.removeEventListener('keydown', handler);
-    }, [pendingAnnotation, pendingPolyline, drawMode, newPolylinePoints, finishPolyline, cancelPolyline, navigate, handleAcceptAll, handleRejectAll, onClose, onAnnotationsUpdated]);
+    }, [pendingAnnotation, pendingPolyline, drawMode, newPolylinePoints, finishPolyline, cancelPolyline, navigate, handleAcceptAll, handleRejectAll, handleWipeImage, handleDeleteImage, onClose, onAnnotationsUpdated]);
 
     // Zoom via mouse wheel — zoom around the cursor point
     const handleWheel = (e) => {
@@ -690,6 +732,8 @@ export default function ReviewPanel({ project, images, onClose, onAnnotationsUpd
                                     {annCountCache[img.id]?.auto > 0 && (
                                         <div className="rp-strip-unverified">{annCountCache[img.id].auto}</div>
                                     )}
+                                    <div className="rp-strip-count" style={{ position: 'absolute', left: 2, bottom: 2, fontSize: 10, background: 'rgba(0,0,0,.65)', color: '#fff', borderRadius: 4, padding: '0 4px' }}
+                                        title="Annotations on this image">▭{annCountCache[img.id]?.total ?? img.ann_count ?? 0}</div>
                                     {annCountCache[img.id]?.auto === 0 && annCountCache[img.id]?.total > 0 && (
                                         <div className="rp-strip-allverified">✓</div>
                                     )}
@@ -933,7 +977,7 @@ export default function ReviewPanel({ project, images, onClose, onAnnotationsUpd
                                         title="Select all annotations on this image"
                                     />
                                 )}
-                                <span className="rp-ann-panel-title">Annotations</span>
+                                <span className="rp-ann-panel-title">Annotations ({annotations.length})</span>
                                 {autoCount > 0 && (
                                     <span className="rp-unverified-pill">{autoCount} to review</span>
                                 )}
@@ -1036,6 +1080,13 @@ export default function ReviewPanel({ project, images, onClose, onAnnotationsUpd
                                 >
                                     <Trash2 size={14} /> Delete All ({annotations.length})
                                 </button>
+                                <button
+                                    className="rp-bulk-btn rp-bulk-delete-all"
+                                    onClick={handleDeleteImage}
+                                    title="Delete this whole image with its annotations (X)"
+                                >
+                                    <Trash2 size={14} /> Delete Image
+                                </button>
                             </div>
                         </div>
                     </div>
@@ -1047,6 +1098,8 @@ export default function ReviewPanel({ project, images, onClose, onAnnotationsUpd
                         <span className="rp-kbd">← →</span> Navigate
                         <span className="rp-kbd">E</span> Accept All
                         <span className="rp-kbd">R</span> Reject All
+                        <span className="rp-kbd">D</span> Delete all annotations
+                        <span className="rp-kbd">X</span> Delete image
                         <span className="rp-kbd">Esc</span> Exit
                     </div>
 
