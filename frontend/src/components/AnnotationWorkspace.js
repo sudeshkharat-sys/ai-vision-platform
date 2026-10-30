@@ -940,8 +940,10 @@ Do you want to proceed?`;
         if (ids.length === 0) return;
         const name = window.prompt(`Copy the ${ids.length} shown image${ids.length !== 1 ? 's' : ''} with their annotations into a NEW project.\n\nNew project name:`, `${project.name} - subset`);
         if (!name || !name.trim()) return;
+        const rot = (window.prompt('Rotate the copies?\n\ncw  = 90° clockwise (right)\nccw = 90° counter-clockwise (left)\n(empty) = no rotation\n\nBoxes and polygons move with the picture; your original images stay untouched.', '') || '').trim().toLowerCase();
+        if (rot && rot !== 'cw' && rot !== 'ccw') { setError('Rotation must be cw, ccw or empty'); return; }
         try {
-            const res = await axios.post(`${API_URL}/images/project/${project.id}/copy-to-project`, { image_ids: ids, new_name: name.trim() });
+            const res = await axios.post(`${API_URL}/images/project/${project.id}/copy-to-project`, { image_ids: ids, new_name: name.trim(), rotate: rot });
             setStatusMsg(`Copied ${res.data.copied} images to new project "${res.data.target_name}"${res.data.missing_files ? ` (${res.data.missing_files} files missing)` : ''}`);
             setTimeout(() => setStatusMsg(null), 6000);
         } catch (e) {

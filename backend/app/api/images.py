@@ -472,6 +472,7 @@ class CopyToProjectBody(BaseModel):
     image_ids: List[str]
     new_name: str = ""
     target_project_id: str = ""
+    rotate: str = ""            # "", "cw" or "ccw": rotate the COPIES 90deg (boxes / polygons move with them)
 
 
 @router.post("/project/{project_id}/copy-to-project")
@@ -486,6 +487,8 @@ async def copy_images_to_project(
     left untouched; classes are added to the target."""
     import shutil
     from ..services.image_files import resolve_image_file
+    if body.rotate not in ("", "cw", "ccw"):
+        raise HTTPException(status_code=422, detail="rotate must be '', 'cw' or 'ccw'")
     source = await get_owned_project(project_id, current_user, db)
     if body.target_project_id:
         if body.target_project_id == project_id:
@@ -525,6 +528,9 @@ async def copy_images_to_project(
                               state=a.state))
             if a.class_name and a.class_name not in classes:
                 classes.append(a.class_name)
+        if body.rotate:
+            await db.flush()
+            await _rotate_image_obj(new_img, body.rotate, db)    # only the copy's file; the source stays as is
         copied += 1
     target.classes = classes
     await db.commit()
