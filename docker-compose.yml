@@ -121,6 +121,7 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: aivision-celery
+    shm_size: "8gb"   # dataloader workers pass batches through shared memory (default 64MB crashes)
     command: >
       python3 -m celery -A app.tasks.celery_app worker
       --loglevel=info

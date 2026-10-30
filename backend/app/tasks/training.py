@@ -863,7 +863,11 @@ def train_seed_model(
               "char_project": is_char_project},
     )
 
-    # workers=0 is required for Celery daemonic processes; use cache=True so
+    # Data loading/augmentation runs in parallel worker processes so the GPU is not
+    # left waiting on one CPU thread. The celery container uses --pool=solo (not
+    # daemonic), so this is allowed; set TRAIN_WORKERS=0 to turn it off.
+    _workers = int(os.environ.get("TRAIN_WORKERS", min(8, os.cpu_count() or 2)))
+    # (older note) cache=True so
     # all images are loaded into RAM once before training begins, eliminating
     # per-epoch disk I/O that would otherwise stall the GPU between batches.
     # batch=0.85 targets 85% VRAM (vs the 60% default of batch=-1).
@@ -905,7 +909,7 @@ def train_seed_model(
         project=str(settings.model_dir / project_id),
         name="seed_model_char_only" if class_agnostic else "seed_model",
         verbose=False,
-        workers=0,           # Celery workers are daemonic — cannot spawn DataLoader subprocesses
+        workers=_workers,    # parallel dataloader processes (see above)
     )
 
     # ── Discard if stopped by user ───────────────────────────────
