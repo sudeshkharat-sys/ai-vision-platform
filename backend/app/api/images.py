@@ -124,14 +124,19 @@ async def list_project_images(
     await get_owned_project(project_id, current_user, db)
     result = await db.execute(select(Image).where(Image.project_id == project_id))
     images = result.scalars().all()
-    counts = dict((await db.execute(
-        select(Annotation.image_id, func.count(Annotation.id))
+    rows = (await db.execute(
+        select(Annotation.image_id, Annotation.annotation_type, func.count(Annotation.id))
         .join(Image, Image.id == Annotation.image_id)
         .where(Image.project_id == project_id)
-        .group_by(Annotation.image_id)
-    )).all())
+        .group_by(Annotation.image_id, Annotation.annotation_type)
+    )).all()
+    counts, shapes = {}, {}
+    for image_id, atype, n in rows:
+        counts[image_id] = counts.get(image_id, 0) + n
+        shapes.setdefault(image_id, {})[atype or "bbox"] = n
     for img in images:
-        img.ann_count = counts.get(img.id, 0)      # plain attribute, read by ImageResponse
+        img.ann_count = counts.get(img.id, 0)      # plain attributes, read by ImageResponse
+        img.ann_shapes = shapes.get(img.id, {})
     return images
 
 

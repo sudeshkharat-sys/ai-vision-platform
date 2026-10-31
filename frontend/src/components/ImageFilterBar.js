@@ -1,11 +1,11 @@
 import React, { useState } from 'react';
 
 export const DEFAULT_IMAGE_FILTER = {
-    name: '', nameMode: 'contains', orientation: 'all', status: 'all', minW: '', maxW: '', minH: '', maxH: '', from: '', to: '', sort: 'upload', annMin: '', annMax: '', annNot: '',
+    name: '', nameMode: 'contains', orientation: 'all', status: 'all', minW: '', maxW: '', minH: '', maxH: '', from: '', to: '', sort: 'upload', annMin: '', annMax: '', annNot: '', shape: 'all',
 };
 
 export const isFilterActive = (f) =>
-    !!f.name || f.orientation !== 'all' || f.status !== 'all' || f.minW !== '' || f.maxW !== '' || f.minH !== '' || f.maxH !== '' || f.from !== '' || f.to !== '' || f.sort !== 'upload' || f.annMin !== '' || f.annMax !== '' || f.annNot !== '';
+    !!f.name || f.orientation !== 'all' || f.status !== 'all' || f.minW !== '' || f.maxW !== '' || f.minH !== '' || f.maxH !== '' || f.from !== '' || f.to !== '' || f.sort !== 'upload' || f.annMin !== '' || f.annMax !== '' || f.annNot !== '' || f.shape !== 'all';
 
 export const orientationOf = (img) => {
     if (!img.width || !img.height) return 'square';
@@ -28,6 +28,16 @@ export function filterImages(images, f) {
         if (f.from || f.to) {
             const d = (img.created_at || '').slice(0, 10);          // upload date, YYYY-MM-DD
             if (!d || (f.from && d < f.from) || (f.to && d > f.to)) return false;
+        }
+        if (f.shape !== 'all') {
+            const sh = img.ann_shapes || {};
+            const kinds = Object.keys(sh).filter(k => sh[k] > 0);
+            const isRect = (k) => k === 'bbox';
+            if (f.shape === 'rect' && !kinds.some(isRect)) return false;                       // has a rectangle
+            if (f.shape === 'poly' && !kinds.some(k => !isRect(k))) return false;              // has a polygon / segment
+            if (f.shape === 'rectOnly' && !(kinds.length && kinds.every(isRect))) return false; // only rectangles
+            if (f.shape === 'polyOnly' && !(kinds.length && kinds.every(k => !isRect(k)))) return false;
+            if (f.shape === 'mixed' && !(kinds.some(isRect) && kinds.some(k => !isRect(k)))) return false;
         }
         const n = img.ann_count ?? 0;
         if (f.annMin !== '' && n < Number(f.annMin)) return false;
@@ -109,6 +119,15 @@ export default function ImageFilterBar({ filter, onChange, total, shown, counts,
                 <input style={{ ...field, width: '34%' }} type="number" min="0" placeholder="not = N"
                     value={filter.annNot} onChange={e => set('annNot', e.target.value)} />
             </div>
+            <select style={field} value={filter.shape} onChange={e => set('shape', e.target.value)}
+                title="Annotation shape: find images with rectangular boxes (e.g. left over after rotation) or polygons">
+                <option value="all">Annotation shape: all</option>
+                <option value="rect">Has rectangle (box)</option>
+                <option value="rectOnly">Only rectangles</option>
+                <option value="poly">Has polygon / segment</option>
+                <option value="polyOnly">Only polygons / segments</option>
+                <option value="mixed">Mixed (rectangle + polygon)</option>
+            </select>
             <div style={{ display: 'flex', gap: 5 }} title="Upload date">
                 <input style={{ ...field, width: '50%' }} type="date" value={filter.from} onChange={e => set('from', e.target.value)} />
                 <input style={{ ...field, width: '50%' }} type="date" value={filter.to} onChange={e => set('to', e.target.value)} />
