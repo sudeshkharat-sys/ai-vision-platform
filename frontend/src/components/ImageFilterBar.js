@@ -1,11 +1,11 @@
 import React, { useState } from 'react';
 
 export const DEFAULT_IMAGE_FILTER = {
-    name: '', nameMode: 'contains', orientation: 'all', status: 'all', minW: '', maxW: '', minH: '', maxH: '', from: '', to: '', sort: 'upload', annMin: '', annMax: '', annNot: '', shape: 'all', longRatio: '',
+    name: '', nameMode: 'contains', orientation: 'all', status: 'all', minW: '', maxW: '', minH: '', maxH: '', from: '', to: '', sort: 'upload', annMin: '', annMax: '', annNot: '', shape: 'all', longRatio: '', odd: 'all',
 };
 
 export const isFilterActive = (f) =>
-    !!f.name || f.orientation !== 'all' || f.status !== 'all' || f.minW !== '' || f.maxW !== '' || f.minH !== '' || f.maxH !== '' || f.from !== '' || f.to !== '' || f.sort !== 'upload' || f.annMin !== '' || f.annMax !== '' || f.annNot !== '' || f.shape !== 'all' || f.longRatio !== '';
+    !!f.name || f.orientation !== 'all' || f.status !== 'all' || f.minW !== '' || f.maxW !== '' || f.minH !== '' || f.maxH !== '' || f.from !== '' || f.to !== '' || f.sort !== 'upload' || f.annMin !== '' || f.annMax !== '' || f.annNot !== '' || f.shape !== 'all' || f.longRatio !== '' || f.odd !== 'all';
 
 export const orientationOf = (img) => {
     if (!img.width || !img.height) return 'square';
@@ -40,6 +40,7 @@ export function filterImages(images, f) {
             if (f.shape === 'mixed' && !(kinds.some(isRect) && kinds.some(k => !isRect(k)))) return false;
         }
         if (f.longRatio !== '' && (img.ann_max_ratio ?? 0) < Number(f.longRatio)) return false;   // has a long thin rectangle
+        if (f.odd !== 'all' && (img.ann_odd ?? 1) < Number(f.odd)) return false;      // has a box with an unusual shape for its class
         const n = img.ann_count ?? 0;
         if (f.annMin !== '' && n < Number(f.annMin)) return false;
         if (f.annMax !== '' && n > Number(f.annMax)) return false;
@@ -59,6 +60,7 @@ export function filterImages(images, f) {
         ratio: (a, b) => a.width / a.height - b.width / b.height,
         annAsc: (a, b) => (a.ann_count ?? 0) - (b.ann_count ?? 0),
         longest: (a, b) => (b.ann_max_ratio ?? 0) - (a.ann_max_ratio ?? 0),
+        odd: (a, b) => (b.ann_odd ?? 1) - (a.ann_odd ?? 1),
         annDesc: (a, b) => (b.ann_count ?? 0) - (a.ann_count ?? 0),
     }[f.sort];
     if (by) out = [...out].sort(by);
@@ -130,6 +132,13 @@ export default function ImageFilterBar({ filter, onChange, total, shown, counts,
                 <option value="polyOnly">Only polygons / segments</option>
                 <option value="mixed">Mixed (rectangle + polygon)</option>
             </select>
+            <select style={field} value={filter.odd} onChange={e => set('odd', e.target.value)}
+                title="Automatic: compares every box with the usual width/height shape of its own class and shows images that have a box far from it">
+                <option value="all">Odd-shaped boxes: off</option>
+                <option value="2.5">Odd boxes: very different (2.5x+)</option>
+                <option value="2">Odd boxes: clearly different (2x+)</option>
+                <option value="1.6">Odd boxes: a bit different (1.6x+)</option>
+            </select>
             <input style={field} type="number" min="1" step="0.5" placeholder="long rectangle: length ÷ width ≥ (e.g. 3)"
                 title="Show images that have a long thin rectangle box. Square boxes = 1, a box twice as long as wide = 2"
                 value={filter.longRatio} onChange={e => set('longRatio', e.target.value)} />
@@ -148,6 +157,7 @@ export default function ImageFilterBar({ filter, onChange, total, shown, counts,
                     <option value="height">Sort: height</option>
                     <option value="pixels">Sort: total pixels</option>
                     <option value="ratio">Sort: wide → tall ratio</option>
+                    <option value="odd">Sort: most odd-shaped box first</option>
                     <option value="longest">Sort: longest rectangle first</option>
                     <option value="annAsc">Sort: boxes per image (few → many)</option>
                     <option value="annDesc">Sort: boxes per image (many → few)</option>

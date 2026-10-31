@@ -64,6 +64,7 @@ class ImageResponse(BaseModel):
     created_at: datetime
     ann_shapes: dict[str, int] = {}   # annotations per shape: bbox / polygon / segment
     ann_max_ratio: float = 0    # longest/shortest side of the most elongated rectangle (1 = square)
+    ann_odd: float = 1          # how far the most unusual box is from its class's usual width/height shape (1 = normal)
     ann_count: int = 0          # number of annotations on the image (filled by the list endpoint)
 
     class Config:

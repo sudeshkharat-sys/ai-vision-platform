@@ -125,13 +125,14 @@ async def list_project_images(
     result = await db.execute(select(Image).where(Image.project_id == project_id))
     images = result.scalars().all()
     rows = (await db.execute(
-        select(Annotation.image_id, Annotation.annotation_type, Annotation.bbox)
+        select(Annotation.image_id, Annotation.annotation_type, Annotation.bbox, Annotation.class_name)
         .join(Image, Image.id == Annotation.image_id)
         .where(Image.project_id == project_id)
     )).all()
     dims = {img.id: (img.width or 1, img.height or 1) for img in images}
     counts, shapes, longest = {}, {}, {}
-    for image_id, atype, bbox in rows:
+    boxes = []                                      # (image_id, class, width/height in pixels)
+    for image_id, atype, bbox, cls in rows:
         atype = atype or "bbox"
         counts[image_id] = counts.get(image_id, 0) + 1
         sh = shapes.setdefault(image_id, {})
@@ -141,10 +142,22 @@ async def list_project_images(
             bw, bh = bbox[2] * w, bbox[3] * h          # box size in pixels
             if min(bw, bh) > 0:
                 longest[image_id] = max(longest.get(image_id, 0), max(bw, bh) / min(bw, bh))
+                boxes.append((image_id, cls, bw / bh))
+    # Odd-one-out: compare each box's width/height with the usual shape of its own class.
+    by_cls = {}
+    for _, cls, r in boxes:
+        by_cls.setdefault(cls, []).append(r)
+    typical = {c: sorted(v)[len(v) // 2] for c, v in by_cls.items() if len(v) >= 5}
+    odd = {}
+    for image_id, cls, r in boxes:
+        m = typical.get(cls)
+        if m:
+            odd[image_id] = max(odd.get(image_id, 1), max(r / m, m / r))      # 1 = normal, 3 = three times off
     for img in images:
         img.ann_count = counts.get(img.id, 0)      # plain attributes, read by ImageResponse
         img.ann_shapes = shapes.get(img.id, {})
         img.ann_max_ratio = round(longest.get(img.id, 0), 2)
+        img.ann_odd = round(odd.get(img.id, 1), 2)
     return images
 
 
