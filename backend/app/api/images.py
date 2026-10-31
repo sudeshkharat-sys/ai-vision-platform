@@ -137,7 +137,7 @@ async def list_project_images(
         counts[image_id] = counts.get(image_id, 0) + 1
         sh = shapes.setdefault(image_id, {})
         sh[atype] = sh.get(atype, 0) + 1
-        if atype == "bbox" and bbox and len(bbox) == 4:
+        if bbox and len(bbox) == 4:                    # every shape keeps an axis-aligned bbox
             w, h = dims[image_id]
             bw, bh = bbox[2] * w, bbox[3] * h          # box size in pixels
             if min(bw, bh) > 0:

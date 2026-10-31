@@ -1799,6 +1799,7 @@ Do you want to proceed?`;
                                     <span className="image-item-name">{img.filename}</span>
                                     <span style={{ fontSize: 10, color: '#999', whiteSpace: 'nowrap' }} title={orientationOf(img)}>{img.width}×{img.height}</span>
                                     <span style={{ fontSize: 10, color: '#666', whiteSpace: 'nowrap' }} title="Annotations on this image (as of the last list refresh)">▭{img.ann_count ?? 0}</span>
+                                    {(img.ann_odd ?? 1) >= 1.6 && <span style={{ fontSize: 10, color: '#e0603a', whiteSpace: 'nowrap' }} title="Most unusual box shape vs its class (1 = normal, 3 = three times off)">odd ×{img.ann_odd}</span>}
                                     {isSuggested && <span className="image-item-al-badge"><Target size={9} /></span>}
                                     <span className={`image-item-status status-${img.status}`}>
                                         {img.status}
