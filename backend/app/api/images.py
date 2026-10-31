@@ -125,18 +125,26 @@ async def list_project_images(
     result = await db.execute(select(Image).where(Image.project_id == project_id))
     images = result.scalars().all()
     rows = (await db.execute(
-        select(Annotation.image_id, Annotation.annotation_type, func.count(Annotation.id))
+        select(Annotation.image_id, Annotation.annotation_type, Annotation.bbox)
         .join(Image, Image.id == Annotation.image_id)
         .where(Image.project_id == project_id)
-        .group_by(Annotation.image_id, Annotation.annotation_type)
     )).all()
-    counts, shapes = {}, {}
-    for image_id, atype, n in rows:
-        counts[image_id] = counts.get(image_id, 0) + n
-        shapes.setdefault(image_id, {})[atype or "bbox"] = n
+    dims = {img.id: (img.width or 1, img.height or 1) for img in images}
+    counts, shapes, longest = {}, {}, {}
+    for image_id, atype, bbox in rows:
+        atype = atype or "bbox"
+        counts[image_id] = counts.get(image_id, 0) + 1
+        sh = shapes.setdefault(image_id, {})
+        sh[atype] = sh.get(atype, 0) + 1
+        if atype == "bbox" and bbox and len(bbox) == 4:
+            w, h = dims[image_id]
+            bw, bh = bbox[2] * w, bbox[3] * h          # box size in pixels
+            if min(bw, bh) > 0:
+                longest[image_id] = max(longest.get(image_id, 0), max(bw, bh) / min(bw, bh))
     for img in images:
         img.ann_count = counts.get(img.id, 0)      # plain attributes, read by ImageResponse
         img.ann_shapes = shapes.get(img.id, {})
+        img.ann_max_ratio = round(longest.get(img.id, 0), 2)
     return images
 
 

@@ -63,6 +63,7 @@ class ImageResponse(BaseModel):
     status: str
     created_at: datetime
     ann_shapes: dict[str, int] = {}   # annotations per shape: bbox / polygon / segment
+    ann_max_ratio: float = 0    # longest/shortest side of the most elongated rectangle (1 = square)
     ann_count: int = 0          # number of annotations on the image (filled by the list endpoint)
 
     class Config:
