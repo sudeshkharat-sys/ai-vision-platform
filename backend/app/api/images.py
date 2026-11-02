@@ -1,4 +1,7 @@
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+import asyncio
+import threading
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Request
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, delete as sql_delete
@@ -725,6 +728,7 @@ def _project_slug(name: str) -> str:
 @router.get("/export/{project_id}")
 async def export_dataset(
     project_id: str,
+    request: Request,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -756,30 +760,54 @@ async def export_dataset(
         "images": [],
     }
 
-    buffer = io.BytesIO()
-    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
-        for img in images:
-            src_candidates = [
-                settings.upload_dir.parent / img.filepath.lstrip("/"),
-                settings.upload_dir / img.filepath.replace("/uploads/", "", 1),
-            ]
-            src_path = next((p for p in src_candidates if p.exists()), None)
-            if src_path is None:
-                continue  # file missing on disk — skip but keep the rest of the export usable
+    cancel = threading.Event()
 
-            arc_filename = os.path.basename(img.filepath)
-            zf.write(src_path, f"images/{arc_filename}")
+    def build():
+        # Runs in a worker thread: zipping thousands of images used to run inside the
+        # request handler and froze the whole server (every project) until it finished.
+        buf = io.BytesIO()
+        # images are already compressed (jpg/png) - storing them is far faster than deflating
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_STORED) as zf:
+            for img in images:
+                if cancel.is_set():
+                    return None
+                src_candidates = [
+                    settings.upload_dir.parent / img.filepath.lstrip("/"),
+                    settings.upload_dir / img.filepath.replace("/uploads/", "", 1),
+                ]
+                src_path = next((p for p in src_candidates if p.exists()), None)
+                if src_path is None:
+                    continue  # file missing on disk — skip but keep the rest of the export usable
 
-            manifest["images"].append({
-                "filename": img.filename,
-                "stored_filename": arc_filename,
-                "width": img.width,
-                "height": img.height,
-                "status": img.status,
-                "annotations": anns_by_image.get(img.id, []),
-            })
+                arc_filename = os.path.basename(img.filepath)
+                zf.write(src_path, f"images/{arc_filename}")
 
-        zf.writestr("manifest.json", json.dumps(manifest, indent=2))
+                manifest["images"].append({
+                    "filename": img.filename,
+                    "stored_filename": arc_filename,
+                    "width": img.width,
+                    "height": img.height,
+                    "status": img.status,
+                    "annotations": anns_by_image.get(img.id, []),
+                })
+            zf.writestr("manifest.json", json.dumps(manifest, indent=2))
+        return buf
+
+    async def watch_disconnect():
+        # the Stop button aborts the browser request -> stop zipping instead of finishing for nobody
+        while not cancel.is_set():
+            if await request.is_disconnected():
+                cancel.set()
+                return
+            await asyncio.sleep(0.5)
+
+    watcher = asyncio.create_task(watch_disconnect())
+    try:
+        buffer = await run_in_threadpool(build)
+    finally:
+        watcher.cancel()
+    if buffer is None:
+        raise HTTPException(status_code=499, detail="Export cancelled.")
 
     buffer.seek(0)
     slug = _project_slug(project.name)

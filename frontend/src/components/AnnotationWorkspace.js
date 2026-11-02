@@ -1239,12 +1239,17 @@ Do you want to proceed?`;
     // ── Dataset export/import — portable images+annotations zip, so a
     // labeled dataset (including segment masks) can move into a different
     // project (e.g. one built around SAM) without redrawing anything. ──
+    const exportAbortRef = useRef(null);
+    const handleStopExport = () => { exportAbortRef.current?.abort(); };
     const handleExportDataset = async () => {
+        const ctrl = new AbortController();
+        exportAbortRef.current = ctrl;
         setExportingDataset(true);
         setExportProgress('Requesting…');
         try {
             const res = await axios.get(`${API_URL}/images/export/${project.id}`, {
                 responseType: 'blob',
+                signal: ctrl.signal,
                 onDownloadProgress: (evt) => {
                     // Content-Length usually isn't set on a streamed zip, so evt.total
                     // is 0 — show bytes received so far instead of a % that can't be computed.
@@ -1264,6 +1269,7 @@ Do you want to proceed?`;
             window.URL.revokeObjectURL(url);
             showStatus('✓ Dataset downloaded');
         } catch (err) {
+            if (axios.isCancel?.(err) || err.code === 'ERR_CANCELED') { showStatus('Download stopped'); return; }
             // responseType:'blob' means an error body also arrives as a Blob,
             // not parsed JSON — err.response.data.detail is always undefined
             // unless we read the Blob's text ourselves.
@@ -1736,6 +1742,10 @@ Do you want to proceed?`;
                     >
                         {exportingDataset ? `Downloading… ${exportProgress || ''}` : '⬇ Download Dataset'}
                     </button>
+                    {exportingDataset && (
+                        <button className="btn-action btn-action-secondary" onClick={handleStopExport}
+                            title="Cancel the dataset download (the server stops building the zip)">■ Stop</button>
+                    )}
                     <label className={`upload-btn ${importingDataset ? 'uploading' : ''}`} title="Import a dataset zip exported from another project — images + all annotation types are recreated here">
                         {importingDataset ? 'Importing…' : '⬆ Import Dataset (.zip)'}
                         <input
