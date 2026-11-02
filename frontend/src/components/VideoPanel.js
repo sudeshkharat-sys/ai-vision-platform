@@ -149,7 +149,7 @@ export default function VideoPanel({ project, onClose, onFramesExtracted }) {
         try {
             const res = await axios.post(`${API_URL}/videos/${videoId}/stop-extraction`);
             setVideos(prev => prev.map(v => v.id === videoId ? res.data : v));
-            showSuccess('Extraction stopped. Frames extracted so far are kept in the image list.');
+            showSuccess('Stopped. Frames extracted so far (if any) are kept in the image list.');
         } catch (err) {
             setError(err.response?.data?.detail || 'Failed to stop extraction.');
         }
@@ -319,6 +319,8 @@ export default function VideoPanel({ project, onClose, onFramesExtracted }) {
                                                     <div className="vp-extraction-fill vp-extraction-fill--animated" />
                                                 </div>
                                                 <span className="vp-extraction-label">Rotating video — re-encoding, this can take a moment…</span>
+                                                <button className="vp-btn-stop" onClick={() => handleStop(video.id)}
+                                                    title="Use this if rotation is stuck - your original video is kept unchanged">Cancel rotation</button>
                                             </div>
                                         )}
 

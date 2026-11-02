@@ -11,6 +11,7 @@ from .database import init_db, async_session
 from .api import projects, images, annotations, pipeline, auth, videos, ocr, sequences, crop_cls, segments, autolabel, testing
 from .config import settings
 from .models.training_job import TrainingJob
+from .models.video import Video
 from sqlalchemy import select, update
 from datetime import datetime
 
@@ -55,6 +56,11 @@ async def _purge_stale_tasks():
                     result_meta={"error": "App restarted — task was purged"},
                 )
             )
+            # Videos left mid-rotate / mid-extract by a restart: their task was purged, so
+            # nothing will ever finish them. Rotation never swaps the file until it is done,
+            # so the original is intact ('uploaded'); an extraction keeps its frames ('stopped').
+            await session.execute(update(Video).where(Video.status == "rotating").values(status="uploaded", task_id=None))
+            await session.execute(update(Video).where(Video.status == "extracting").values(status="stopped", task_id=None))
             await session.commit()
     except Exception:
         pass

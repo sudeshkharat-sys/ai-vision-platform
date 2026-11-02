@@ -266,14 +266,27 @@ async def stop_extraction(
     """Cancel a running frame-extraction task."""
     video = await get_owned_video(video_id, current_user, db)
 
-    if video.status != "extracting":
-        raise HTTPException(status_code=409, detail="No extraction in progress")
+    if video.status not in ("extracting", "rotating"):
+        raise HTTPException(status_code=409, detail="Nothing in progress to stop")
+    was_rotating = video.status == "rotating"
 
     if video.task_id:
-        from ..tasks.celery_app import celery_app
-        celery_app.control.revoke(video.task_id, terminate=True, signal="SIGTERM")
+        try:
+            from ..tasks.celery_app import celery_app
+            celery_app.control.revoke(video.task_id, terminate=True, signal="SIGTERM")
+        except Exception:
+            pass        # broker down / task already gone - still release the video below
 
-    video.status = "stopped"
+    if was_rotating:
+        # The original file is only replaced when rotation finishes, so it is still good.
+        try:
+            from ..tasks.video_processing import _resolve_video_path
+            src = _resolve_video_path(video.filepath)
+            if src is not None:
+                src.with_suffix(src.suffix + ".rotating.mp4").unlink(missing_ok=True)
+        except Exception:
+            pass
+    video.status = "uploaded" if was_rotating else "stopped"
     video.task_id = None
     await db.commit()
     await db.refresh(video)
