@@ -350,6 +350,7 @@ function DataTest({ projectId, projectName, opts, sourceReady, onReviewImages, o
     };
 
     const s = data?.summary;
+    const isCls = data?.source === 'classifier';
     // Severity: wrong class (worst) > missed > extra. Sort worst first, filter by failure type.
     const sev = (r) => (r.wrong_class > 0 ? 3 : 0) * 1e6 + (r.missed > 0 ? 2 : 0) * 1e3 + (r.extra > 0 ? 1 : 0)
         + (r.wrong_class || 0) * 1e-1 + (r.missed || 0) * 1e-2 + (r.extra || 0) * 1e-3;
@@ -357,7 +358,6 @@ function DataTest({ projectId, projectName, opts, sourceReady, onReviewImages, o
     const failedRows = (data?.rows || []).filter(r => !r.passed).sort((a, b) => sev(b) - sev(a));
     const kindCount = (k) => failedRows.filter(r => hasKind(r, k)).length;
     const rows = view === 'all' ? (data?.rows || []) : failedRows.filter(r => isCls || hasKind(r, kind));
-    const isCls = data?.source === 'classifier';
     return (
         <div className="tp-card">
             <h3>Test on training data</h3>
