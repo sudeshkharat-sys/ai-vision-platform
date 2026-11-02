@@ -1,11 +1,11 @@
 import React, { useState } from 'react';
 
 export const DEFAULT_IMAGE_FILTER = {
-    name: '', nameMode: 'contains', orientation: 'all', status: 'all', minW: '', maxW: '', minH: '', maxH: '', from: '', to: '', sort: 'upload', annMin: '', annMax: '', annNot: '', shape: 'all', longRatio: '', odd: 'all',
+    name: '', nameMode: 'contains', orientation: 'all', status: 'all', minW: '', maxW: '', minH: '', maxH: '', from: '', to: '', sort: 'upload', annMin: '', annMax: '', annNot: '', shape: 'all', longRatio: '', odd: 'all', cls: '', clsCount: 'any',
 };
 
 export const isFilterActive = (f) =>
-    !!f.name || f.orientation !== 'all' || f.status !== 'all' || f.minW !== '' || f.maxW !== '' || f.minH !== '' || f.maxH !== '' || f.from !== '' || f.to !== '' || f.sort !== 'upload' || f.annMin !== '' || f.annMax !== '' || f.annNot !== '' || f.shape !== 'all' || f.longRatio !== '' || f.odd !== 'all';
+    !!f.name || f.orientation !== 'all' || f.status !== 'all' || f.minW !== '' || f.maxW !== '' || f.minH !== '' || f.maxH !== '' || f.from !== '' || f.to !== '' || f.sort !== 'upload' || f.annMin !== '' || f.annMax !== '' || f.annNot !== '' || f.shape !== 'all' || f.longRatio !== '' || f.odd !== 'all' || f.cls !== '' || f.clsCount !== 'any';
 
 export const orientationOf = (img) => {
     if (!img.width || !img.height) return 'square';
@@ -41,6 +41,16 @@ export function filterImages(images, f) {
         }
         if (f.longRatio !== '' && (img.ann_max_ratio ?? 0) < Number(f.longRatio)) return false;   // has a long thin rectangle
         if (f.odd !== 'all' && (img.ann_odd ?? 1) < Number(f.odd)) return false;      // has a box with an unusual shape for its class
+        if (f.cls !== '' || f.clsCount !== 'any') {
+            // class filter: how many boxes of the chosen class (or of any single class) sit on this image
+            const cc = img.ann_classes || {};
+            const n = f.cls !== '' ? (cc[f.cls] || 0) : Math.max(0, ...Object.values(cc));
+            if (f.clsCount === 'any' && n < 1) return false;           // has the class
+            if (f.clsCount === 'none' && n > 0) return false;          // does not have the class (missing)
+            if (f.clsCount === 'one' && n !== 1) return false;
+            if (f.clsCount === 'twice' && n < 2) return false;         // repeated: same class 2+ times
+            if (f.clsCount === 'three' && n < 3) return false;
+        }
         const n = img.ann_count ?? 0;
         if (f.annMin !== '' && n < Number(f.annMin)) return false;
         if (f.annMax !== '' && n > Number(f.annMax)) return false;
@@ -69,7 +79,7 @@ export function filterImages(images, f) {
 
 const field = { fontSize: 12, padding: '4px 6px', borderRadius: 6, border: '1px solid #ddd', minWidth: 0 };
 
-export default function ImageFilterBar({ filter, onChange, total, shown, counts, onReview, onRotate, onCopy, onCheckMismatch, onResetEmpty }) {
+export default function ImageFilterBar({ classes = [], filter, onChange, total, shown, counts, onReview, onRotate, onCopy, onCheckMismatch, onResetEmpty }) {
     const [open, setOpen] = useState(false);          // filter fields collapsed by default so the image list gets the room
     const set = (k, v) => onChange({ ...filter, [k]: v });
     return (
@@ -139,6 +149,19 @@ export default function ImageFilterBar({ filter, onChange, total, shown, counts,
                 <option value="2">Odd boxes: clearly different (2x+)</option>
                 <option value="1.6">Odd boxes: a bit different (1.6x+)</option>
             </select>
+            <div style={{ display: 'flex', gap: 5 }} title="Find images by class: e.g. class 'rhs close' + 'twice or more' shows images with two or more rhs close boxes (extra / duplicate). Leave the class empty to find any class repeated on the image.">
+                <select style={{ ...field, flex: 1 }} value={filter.cls} onChange={e => set('cls', e.target.value)}>
+                    <option value="">Class: any</option>
+                    {classes.map(c => <option key={c} value={c}>{c}</option>)}
+                </select>
+                <select style={{ ...field, flex: 1 }} value={filter.clsCount} onChange={e => set('clsCount', e.target.value)}>
+                    <option value="any">is present</option>
+                    <option value="none">is missing</option>
+                    <option value="one">exactly once</option>
+                    <option value="twice">twice or more (extra)</option>
+                    <option value="three">3 or more</option>
+                </select>
+            </div>
             <input style={field} type="number" min="1" step="0.5" placeholder="long rectangle: length ÷ width ≥ (e.g. 3)"
                 title="Show images that have a long thin rectangle box. Square boxes = 1, a box twice as long as wide = 2"
                 value={filter.longRatio} onChange={e => set('longRatio', e.target.value)} />

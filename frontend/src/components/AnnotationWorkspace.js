@@ -398,6 +398,7 @@ const AnnotationWorkspace = ({ project, onProjectUpdated }) => {
     // ── Grid overlay + fine rotation ─────────────────────────────
     const [imgFilter, setImgFilter] = useState(DEFAULT_IMAGE_FILTER);
     // Sidebar list + prev/next follow the filter; the data itself is untouched.
+    const imageClassNames = useMemo(() => [...new Set(images.flatMap(i => Object.keys(i.ann_classes || {})))].sort(), [images]);
     const visibleImages = useMemo(() => filterImages(images, imgFilter), [images, imgFilter]);
     const orientationCounts = useMemo(() => {
         const c = { landscape: 0, portrait: 0, square: 0 };
@@ -1785,7 +1786,7 @@ Do you want to proceed?`;
                                     <button className="al-filter-clear" onClick={() => setSuggestedImageIds(null)}>Clear</button>
                                 </div>
                             )}
-                            <ImageFilterBar filter={imgFilter} onChange={setImgFilter}
+                            <ImageFilterBar classes={imageClassNames} filter={imgFilter} onChange={setImgFilter}
                                 total={images.length} shown={visibleImages.length} counts={orientationCounts} onReview={handleReviewFiltered} onRotate={handleRotateFiltered} onCopy={handleCopyFiltered} onCheckMismatch={handleCheckMismatch} onResetEmpty={handleResetEmpty} />
                             {visibleImages.map(img => {
                                 const isSuggested = suggestedImageIds?.has(String(img.id));
@@ -1799,6 +1800,7 @@ Do you want to proceed?`;
                                     <span className="image-item-name">{img.filename}</span>
                                     <span style={{ fontSize: 10, color: '#999', whiteSpace: 'nowrap' }} title={orientationOf(img)}>{img.width}×{img.height}</span>
                                     <span style={{ fontSize: 10, color: '#666', whiteSpace: 'nowrap' }} title="Annotations on this image (as of the last list refresh)">▭{img.ann_count ?? 0}</span>
+                                    {imgFilter.cls && (img.ann_classes?.[imgFilter.cls] || 0) > 0 && <span style={{ fontSize: 10, color: '#7a3ee0', whiteSpace: 'nowrap' }} title={`${imgFilter.cls} boxes on this image`}>{imgFilter.cls} ×{img.ann_classes[imgFilter.cls]}</span>}
                                     {(img.ann_odd ?? 1) >= 1.6 && <span style={{ fontSize: 10, color: '#e0603a', whiteSpace: 'nowrap' }} title="Most unusual box shape vs its class (1 = normal, 3 = three times off)">odd ×{img.ann_odd}</span>}
                                     {isSuggested && <span className="image-item-al-badge"><Target size={9} /></span>}
                                     <span className={`image-item-status status-${img.status}`}>

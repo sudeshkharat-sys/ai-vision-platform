@@ -130,13 +130,15 @@ async def list_project_images(
         .where(Image.project_id == project_id)
     )).all()
     dims = {img.id: (img.width or 1, img.height or 1) for img in images}
-    counts, shapes, longest = {}, {}, {}
+    counts, shapes, longest, classes = {}, {}, {}, {}
     boxes = []                                      # (image_id, class, width/height in pixels)
     for image_id, atype, bbox, cls in rows:
         atype = atype or "bbox"
         counts[image_id] = counts.get(image_id, 0) + 1
         sh = shapes.setdefault(image_id, {})
         sh[atype] = sh.get(atype, 0) + 1
+        cc = classes.setdefault(image_id, {})
+        cc[cls] = cc.get(cls, 0) + 1
         if bbox and len(bbox) == 4:                    # every shape keeps an axis-aligned bbox
             w, h = dims[image_id]
             bw, bh = bbox[2] * w, bbox[3] * h          # box size in pixels
@@ -156,6 +158,7 @@ async def list_project_images(
     for img in images:
         img.ann_count = counts.get(img.id, 0)      # plain attributes, read by ImageResponse
         img.ann_shapes = shapes.get(img.id, {})
+        img.ann_classes = classes.get(img.id, {})
         img.ann_max_ratio = round(longest.get(img.id, 0), 2)
         img.ann_odd = round(odd.get(img.id, 1), 2)
     return images
