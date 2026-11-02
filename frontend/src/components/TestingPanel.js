@@ -366,14 +366,14 @@ function DataTest({ projectId, projectName, opts, sourceReady, onReviewImages, o
         && (!cls || involves(r, cls) || count(r.preds, cls) > 0 || count(r.gts, cls) > 0 && !r.passed)
         && (!dupOnly || overDetected(r, cls));
     const failedAll = (data?.rows || []).filter(r => !r.passed);
-    const classNames = [...new Set(failedAll.flatMap(r => [...(r.problems || []).flatMap(p => [p.class_name, p.expected]),
+    const classNames = [...new Set((data?.rows || []).flatMap(r => [...(r.problems || []).flatMap(p => [p.class_name, p.expected]),
         ...(r.preds || []).map(b => b.class_name), ...(r.gts || []).map(b => b.class_name)]).filter(Boolean))].sort();
     const failedRows = failedAll.sort((a, b) => sev(b) - sev(a));
     const kindCount = (k) => failedRows.filter(r => hasKind(r, k)).length;
     // Weakest prediction on the image (passed images too): a low score often means a wrong or doubtful label.
     const minConf = (r) => {
         if (isCls) return r.confidence != null ? r.confidence : null;
-        const cs = (r.preds || []).map(b => b.conf).filter(c => c != null);
+        const cs = (r.preds || []).filter(b => !cls || b.class_name === cls).map(b => b.conf).filter(c => c != null);   // class filter: only that class's predictions
         return cs.length ? Math.min(...cs) : null;
     };
     const lowRows = (data?.rows || []).filter(r => { const c = minConf(r); return c != null && c < lowConf; })
@@ -512,7 +512,7 @@ function DataTest({ projectId, projectName, opts, sourceReady, onReviewImages, o
                             <span className="tp-note">Passed images are included - the model may be right and the label wrong.</span>
                         </div>
                     )}
-                    {view === 'failed' && !isCls && (
+                    {(view === 'failed' || view === 'low') && !isCls && (
                         <div className="tp-row" style={{ marginTop: 8 }}>
                             <label className="tp-field" title="Only images where this class is involved in the failure (predicted, expected or labelled)">Class
                                 <select value={cls} onChange={e => setCls(e.target.value)}>
@@ -520,10 +520,10 @@ function DataTest({ projectId, projectName, opts, sourceReady, onReviewImages, o
                                     {classNames.map(c => <option key={c} value={c}>{c}</option>)}
                                 </select>
                             </label>
-                            <label className="tp-field" title="Images where the model drew a class more times than you labelled it, e.g. two 'rhs close' where there is one">
+                            {view === 'failed' && <label className="tp-field" title="Images where the model drew a class more times than you labelled it, e.g. two 'rhs close' where there is one">
                                 <span><input type="checkbox" checked={dupOnly} onChange={e => setDupOnly(e.target.checked)} /> Same class twice (extra / duplicate)</span>
-                            </label>
-                            <span className="tp-note">Also applies to the Review buttons above.</span>
+                            </label>}
+                            <span className="tp-note">{view === 'low' ? 'Low-confidence list and its Review button use only this class.' : 'Also applies to the Review buttons above.'}</span>
                         </div>
                     )}
                     {view === 'failed' && !isCls && (
