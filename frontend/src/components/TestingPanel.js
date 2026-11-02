@@ -276,6 +276,7 @@ function DataTest({ projectId, projectName, opts, sourceReady, onReviewImages, o
     const [view, setView] = useState('failed');
     const [cls, setCls] = useState('');        // '' = any class
     const [dupOnly, setDupOnly] = useState(false);   // model drew a class more often than labelled
+    const [lowConf, setLowConf] = useState(0.6);   // 'Low confidence' tab: weakest prediction below this
     const [kind, setKind] = useState('all');   // all | wrong_class | missed | extra
     const [open, setOpen] = useState(null);
     const [err, setErr] = useState(null);
@@ -369,7 +370,15 @@ function DataTest({ projectId, projectName, opts, sourceReady, onReviewImages, o
         ...(r.preds || []).map(b => b.class_name), ...(r.gts || []).map(b => b.class_name)]).filter(Boolean))].sort();
     const failedRows = failedAll.sort((a, b) => sev(b) - sev(a));
     const kindCount = (k) => failedRows.filter(r => hasKind(r, k)).length;
-    const rows = view === 'all' ? (data?.rows || []) : failedRows.filter(r => isCls || hasKind(r, kind));
+    // Weakest prediction on the image (passed images too): a low score often means a wrong or doubtful label.
+    const minConf = (r) => {
+        if (isCls) return r.confidence != null ? r.confidence : null;
+        const cs = (r.preds || []).map(b => b.conf).filter(c => c != null);
+        return cs.length ? Math.min(...cs) : null;
+    };
+    const lowRows = (data?.rows || []).filter(r => { const c = minConf(r); return c != null && c < lowConf; })
+        .sort((a, b) => minConf(a) - minConf(b));
+    const rows = view === 'low' ? lowRows : view === 'all' ? (data?.rows || []) : failedRows.filter(r => isCls || hasKind(r, kind));
     return (
         <div className="tp-card">
             <h3>Test on training data</h3>
@@ -484,8 +493,25 @@ function DataTest({ projectId, projectName, opts, sourceReady, onReviewImages, o
 
                     <div className="tp-tabs" style={{ marginTop: 12 }}>
                         <button className={`tp-tab ${view === 'failed' ? 'tp-tab--on' : ''}`} onClick={() => setView('failed')}>Failed ({s.failed})</button>
+                        <button className={`tp-tab ${view === 'low' ? 'tp-tab--on' : ''}`} onClick={() => setView('low')}
+                            title="Images where the model was unsure (even if they passed) - often a sign of a wrong label">Low confidence ({lowRows.length})</button>
                         <button className={`tp-tab ${view === 'all' ? 'tp-tab--on' : ''}`} onClick={() => setView('all')}>All ({s.images})</button>
                     </div>
+                    {view === 'low' && (
+                        <div className="tp-row" style={{ marginTop: 8 }}>
+                            <label className="tp-field" title="Show images whose weakest prediction is below this confidence">Weakest score below
+                                <input type="number" min="0.05" max="1" step="0.05" style={{ width: 80 }} value={lowConf}
+                                    onChange={e => setLowConf(Math.min(1, Math.max(0.05, Number(e.target.value) || 0.6)))} />
+                            </label>
+                            {onReviewImages && (
+                                <button className="tp-btn" disabled={lowRows.length === 0}
+                                    onClick={() => onReviewImages(lowRows.map(r => r.id), `Low confidence < ${lowConf} (${lowRows.length})`)}>
+                                    Review &amp; fix these {lowRows.length} (lowest first)
+                                </button>
+                            )}
+                            <span className="tp-note">Passed images are included - the model may be right and the label wrong.</span>
+                        </div>
+                    )}
                     {view === 'failed' && !isCls && (
                         <div className="tp-row" style={{ marginTop: 8 }}>
                             <label className="tp-field" title="Only images where this class is involved in the failure (predicted, expected or labelled)">Class
@@ -513,6 +539,7 @@ function DataTest({ projectId, projectName, opts, sourceReady, onReviewImages, o
                                 <img src={`${BASE_URL}${r.filepath}`} alt={r.filename} loading="lazy" />
                                 <div>
                                     <div style={{ padding: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.filename}</div>
+                                    {view === 'low' && minConf(r) != null && <span className="tp-tag">conf {minConf(r).toFixed(2)}</span>}
                                     {isCls
                                         ? (r.passed ? 'ok' : <span className="tp-tag">{r.reason}</span>)
                                         : r.passed ? 'ok' : <>
@@ -526,7 +553,7 @@ function DataTest({ projectId, projectName, opts, sourceReady, onReviewImages, o
                         ))}
                     </div>
                     {rows.length > 200 && <p className="tp-note">Showing the first 200 of {rows.length}.</p>}
-                    {rows.length === 0 && <p className="tp-note">{view === 'failed' ? 'No failed images 🎉' : 'Nothing to show'}</p>}
+                    {rows.length === 0 && <p className="tp-note">{view === 'failed' ? 'No failed images 🎉' : view === 'low' ? 'No low-confidence images at this threshold' : 'Nothing to show'}</p>}
                 </>
             )}
             {open && <Viewer row={open} source={data?.source} onClose={() => setOpen(null)} />}
