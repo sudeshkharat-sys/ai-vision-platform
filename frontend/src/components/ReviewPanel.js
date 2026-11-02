@@ -438,8 +438,15 @@ export default function ReviewPanel({ project, images, onClose, onAnnotationsUpd
     useEffect(() => {
         const handler = (e) => {
             if (pendingAnnotation || pendingPolyline) return;
-            const tag = document.activeElement?.tagName;
-            if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+            // Only skip when the user is really typing. A checkbox / button / select that was just
+            // clicked keeps focus, and used to swallow the arrow keys until the page was refreshed.
+            const el = document.activeElement;
+            const tag = el?.tagName;
+            const typing = tag === 'TEXTAREA' || el?.isContentEditable ||
+                (tag === 'INPUT' && !['checkbox', 'radio', 'button', 'submit', 'range', 'color'].includes(el.type));
+            if (typing) return;
+            if (el && el !== document.body && (tag === 'SELECT' || (tag === 'INPUT' && el.type === 'range')) &&
+                (e.key === 'ArrowRight' || e.key === 'ArrowLeft')) el.blur();   // let the arrows move images, not the control
 
             if ((drawMode === 'polyline' || drawMode === 'segment') && newPolylinePoints.length > 0) {
                 if (e.key === 'Enter') { e.preventDefault(); finishPolyline(); return; }
