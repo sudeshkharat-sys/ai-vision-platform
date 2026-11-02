@@ -274,6 +274,8 @@ function DataTest({ projectId, projectName, opts, sourceReady, onReviewImages, o
     const [st, setSt] = useState(null);
     const [data, setData] = useState(null);
     const [view, setView] = useState('failed');
+    const [cls, setCls] = useState('');        // '' = any class
+    const [dupOnly, setDupOnly] = useState(false);   // model drew a class more often than labelled
     const [kind, setKind] = useState('all');   // all | wrong_class | missed | extra
     const [open, setOpen] = useState(null);
     const [err, setErr] = useState(null);
@@ -354,8 +356,18 @@ function DataTest({ projectId, projectName, opts, sourceReady, onReviewImages, o
     // Severity: wrong class (worst) > missed > extra. Sort worst first, filter by failure type.
     const sev = (r) => (r.wrong_class > 0 ? 3 : 0) * 1e6 + (r.missed > 0 ? 2 : 0) * 1e3 + (r.extra > 0 ? 1 : 0)
         + (r.wrong_class || 0) * 1e-1 + (r.missed || 0) * 1e-2 + (r.extra || 0) * 1e-3;
-    const hasKind = (r, k) => (k === 'all' ? true : (r[k] || 0) > 0);
-    const failedRows = (data?.rows || []).filter(r => !r.passed).sort((a, b) => sev(b) - sev(a));
+    const count = (list, c) => (list || []).filter(b => b.class_name === c).length;
+    const involves = (r, c) => (r.problems || []).some(p => p.class_name === c || p.expected === c);
+    // class c predicted more times than it is labelled (e.g. two "rhs close" where one is labelled)
+    const overDetected = (r, c) => (c ? [c] : [...new Set((r.preds || []).map(b => b.class_name))])
+        .some(x => count(r.preds, x) > count(r.gts, x));
+    const hasKind = (r, k) => (k === 'all' || (r[k] || 0) > 0)
+        && (!cls || involves(r, cls) || count(r.preds, cls) > 0 || count(r.gts, cls) > 0 && !r.passed)
+        && (!dupOnly || overDetected(r, cls));
+    const failedAll = (data?.rows || []).filter(r => !r.passed);
+    const classNames = [...new Set(failedAll.flatMap(r => [...(r.problems || []).flatMap(p => [p.class_name, p.expected]),
+        ...(r.preds || []).map(b => b.class_name), ...(r.gts || []).map(b => b.class_name)]).filter(Boolean))].sort();
+    const failedRows = failedAll.sort((a, b) => sev(b) - sev(a));
     const kindCount = (k) => failedRows.filter(r => hasKind(r, k)).length;
     const rows = view === 'all' ? (data?.rows || []) : failedRows.filter(r => isCls || hasKind(r, kind));
     return (
@@ -474,6 +486,20 @@ function DataTest({ projectId, projectName, opts, sourceReady, onReviewImages, o
                         <button className={`tp-tab ${view === 'failed' ? 'tp-tab--on' : ''}`} onClick={() => setView('failed')}>Failed ({s.failed})</button>
                         <button className={`tp-tab ${view === 'all' ? 'tp-tab--on' : ''}`} onClick={() => setView('all')}>All ({s.images})</button>
                     </div>
+                    {view === 'failed' && !isCls && (
+                        <div className="tp-row" style={{ marginTop: 8 }}>
+                            <label className="tp-field" title="Only images where this class is involved in the failure (predicted, expected or labelled)">Class
+                                <select value={cls} onChange={e => setCls(e.target.value)}>
+                                    <option value="">Any class</option>
+                                    {classNames.map(c => <option key={c} value={c}>{c}</option>)}
+                                </select>
+                            </label>
+                            <label className="tp-field" title="Images where the model drew a class more times than you labelled it, e.g. two 'rhs close' where there is one">
+                                <span><input type="checkbox" checked={dupOnly} onChange={e => setDupOnly(e.target.checked)} /> Same class twice (extra / duplicate)</span>
+                            </label>
+                            <span className="tp-note">Also applies to the Review buttons above.</span>
+                        </div>
+                    )}
                     {view === 'failed' && !isCls && (
                         <div className="tp-tabs" style={{ marginTop: 6 }}>
                             {[['all', 'Worst first'], ['wrong_class', 'Wrong class'], ['missed', 'Missed'], ['extra', 'Extra']].map(([k, lbl]) => (
