@@ -274,6 +274,7 @@ function DataTest({ projectId, projectName, opts, sourceReady, onReviewImages, o
     const [st, setSt] = useState(null);
     const [data, setData] = useState(null);
     const [view, setView] = useState('failed');
+    const [kind, setKind] = useState('all');   // all | wrong_class | missed | extra
     const [open, setOpen] = useState(null);
     const [err, setErr] = useState(null);
     const [newName, setNewName] = useState('');
@@ -348,7 +349,13 @@ function DataTest({ projectId, projectName, opts, sourceReady, onReviewImages, o
     };
 
     const s = data?.summary;
-    const rows = (data?.rows || []).filter(r => view === 'all' || !r.passed);
+    // Severity: wrong class (worst) > missed > extra. Sort worst first, filter by failure type.
+    const sev = (r) => (r.wrong_class > 0 ? 3 : 0) * 1e6 + (r.missed > 0 ? 2 : 0) * 1e3 + (r.extra > 0 ? 1 : 0)
+        + (r.wrong_class || 0) * 1e-1 + (r.missed || 0) * 1e-2 + (r.extra || 0) * 1e-3;
+    const hasKind = (r, k) => (k === 'all' ? true : (r[k] || 0) > 0);
+    const failedRows = (data?.rows || []).filter(r => !r.passed).sort((a, b) => sev(b) - sev(a));
+    const kindCount = (k) => failedRows.filter(r => hasKind(r, k)).length;
+    const rows = view === 'all' ? (data?.rows || []) : failedRows.filter(r => isCls || hasKind(r, kind));
     const isCls = data?.source === 'classifier';
     return (
         <div className="tp-card">
@@ -407,11 +414,16 @@ function DataTest({ projectId, projectName, opts, sourceReady, onReviewImages, o
                                 A failure is not always the model's fault - sometimes the label is wrong. Check first, then retrain.
                             </p>
                             <div className="tp-row">
-                                {onReviewImages && (
-                                    <button className="tp-btn" onClick={() => onReviewImages(data.rows.filter(r => !r.passed).map(r => r.id), `Failed test - ${s.failed} images`)}>
+                                {onReviewImages && (isCls ? (
+                                    <button className="tp-btn" onClick={() => onReviewImages(failedRows.map(r => r.id), `Failed test - ${s.failed} images`)}>
                                         1 · Review &amp; fix labels
                                     </button>
-                                )}
+                                ) : [['all', 'All failed (worst first)'], ['wrong_class', 'Wrong class'], ['missed', 'Missed'], ['extra', 'Extra']].map(([k, lbl]) => (
+                                    <button key={k} className={`tp-btn ${k === 'all' ? '' : 'tp-btn--ghost'}`} disabled={kindCount(k) === 0}
+                                        onClick={() => onReviewImages(failedRows.filter(r => hasKind(r, k)).map(r => r.id), `Failed test - ${lbl} (${kindCount(k)})`)}>
+                                        {k === 'all' ? '1 · Review: ' : ''}{lbl} ({kindCount(k)})
+                                    </button>
+                                )))}
                                 <button className="tp-btn tp-btn--ghost" disabled={running || !sourceReady} onClick={retest}
                                     title="Runs the model again on just these images, using your corrected labels">
                                     {onReviewImages ? '2 · ' : ''}Re-test the failed ones
@@ -456,6 +468,13 @@ function DataTest({ projectId, projectName, opts, sourceReady, onReviewImages, o
                         <button className={`tp-tab ${view === 'failed' ? 'tp-tab--on' : ''}`} onClick={() => setView('failed')}>Failed ({s.failed})</button>
                         <button className={`tp-tab ${view === 'all' ? 'tp-tab--on' : ''}`} onClick={() => setView('all')}>All ({s.images})</button>
                     </div>
+                    {view === 'failed' && !isCls && (
+                        <div className="tp-tabs" style={{ marginTop: 6 }}>
+                            {[['all', 'Worst first'], ['wrong_class', 'Wrong class'], ['missed', 'Missed'], ['extra', 'Extra']].map(([k, lbl]) => (
+                                <button key={k} className={`tp-tab ${kind === k ? 'tp-tab--on' : ''}`} onClick={() => setKind(k)}>{lbl} ({kindCount(k)})</button>
+                            ))}
+                        </div>
+                    )}
                     <div className="tp-grid">
                         {rows.slice(0, 200).map(r => (
                             <div key={r.id} className={`tp-thumb ${r.passed ? '' : 'tp-thumb--bad'}`} onClick={() => setOpen(r)}>
