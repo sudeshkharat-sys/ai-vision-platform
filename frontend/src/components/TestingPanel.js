@@ -281,6 +281,7 @@ function DataTest({ projectId, projectName, opts, sourceReady, onReviewImages, o
     const [sent, setSent] = useState(null);
     const [sending, setSending] = useState(false);
     const [variants, setVariants] = useState(2);
+    const [zoom, setZoom] = useState(1);
     const [addedBack, setAddedBack] = useState(null);
     const running = st?.state === 'running';
 
@@ -320,10 +321,10 @@ function DataTest({ projectId, projectName, opts, sourceReady, onReviewImages, o
         } catch (e) { setErr(errMsg(e)); }
     };
     const addBack = async () => {
-        if (!window.confirm(`Add the ${s.failed} failed images back into THIS project (original + ${variants} variant${variants === 1 ? '' : 's'} each)?\n\nThey are named failed_<model>_<date>_<name> and stored in their own folder.`)) return;
+        if (!window.confirm(`Add the ${s.failed} failed images back into THIS project (original + ${variants} variant${variants === 1 ? '' : 's'}${zoom ? ` + up to ${zoom} zoomed cop${zoom === 1 ? 'y' : 'ies'}` : ''} each)?\n\nThey are named failed_<model>_<date>_<name> and stored in their own folder.`)) return;
         setSending(true); setErr(null);
         try {
-            const r = await axios.post(`${API_URL}/testing/${projectId}/training-data/add-back`, { variants });
+            const r = await axios.post(`${API_URL}/testing/${projectId}/training-data/add-back`, { variants, zoom });
             setAddedBack(r.data);
             if (onImagesChanged) onImagesChanged();        // the workspace image list must reload to show them
         } catch (e) { setErr(errMsg(e)); } finally { setSending(false); }
@@ -436,6 +437,11 @@ function DataTest({ projectId, projectName, opts, sourceReady, onReviewImages, o
                                 <label className="tp-field" title="Brightness / blur variants. Labels stay exactly the same; nothing is flipped or rotated.">Variants per image
                                     <select value={variants} onChange={e => setVariants(Number(e.target.value))}>
                                         {[0, 1, 2, 3].map(n => <option key={n} value={n}>{n}{n === 2 ? ' (recommended)' : ''}</option>)}
+                                    </select>
+                                </label>
+                                <label className="tp-field" title="Zoomed-in crops that always keep every labelled object fully visible; boxes/polygons are remapped to the crop. Skipped for an image when its objects fill too much of it.">Zoom copies per image
+                                    <select value={zoom} onChange={e => setZoom(Number(e.target.value))}>
+                                        {[0, 1, 2].map(n => <option key={n} value={n}>{n}{n === 1 ? ' (recommended)' : ''}</option>)}
                                     </select>
                                 </label>
                                 <button className="tp-btn" disabled={sending} onClick={addBack}>Add failed images back to this project</button>

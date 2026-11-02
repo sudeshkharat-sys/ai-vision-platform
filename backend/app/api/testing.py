@@ -53,7 +53,7 @@ from ..services.data_segments import assign_segments, normalize_segments
 from ..services.det_model import det_model_uses_preprocess, resolve_det_model_path
 from ..services.image_files import resolve_image_file
 from ..services.seg_model import resolve_seg_model_path, seg_model_uses_preprocess
-from ..services.test_variants import failed_copy_key, make_variants
+from ..services.test_variants import failed_copy_key, make_variants, make_zoom, remap_bbox, remap_points
 from ..services.test_eval import score_classification, score_detections, summarize
 
 router = APIRouter(prefix="/testing", tags=["testing"])
@@ -658,6 +658,7 @@ async def send_failed(project_id: str, body: SendFailedBody, current_user: User 
 
 
 class AddBackBody(BaseModel):
+    zoom: int = 0                      # zoomed-in copies per failed image (0..2); labels are remapped
     variants: int = 2                  # label-safe copies per failed image (0..3), on top of the original
     image_ids: Optional[list] = None   # default: every failed image of the last test
 
@@ -705,9 +706,10 @@ async def add_failed_back(project_id: str, body: AddBackBody, current_user: User
     dest_dir = settings.upload_dir / project_id / "failed_test" / run
     dest_dir.mkdir(parents=True, exist_ok=True)
     nvar = max(0, min(int(body.variants), 3))
+    nzoom = max(0, min(int(body.zoom), 2))
 
     def work():
-        made = []        # (src Image, display name, saved file name)
+        made = []        # (src Image, display name, saved file name, zoom window or None)
         missing = 0
         for n, img in enumerate(imgs):
             src = resolve_image_file(project_id, img.filepath)
@@ -715,16 +717,24 @@ async def add_failed_back(project_id: str, body: AddBackBody, current_user: User
             if pic is None:
                 missing += 1
                 continue
-            versions = [("", pic)] + [(f"_v{i + 1}", v) for i, v in enumerate(make_variants(pic, nvar, seed=n))]
-            for suffix, arr in versions:
+            boxes = [list(a.bbox) for a in anns.get(img.id, []) if a.bbox]
+            for a in anns.get(img.id, []):
+                for p in (a.points or []):
+                    boxes.append([p[0], p[1], 0.0, 0.0])
+            versions = [("", pic, None)] + [(f"_v{i + 1}", v, None) for i, v in enumerate(make_variants(pic, nvar, seed=n))]
+            for z in range(nzoom):
+                zr = make_zoom(pic, boxes, seed=n * 7 + z + 1)
+                if zr is not None:
+                    versions.append((f"_z{z + 1}", zr[0], zr[1]))
+            for suffix, arr, win in versions:
                 fname = f"{uuid.uuid4()}.jpg"
                 cv2.imwrite(str(dest_dir / fname), arr, [cv2.IMWRITE_JPEG_QUALITY, 95])
                 stem = Path(img.filename).stem
-                made.append((img, f"failed_{tag}_{stamp}_{stem}{suffix}.jpg", fname))
+                made.append((img, f"failed_{tag}_{stamp}_{stem}{suffix}.jpg", fname, win))
         return made, missing
 
     made, missing = await run_in_threadpool(work)
-    for img, display, fname in made:
+    for img, display, fname, win in made:
         new_img = Image(project_id=project_id, filename=display,
                         filepath=f"/uploads/{project_id}/failed_test/{run}/{fname}",
                         width=img.width, height=img.height, status="annotated" if anns.get(img.id) else img.status)
@@ -732,15 +742,16 @@ async def add_failed_back(project_id: str, body: AddBackBody, current_user: User
         await db.flush()
         for a in anns.get(img.id, []):
             db.add(Annotation(image_id=new_img.id, class_name=a.class_name,
-                              bbox=list(a.bbox) if a.bbox else None, source=a.source,
-                              annotation_type=a.annotation_type, points=list(a.points) if a.points else None,
+                              bbox=(remap_bbox(a.bbox, win) if win else list(a.bbox)) if a.bbox else None, source=a.source,
+                              annotation_type=a.annotation_type,
+                              points=(remap_points(a.points, win) if win else list(a.points)) if a.points else None,
                               state=a.state))
     await db.commit()
 
-    done_ids = {img.id for img, _, _ in made}
+    done_ids = {m[0].id for m in made}
     data["added_back"] = sorted(already | done_ids)
     f.write_text(json.dumps(data))
-    return {"images": len(done_ids), "added": len(made), "variants": nvar, "missing_files": missing,
+    return {"images": len(done_ids), "added": len(made), "variants": nvar, "zoom": nzoom, "missing_files": missing,
             "already_present": len(skipped_dupes), "name_prefix": f"failed_{tag}_{stamp}_"}
 
 
