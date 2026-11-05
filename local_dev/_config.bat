@@ -16,8 +16,12 @@ set "PGBIN=%PGROOT%\bin"
 set "PGDATA=%PGROOT%\data"
 set "PGLOG=C:\postgresql-17.8-1-windows-x64-binaries\pg.log"
 set "REDISDIR=C:\redis-latest"
-rem Miniconda root differs per machine. First one that exists wins.
+rem Several conda installs can exist. Use the one that actually contains the env named in CONDA_ENV.
 set "CONDA_ACTIVATE="
-if exist "C:\conda\Scripts\activate.bat" set "CONDA_ACTIVATE=C:\conda\Scripts\activate.bat"
-if not defined CONDA_ACTIVATE if exist "%USERPROFILE%\miniconda3\Scripts\activate.bat" set "CONDA_ACTIVATE=%USERPROFILE%\miniconda3\Scripts\activate.bat"
-if not defined CONDA_ACTIVATE if exist "%USERPROFILE%\anaconda3\Scripts\activate.bat" set "CONDA_ACTIVATE=%USERPROFILE%\anaconda3\Scripts\activate.bat"
+for %%R in ("C:\conda" "%USERPROFILE%\AppData\Local\miniconda3_new" "%USERPROFILE%\miniconda3" "%USERPROFILE%\anaconda3" "%LOCALAPPDATA%\miniconda3") do (
+  if not defined CONDA_ACTIVATE if exist "%%~R\envs\%CONDA_ENV%\python.exe" if exist "%%~R\Scripts\activate.bat" set "CONDA_ACTIVATE=%%~R\Scripts\activate.bat"
+)
+if not defined CONDA_ACTIVATE (
+  echo.
+  echo [ERROR] No conda env named "%CONDA_ENV%" found in any known conda install. Create it first.
+)
