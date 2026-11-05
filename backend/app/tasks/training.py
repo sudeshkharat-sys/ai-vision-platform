@@ -20,6 +20,16 @@ import numpy as np
 import redis as redis_lib
 
 
+def _train_device():
+    """CUDA device 0 when a GPU is usable, otherwise CPU (so training also runs on a PC without a GPU)."""
+    try:
+        import torch
+        return 0 if torch.cuda.is_available() else "cpu"
+    except Exception:
+        return "cpu"
+
+
+
 def _safe_float(v):
     """Convert a numeric value to a JSON-safe float (None for NaN/Inf)."""
     try:
@@ -886,7 +896,7 @@ def train_seed_model(
         batch=_batch,
         cache=_cache,        # RAM when workers=0, disk cache with workers (no per-worker RAM copies)
         amp=True,            # FP16 mixed precision — halves VRAM per tensor, faster tensor cores
-        device=0,            # explicit CUDA device
+        device=_train_device(),  # CUDA 0 when available, else CPU
         lr0=settings.seed_learning_rate,
         lrf=0.01,            # final lr = lr0 * lrf
         cos_lr=True,         # cosine LR schedule — smoother convergence on small datasets
@@ -1095,7 +1105,7 @@ def train_main_model(
         batch=_batch,
         cache=True,          # preload dataset into RAM — eliminates disk I/O stall with workers=0
         amp=True,            # FP16 mixed precision — halves VRAM per tensor, faster tensor cores
-        device=0,            # explicit CUDA device
+        device=_train_device(),  # CUDA 0 when available, else CPU
         lr0=lr0,
         lrf=0.01,            # final lr = lr0 * lrf
         cos_lr=True,         # cosine LR schedule
@@ -1299,7 +1309,7 @@ def train_seg_model(
         batch=_batch,
         cache=True,
         amp=True,
-        device=0,
+        device=_train_device(),
         lr0=settings.seed_learning_rate,
         lrf=0.01,
         cos_lr=True,
