@@ -9,7 +9,7 @@ set "BACKEND_APP=app.main:app"
 set "BACKEND_PORT=8000"
 set "CELERY_APP=app.tasks.celery_app"
 rem Leave FRONTEND_PORT empty to use the project's own default.
-set "FRONTEND_PORT="
+set "FRONTEND_PORT=3001"
 rem ===== Shared tools (same for every project) =====
 set "PGROOT=C:\postgresql-17.8-1-windows-x64-binaries\pgsql"
 set "PGBIN=%PGROOT%\bin"
