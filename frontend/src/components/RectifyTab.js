@@ -28,7 +28,7 @@ function Crop({ url }) {
  * Rectify: re-check auto-labelled boxes that are unusually dark (torch light
  * missed the lock). Self-contained; talks only to /rectify/*.
  */
-export default function RectifyTab({ projectId }) {
+export default function RectifyTab({ projectId, onReviewImages }) {
     const base = `${API_URL}/rectify/${projectId}`;
     const [states, setStates] = useState([]);
     const [state, setState] = useState('');
@@ -39,6 +39,7 @@ export default function RectifyTab({ projectId }) {
     const [cutoff, setCutoff] = useState(3.5);   // robust z-score above which a box counts as an outlier
     const [enhance, setEnhance] = useState(true);
     const [page, setPage] = useState(0);
+    const [picked, setPicked] = useState({});   // ann_id -> image_id, ticked for the Review panel
     const [done, setDone] = useState({});     // ann_id -> 'kept' | new state
     const [err, setErr] = useState(null);
     const timer = useRef(null);
@@ -52,7 +53,7 @@ export default function RectifyTab({ projectId }) {
     }, [base]);
 
     const loadResults = useCallback(() => {
-        axios.get(`${base}/results`).then(r => { setData(r.data); setPage(0); setDone({}); }).catch(() => { });
+        axios.get(`${base}/results`).then(r => { setData(r.data); setPage(0); setDone({}); setPicked({}); }).catch(() => { });
     }, [base]);
 
     useEffect(() => { setData({ summary: {}, items: [] }); setSt({ state: 'idle' }); setState(''); loadStates();
@@ -96,6 +97,13 @@ export default function RectifyTab({ projectId }) {
     const nOut = sorted.filter(i => i.z >= cutoff).length;
     const items = outliersOnly ? sorted.filter(i => i.z >= cutoff) : sorted;
     const pageItems = items.slice(page * PAGE, page * PAGE + PAGE);
+    const pickedCount = Object.keys(picked).length;
+    const toggle = (it) => setPicked(p => { const n = { ...p }; if (n[it.ann_id]) delete n[it.ann_id]; else n[it.ann_id] = it.image_id; return n; });
+    const pickMany = (list) => setPicked(p => { const n = { ...p }; list.forEach(it => { n[it.ann_id] = it.image_id; }); return n; });
+    const sendToReview = () => {
+        const ids = [...new Set(Object.values(picked))];
+        onReviewImages(ids, `Rectify - ${ids.length} dark-label images`);
+    };
     const pages = Math.max(1, Math.ceil(items.length / PAGE));
     const sm = data.summary || {};
     const running = st.state === 'running';
@@ -160,11 +168,22 @@ export default function RectifyTab({ projectId }) {
                     <button className="tp-btn tp-btn--ghost" disabled={page + 1 >= pages} onClick={() => setPage(p => p + 1)}>›</button>
                 </div>
 
+                <div className="tp-row" style={{ alignItems: 'center', margin: '8px 0' }}>
+                    <button className="tp-btn tp-btn--ghost" onClick={() => pickMany(pageItems)}>Select this page</button>
+                    <button className="tp-btn tp-btn--ghost" onClick={() => pickMany(items)}>Select all {items.length}</button>
+                    <button className="tp-btn tp-btn--ghost" disabled={!pickedCount} onClick={() => setPicked({})}>Clear</button>
+                    {onReviewImages
+                        ? <button className="tp-btn" disabled={!pickedCount} onClick={sendToReview}>Review selected in Review panel ({new Set(Object.values(picked)).size} images)</button>
+                        : <span className="tp-note">Open the Testing Hub from inside a project to send images to the Review panel.</span>}
+                </div>
                 <div className="tp-grid" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(210px, 1fr))' }}>
                     {pageItems.map(it => {
                         const d = done[it.ann_id];
                         return (
                             <div key={it.ann_id} className={`tp-thumb ${it.z >= cutoff ? 'tp-thumb--bad' : ''}`} style={{ cursor: 'default', opacity: d ? 0.55 : 1 }}>
+                                <label style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '4px 8px', fontSize: 12, background: picked[it.ann_id] ? '#fdecef' : '#fafafa', cursor: 'pointer' }}>
+                                    <input type="checkbox" checked={!!picked[it.ann_id]} onChange={() => toggle(it)} /> Review
+                                </label>
                                 <Crop url={`${base}/crop/${it.ann_id}?enhance=${enhance ? 1 : 0}`} />
                                 <div>
                                     <span className="tp-tag">{it.state}</span>

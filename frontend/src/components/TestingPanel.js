@@ -612,7 +612,7 @@ export default function TestingPanel({ projects, fixedProject, onReviewImages, o
                     {mode === 'data' && <DataTest projectId={projectId} projectName={project?.name || ''} opts={opts} sourceReady={ready} onReviewImages={onReviewImages} onImagesChanged={onImagesChanged} />}
                     {mode === 'images' && <ImageTest projectId={projectId} opts={opts} />}
                     {mode === 'video' && <VideoTest projectId={projectId} opts={opts} />}
-                    {mode === 'rectify' && <RectifyTab projectId={projectId} />}
+                    {mode === 'rectify' && <RectifyTab projectId={projectId} onReviewImages={onReviewImages} />}
                 </>
             )}
         </div>
