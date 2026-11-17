@@ -17,6 +17,9 @@ call :w %P%-backend start-backend
 call :w %P%-celery start-celery
 call :w %P%-frontend start-frontend
 call :w %P%-install install-requirements
+call :w %P%-restart restart-backend
+call :w %P%-restart-celery restart-celery
+call :w %P%-log show-log
 echo.
 echo Created commands in %OUT%
 echo.
