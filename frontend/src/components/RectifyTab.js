@@ -45,7 +45,6 @@ export default function RectifyTab({ projectId }) {
     const loadStates = useCallback(() => {
         axios.get(`${base}/states`).then(r => {
             setStates(r.data);
-            setState(prev => prev || (r.data.find(x => x.state.toLowerCase() === 'closed')?.state ?? ''));
         }).catch(e => setErr(errMsg(e)));
     }, [base]);
 
