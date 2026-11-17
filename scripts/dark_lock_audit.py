@@ -62,6 +62,7 @@ def main():
     ap.add_argument("--list-states", action="store_true")
     ap.add_argument("--out", default="audit_out")
     ap.add_argument("--sheet-size", type=int, default=30)
+    ap.add_argument("--z", type=float, default=3.5, help="robust z-score above which a box is an outlier")
     ap.add_argument("--top", type=int, default=600, help="crops to put in contact sheets")
     args = ap.parse_args()
 
@@ -90,8 +91,26 @@ def main():
 
     # darkest first: low ratio, then low inside brightness
     res.sort(key=lambda d: (d["ratio"], d["inside_mean"]))
+    # Outlier flag: compare every box with the NORMAL range of the same set.
+    # Robust z-score (median/MAD) so the outliers themselves don't distort it.
+    # Darkness score = 255 - inside_mean (higher = darker).
+    dk = np.array([255 - d["inside_mean"] for d in res]) if res else np.array([])
+    if len(dk):
+        med = np.median(dk); mad = np.median(np.abs(dk - med)) * 1.4826 or 1.0
+        q1, q3 = np.percentile(dk, [25, 75]); fence = q3 + 1.5 * (q3 - q1)
+        for d, v in zip(res, dk):
+            d["dark_score"] = round(float(v), 1)
+            d["z"] = round(float((v - med) / mad), 2)
+            d["outlier"] = int(v > fence or (v - med) / mad > args.z)
+        print(f"normal darkness: median={med:.1f}  upper fence={fence:.1f}  "
+              f"outliers={sum(d['outlier'] for d in res)} of {len(res)}")
+        # outliers first, then by how extreme
+        res.sort(key=lambda d: (-d["outlier"], -d["z"]))
+        with open(out / "outliers.csv", "w", newline="") as f:
+            wr = csv.DictWriter(f, fieldnames=["filename", "state", "dark_score", "z", "ratio", "image_id", "ann_id"], extrasaction="ignore")
+            wr.writeheader(); wr.writerows(d for d in res if d["outlier"])
     with open(out / "dark_audit.csv", "w", newline="") as f:
-        cols = ["rank", "filename", "state", "inside_mean", "outside_mean", "ratio", "dark_pct", "image_id", "ann_id"]
+        cols = ["rank", "outlier", "dark_score", "z", "filename", "state", "inside_mean", "outside_mean", "ratio", "dark_pct", "image_id", "ann_id"]
         wr = csv.DictWriter(f, fieldnames=cols, extrasaction="ignore"); wr.writeheader()
         for i, d in enumerate(res, 1):
             wr.writerow({"rank": i, **d})
@@ -109,7 +128,7 @@ def main():
             c[:, :, 0] = cv2.createCLAHE(3.0, (4, 4)).apply(c[:, :, 0])
             c = cv2.cvtColor(c, cv2.COLOR_LAB2BGR)
             c = cv2.resize(c, (T, T))
-            cv2.putText(c, f"#{j} r={d['ratio']} {d['state']}", (4, 16),
+            cv2.putText(c, f"#{j} dark={d.get('dark_score')} z={d.get('z')}", (4, 16),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
             cv2.putText(c, d["filename"][-28:], (4, T - 6),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
