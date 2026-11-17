@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import axios from 'axios';
 import { API_URL, BASE_URL } from '../config';
+import RectifyTab from './RectifyTab';
 import './TestingPanel.css';
 
 const pct = (v) => (v == null ? '–' : `${(v * 100).toFixed(1)}%`);
@@ -604,13 +605,14 @@ export default function TestingPanel({ projects, fixedProject, onReviewImages, o
                     <SourceBar projectId={projectId} sources={sources} reload={reload} value={opts} onChange={setOpts} />
                     {!ready && sources && <div className="tp-err">No usable model selected. Train one in the Training panel, pick custom weights, or upload a .pt.</div>}
                     <div className="tp-tabs">
-                        {[['data', 'Training data'], ['images', 'Upload images'], ['video', 'Upload video']].map(([k, l]) => (
+                        {[['data', 'Training data'], ['images', 'Upload images'], ['video', 'Upload video'], ['rectify', 'Rectify']].map(([k, l]) => (
                             <button key={k} className={`tp-tab ${mode === k ? 'tp-tab--on' : ''}`} onClick={() => setMode(k)}>{l}</button>
                         ))}
                     </div>
                     {mode === 'data' && <DataTest projectId={projectId} projectName={project?.name || ''} opts={opts} sourceReady={ready} onReviewImages={onReviewImages} onImagesChanged={onImagesChanged} />}
                     {mode === 'images' && <ImageTest projectId={projectId} opts={opts} />}
                     {mode === 'video' && <VideoTest projectId={projectId} opts={opts} />}
+                    {mode === 'rectify' && <RectifyTab projectId={projectId} />}
                 </>
             )}
         </div>

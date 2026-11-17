@@ -8,7 +8,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from contextlib import asynccontextmanager
 from .database import init_db, async_session
-from .api import projects, images, annotations, pipeline, auth, videos, ocr, sequences, crop_cls, segments, autolabel, testing
+from .api import projects, images, annotations, pipeline, auth, videos, ocr, sequences, crop_cls, segments, autolabel, testing, rectify
 from .config import settings
 from .models.training_job import TrainingJob
 from .models.video import Video
@@ -107,6 +107,7 @@ app.include_router(crop_cls.router, prefix="/api/v1")
 app.include_router(segments.router, prefix="/api/v1")
 app.include_router(autolabel.router, prefix="/api/v1")
 app.include_router(testing.router, prefix="/api/v1")
+app.include_router(rectify.router, prefix="/api/v1")
 
 app.mount("/uploads", StaticFiles(directory=str(settings.upload_dir)), name="uploads")
 
