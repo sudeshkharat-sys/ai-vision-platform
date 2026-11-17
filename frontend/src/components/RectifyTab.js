@@ -36,6 +36,7 @@ export default function RectifyTab({ projectId }) {
     const [st, setSt] = useState({ state: 'idle' });
     const [data, setData] = useState({ summary: {}, items: [] });
     const [outliersOnly, setOutliersOnly] = useState(true);
+    const [cutoff, setCutoff] = useState(3.5);   // robust z-score above which a box counts as an outlier
     const [enhance, setEnhance] = useState(true);
     const [page, setPage] = useState(0);
     const [done, setDone] = useState({});     // ann_id -> 'kept' | new state
@@ -91,7 +92,9 @@ export default function RectifyTab({ projectId }) {
     };
 
     const stateNames = [...new Set(states.map(s => s.state))];
-    const items = outliersOnly ? data.items.filter(i => i.outlier) : data.items;
+    const sorted = [...data.items].sort((a, b) => b.z - a.z);
+    const nOut = sorted.filter(i => i.z >= cutoff).length;
+    const items = outliersOnly ? sorted.filter(i => i.z >= cutoff) : sorted;
     const pageItems = items.slice(page * PAGE, page * PAGE + PAGE);
     const pages = Math.max(1, Math.ceil(items.length / PAGE));
     const sm = data.summary || {};
@@ -133,13 +136,19 @@ export default function RectifyTab({ projectId }) {
                 <div className="tp-tiles">
                     <div className="tp-tile"><b>{sm.total}</b><span>scanned</span></div>
                     <div className="tp-tile"><b>{sm.median}</b><span>normal darkness</span></div>
-                    <div className="tp-tile"><b>{sm.fence}</b><span>outlier above</span></div>
-                    <div className="tp-tile tp-tile--bad"><b>{sm.outliers}</b><span>outliers to check</span></div>
+                    <div className="tp-tile"><b>{sm.mad != null ? Math.round((sm.median + cutoff * sm.mad) * 10) / 10 : sm.fence}</b><span>outlier above</span></div>
+                    <div className="tp-tile tp-tile--bad"><b>{nOut}</b><span>outliers to check</span></div>
                     <div className="tp-tile tp-tile--good"><b>{reviewed}</b><span>reviewed here</span></div>
                 </div>
+                <label className="tp-field" style={{ marginBottom: 8 }}>
+                    Outlier cutoff (z-score): <b>{cutoff.toFixed(2)}</b> <span className="tp-note">lower = flags more boxes, higher = only the most extreme</span>
+                    <input type="range" min="0" max="8" step="0.25" value={cutoff}
+                        onChange={e => { setCutoff(parseFloat(e.target.value)); setPage(0); }}
+                        style={{ width: '100%', padding: 0 }} />
+                </label>
                 <div className="tp-row" style={{ alignItems: 'center' }}>
                     <div className="tp-tabs" style={{ border: 0 }}>
-                        <button className={`tp-tab ${outliersOnly ? 'tp-tab--on' : ''}`} onClick={() => { setOutliersOnly(true); setPage(0); }}>Outliers ({sm.outliers})</button>
+                        <button className={`tp-tab ${outliersOnly ? 'tp-tab--on' : ''}`} onClick={() => { setOutliersOnly(true); setPage(0); }}>Outliers ({nOut})</button>
                         <button className={`tp-tab ${!outliersOnly ? 'tp-tab--on' : ''}`} onClick={() => { setOutliersOnly(false); setPage(0); }}>All, darkest first ({sm.total})</button>
                     </div>
                     <label className="tp-field" style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
@@ -155,7 +164,7 @@ export default function RectifyTab({ projectId }) {
                     {pageItems.map(it => {
                         const d = done[it.ann_id];
                         return (
-                            <div key={it.ann_id} className={`tp-thumb ${it.outlier ? 'tp-thumb--bad' : ''}`} style={{ cursor: 'default', opacity: d ? 0.55 : 1 }}>
+                            <div key={it.ann_id} className={`tp-thumb ${it.z >= cutoff ? 'tp-thumb--bad' : ''}`} style={{ cursor: 'default', opacity: d ? 0.55 : 1 }}>
                                 <Crop url={`${base}/crop/${it.ann_id}?enhance=${enhance ? 1 : 0}`} />
                                 <div>
                                     <span className="tp-tag">{it.state}</span>

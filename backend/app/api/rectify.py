@@ -105,7 +105,7 @@ def _scan(pid: str, rows: list, job: dict):
             d["z"] = round((d["dark_score"] - med) / mad, 2)
             d["outlier"] = bool(d["dark_score"] > fence or d["z"] > 3.5)
         res.sort(key=lambda d: (not d["outlier"], -d["z"]))
-        summary = {"median": round(med, 1), "fence": round(fence, 1),
+        summary = {"median": round(med, 1), "mad": round(mad, 2), "fence": round(fence, 1),
                    "outliers": sum(d["outlier"] for d in res), "total": len(res)}
     job.update(items=res, summary=summary, done=len(rows), state="done")
 
