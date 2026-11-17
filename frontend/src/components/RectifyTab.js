@@ -45,6 +45,8 @@ export default function RectifyTab({ projectId }) {
     const loadStates = useCallback(() => {
         axios.get(`${base}/states`).then(r => {
             setStates(r.data);
+            // Saved boxes become 'manual', so a project can have no 'auto' boxes left.
+            if (!r.data.some(x => x.source === 'auto')) setOnlyAuto(false);
         }).catch(e => setErr(errMsg(e)));
     }, [base]);
 
@@ -115,6 +117,9 @@ export default function RectifyTab({ projectId }) {
                 </label>
                 <button className="tp-btn" disabled={running} onClick={start}>{running ? 'Scanning…' : 'Scan darkness'}</button>
             </div>
+            {states.length > 0 && !states.some(x => x.source === 'auto') && <p className="tp-note" style={{ marginTop: 8, color: '#b0102f' }}>
+                No auto-labelled boxes remain (saved boxes count as manual), so every box is scanned. Pick a label above to compare like with like.
+            </p>}
             {states.length > 0 && <p className="tp-note" style={{ marginTop: 8 }}>
                 {states.map(s => `${s.state} (${s.source}): ${s.count}`).join(' · ')}
             </p>}
@@ -178,7 +183,7 @@ export default function RectifyTab({ projectId }) {
                 </div>
                 {items.length === 0 && <p className="tp-note">No outliers found.</p>}
             </>}
-            {st.state === 'done' && !(sm.total > 0) && <p className="tp-note">Nothing to scan with these filters.</p>}
+            {st.state === 'done' && !(sm.total > 0) && <p className="tp-err">Nothing matched these filters. Untick "Only auto-labelled" or choose another label.</p>}
         </div>
     );
 }
