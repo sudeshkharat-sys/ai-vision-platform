@@ -100,8 +100,8 @@ On subsequent launches steps 2–3 are skipped (database already exists).
 
 ```ini
 [aivision]
-postgres_port = 5433
-redis_port = 6380
+postgres_port = 5442
+redis_port = 6389
 api_port = 8005
 db_name = ai_vision
 db_user = aivision

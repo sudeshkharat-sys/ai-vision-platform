@@ -53,8 +53,8 @@ import cuda_check
 CFG_FILE = BASE_DIR / "aivision.cfg"
 
 DEFAULTS = {
-    "postgres_port": "5433",
-    "redis_port": "6380",
+    "postgres_port": "5442",
+    "redis_port": "6389",
     "api_port": "8005",
     "db_name": "ai_vision",
     "db_user": "aivision",

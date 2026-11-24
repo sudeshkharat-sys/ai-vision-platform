@@ -40,7 +40,7 @@ def configure_env(base_dir: Path, db_user: str, db_password: str, db_name: str,
     (base_dir / "logs").mkdir(parents=True, exist_ok=True)
 
 
-def start(host: str = "127.0.0.1", port: int = 8000) -> threading.Thread:
+def start(host: str = "127.0.0.1", port: int = 8005) -> threading.Thread:
     """Start uvicorn in a daemon thread and return it."""
     import uvicorn
 
