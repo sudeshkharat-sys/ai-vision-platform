@@ -9,3 +9,4 @@ rem Service ended/crashed: stay in this Anaconda Prompt (env active) so you can 
 echo.
 echo [%1 stopped] You are in an Anaconda Prompt (env: %CONDA_ENV%). Rerun with the %PROJECT_SHORT%-%1 command.
 
+@echo on
