@@ -38,6 +38,15 @@ async def _purge_stale_tasks():
     """
     from .tasks.celery_app import celery_app
 
+    # If a Celery worker is alive (e.g. uvicorn --reload restarted only the backend),
+    # leave everything alone: purging the broker / failing 'started' jobs here would
+    # mark a training that is still running as failed and drop its queued work.
+    try:
+        if celery_app.control.inspect(timeout=1.5).ping():
+            return
+    except Exception:
+        pass
+
     # 1. Purge all tasks waiting in the broker queue (not yet picked up by a worker)
     try:
         celery_app.control.purge()
