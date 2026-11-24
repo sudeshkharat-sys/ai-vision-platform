@@ -9,19 +9,19 @@ where wt >nul 2>&1
 if errorlevel 1 goto separate
 
 rem Same window name each time => every call adds a tab to that one window.
-wt -w "%PROJECT_NAME%" new-tab --suppressApplicationTitle --title "Redis" cmd /k ""%CONDA_ACTIVATE%" ^&^& call "%~dp0start-redis.bat""
+wt -w "%PROJECT_NAME%" new-tab --suppressApplicationTitle --title "Redis" cmd /k "%~dp0_tab.bat" redis
 timeout /t 2 >nul
-wt -w "%PROJECT_NAME%" new-tab --suppressApplicationTitle --title "Backend" cmd /k ""%CONDA_ACTIVATE%" ^&^& call "%~dp0start-backend.bat""
+wt -w "%PROJECT_NAME%" new-tab --suppressApplicationTitle --title "Backend" cmd /k "%~dp0_tab.bat" backend
 timeout /t 1 >nul
-wt -w "%PROJECT_NAME%" new-tab --suppressApplicationTitle --title "Celery" cmd /k ""%CONDA_ACTIVATE%" ^&^& call "%~dp0start-celery.bat""
+wt -w "%PROJECT_NAME%" new-tab --suppressApplicationTitle --title "Celery" cmd /k "%~dp0_tab.bat" celery
 timeout /t 1 >nul
-wt -w "%PROJECT_NAME%" new-tab --suppressApplicationTitle --title "Frontend" cmd /k ""%CONDA_ACTIVATE%" ^&^& call "%~dp0start-frontend.bat""
+wt -w "%PROJECT_NAME%" new-tab --suppressApplicationTitle --title "Frontend" cmd /k "%~dp0_tab.bat" frontend
 goto :eof
 
 :separate
 echo Windows Terminal (wt) not found - opening separate windows.
-start "%PROJECT_NAME% Redis" cmd /k ""%CONDA_ACTIVATE%" ^&^& call "%~dp0start-redis.bat""
+start "%PROJECT_NAME% Redis" cmd /k "%~dp0_tab.bat" redis
 timeout /t 3 >nul
-start "%PROJECT_NAME% Backend" cmd /k ""%CONDA_ACTIVATE%" ^&^& call "%~dp0start-backend.bat""
-start "%PROJECT_NAME% Celery" cmd /k ""%CONDA_ACTIVATE%" ^&^& call "%~dp0start-celery.bat""
-start "%PROJECT_NAME% Frontend" cmd /k ""%CONDA_ACTIVATE%" ^&^& call "%~dp0start-frontend.bat""
+start "%PROJECT_NAME% Backend" cmd /k "%~dp0_tab.bat" backend
+start "%PROJECT_NAME% Celery" cmd /k "%~dp0_tab.bat" celery
+start "%PROJECT_NAME% Frontend" cmd /k "%~dp0_tab.bat" frontend
