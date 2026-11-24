@@ -69,6 +69,18 @@ def load_config() -> configparser.ConfigParser:
     cfg["aivision"] = DEFAULTS
     if CFG_FILE.exists():
         cfg.read(CFG_FILE)
+        # Migrate ports written by older builds to the current defaults
+        old = {"postgres_port": {"5433", "5432"}, "redis_port": {"6380", "6379"},
+               "api_port": {"8001", "8000"}}
+        changed = False
+        for key, olds in old.items():
+            if cfg["aivision"].get(key) in olds:
+                cfg["aivision"][key] = DEFAULTS[key]
+                changed = True
+        if changed:
+            with open(CFG_FILE, "w") as f:
+                cfg.write(f)
+            print(f"[config] Updated old ports in {CFG_FILE} to the new defaults")
     else:
         with open(CFG_FILE, "w") as f:
             cfg.write(f)
@@ -126,6 +138,16 @@ def main() -> None:
     db_password = c["db_password"]
     open_browser = c.getboolean("open_browser", fallback=True)
     skip_cuda = c.getboolean("skip_cuda_check", fallback=False)
+
+    # Check every port up front so all conflicts are reported at once
+    busy = [(n, p) for n, p in (("PostgreSQL", pg_port), ("Redis", redis_port),
+                                ("Backend API", api_port)) if port_in_use(p)]
+    if busy:
+        print("\n[ERROR] These ports are already in use (another AI Vision instance may still be running):")
+        for n, p in busy:
+            print(f"        {n}: port {p}")
+        print("        Close the other instance (check Task Manager) or change the ports in aivision.cfg.")
+        sys.exit(1)
 
     # ------------------------------------------------------------------
     # Step 1 — CUDA verification
