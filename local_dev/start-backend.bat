@@ -12,7 +12,8 @@ rem Auto-reload is OFF by default: a reload during training/long jobs restarts t
 rem in-process jobs). Use vi-restart after code changes, or set BACKEND_RELOAD=1 to get --reload back.
 set "RELOAD_ARGS="
 if "%BACKEND_RELOAD%"=="1" set "RELOAD_ARGS=--reload --reload-dir app"
-powershell -NoProfile -Command "python -X faulthandler -m uvicorn %BACKEND_APP% --host 127.0.0.1 --port %BACKEND_PORT% %RELOAD_ARGS% 2>&1 | Tee-Object -FilePath '%PROJ%\backend.log'"
+rem 2>&1 is done by cmd (not PowerShell) so uvicorn's normal INFO lines are not shown as red NativeCommandError.
+python -X faulthandler -m uvicorn %BACKEND_APP% --host 127.0.0.1 --port %BACKEND_PORT% %RELOAD_ARGS% 2>&1 | powershell -NoProfile -Command "$input | Tee-Object -FilePath '%PROJ%\backend.log'"
 echo.
 echo Backend stopped. Last lines of the log:
 powershell -NoProfile -Command "Get-Content '%PROJ%\backend.log' -Tail 40"
