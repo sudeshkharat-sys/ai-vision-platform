@@ -2,7 +2,8 @@ import asyncio
 import threading
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Request
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, FileResponse
+from starlette.background import BackgroundTask
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, delete as sql_delete
 from ..database import get_db
@@ -22,6 +23,7 @@ import io
 import json
 import uuid
 import zipfile
+import tempfile
 from PIL import Image as PILImage
 
 router = APIRouter(prefix="/images", tags=["images"])
@@ -765,11 +767,16 @@ async def export_dataset(
     def build():
         # Runs in a worker thread: zipping thousands of images used to run inside the
         # request handler and froze the whole server (every project) until it finished.
-        buf = io.BytesIO()
+        # Write the zip to a temp file on disk, NOT into memory: a big project held in
+        # a BytesIO used gigabytes of RAM and the OS killed the backend silently.
+        fd, tmp_path = tempfile.mkstemp(suffix=".zip")
+        os.close(fd)
         # images are already compressed (jpg/png) - storing them is far faster than deflating
-        with zipfile.ZipFile(buf, "w", zipfile.ZIP_STORED) as zf:
+        with zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_STORED) as zf:
             for img in images:
                 if cancel.is_set():
+                    zf.close()
+                    os.remove(tmp_path)
                     return None
                 src_candidates = [
                     settings.upload_dir.parent / img.filepath.lstrip("/"),
@@ -791,7 +798,7 @@ async def export_dataset(
                     "annotations": anns_by_image.get(img.id, []),
                 })
             zf.writestr("manifest.json", json.dumps(manifest, indent=2))
-        return buf
+        return tmp_path
 
     async def watch_disconnect():
         # the Stop button aborts the browser request -> stop zipping instead of finishing for nobody
@@ -803,18 +810,19 @@ async def export_dataset(
 
     watcher = asyncio.create_task(watch_disconnect())
     try:
-        buffer = await run_in_threadpool(build)
+        zip_path = await run_in_threadpool(build)
     finally:
         watcher.cancel()
-    if buffer is None:
+    if zip_path is None:
         raise HTTPException(status_code=499, detail="Export cancelled.")
 
-    buffer.seek(0)
     slug = _project_slug(project.name)
-    return StreamingResponse(
-        buffer,
+    # FileResponse streams from disk in chunks; the temp file is deleted after sending.
+    return FileResponse(
+        zip_path,
         media_type="application/zip",
-        headers={"Content-Disposition": f'attachment; filename="{slug}_dataset.zip"'},
+        filename=f"{slug}_dataset.zip",
+        background=BackgroundTask(os.remove, zip_path),
     )
 
 
