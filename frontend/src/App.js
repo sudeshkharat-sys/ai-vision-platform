@@ -49,26 +49,44 @@ function App() {
         const token = localStorage.getItem('auth_token');
         if (!token) { setAuthChecking(false); return; }
 
-        axios.get(`${API_URL}/auth/me`)
-            .then(async res => {
-                setCurrentUser(res.data);
-                setView('dashboard');
-                const savedId = sessionStorage.getItem('current_project_id');
-                if (savedId) {
-                    try {
-                        const projRes = await axios.get(`${API_URL}/projects/${savedId}`);
-                        setCurrentProject(projRes.data);
-                    } catch {
-                        sessionStorage.removeItem('current_project_id');
+        // Ask the server who we are. If the backend is down or restarting there is no
+        // answer at all - that must NOT log the user out, so we wait and try again.
+        // Only a real 401 answer from the server means the token is bad.
+        let tries = 0;
+        const checkLogin = () => {
+            axios.get(`${API_URL}/auth/me`)
+                .then(async res => {
+                    setCurrentUser(res.data);
+                    setView('dashboard');
+                    const savedId = sessionStorage.getItem('current_project_id');
+                    if (savedId) {
+                        try {
+                            const projRes = await axios.get(`${API_URL}/projects/${savedId}`);
+                            setCurrentProject(projRes.data);
+                        } catch {
+                            sessionStorage.removeItem('current_project_id');
+                        }
                     }
-                }
-            })
-            .catch(() => {
-                localStorage.removeItem('auth_token');
-                localStorage.removeItem('auth_user');
-                delete axios.defaults.headers.common['Authorization'];
-            })
-            .finally(() => setAuthChecking(false));
+                    setAuthChecking(false);
+                })
+                .catch(err => {
+                    if (err.response?.status === 401) {
+                        // server says the token is invalid -> really log out
+                        localStorage.removeItem('auth_token');
+                        localStorage.removeItem('auth_user');
+                        delete axios.defaults.headers.common['Authorization'];
+                        setAuthChecking(false);
+                    } else if (tries < 20) {
+                        // backend not reachable (restarting?) -> keep the token, retry in 3s
+                        tries += 1;
+                        setTimeout(checkLogin, 3000);
+                    } else {
+                        // gave up waiting (about 1 minute); token is kept for the next refresh
+                        setAuthChecking(false);
+                    }
+                });
+        };
+        checkLogin();
     }, []);
 
     useEffect(() => {
