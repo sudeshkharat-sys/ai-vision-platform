@@ -15,6 +15,11 @@ Steps (run from an Anaconda Prompt with the ai-vision env active):
   3. Export one project:
          python scripts\\export_dataset.py --project "My Project" --out D:\\exports\\my_project
 
+Make a zip you can upload with the app's Import button (Exe or normal app):
+         python scripts\\export_dataset.py --project "My Project" --out D:\\exports\\my_project --zip
+  This also creates my_project_dataset.zip next to the folder. For a very big project, use
+  --zip-size 2000 to get several smaller zips (2000 images each) and import them one by one.
+
 Result folder:
   images/            all images
   labels/            one .txt per image, YOLO format: class x_center y_center width height
@@ -34,6 +39,7 @@ import os
 import shutil
 import sys
 import time
+import zipfile
 
 import psycopg2
 
@@ -186,7 +192,7 @@ def export_project(conn, project, uploads_dir, out_dir):
     annotations = load_annotations(conn, project_id)
     if not images:
         print("This project has no images.")
-        return
+        return None
 
     images_dir = os.path.join(out_dir, "images")
     labels_dir = os.path.join(out_dir, "labels")
@@ -271,6 +277,40 @@ def export_project(conn, project, uploads_dir, out_dir):
     print(f"  Missing on disk : {len(missing)}" + ("  (see missing_files.txt)" if missing else ""))
     print(f"  Classes         : {len(classes)}")
     print(f"  Folder          : {out_dir}")
+    return manifest
+
+
+# ---------------------------------------------------------------- zip
+
+def make_zips(out_dir, manifest, zip_size):
+    """Zip the exported folder in the same format the app's Import button reads:
+         manifest.json   (at the top of the zip)
+         images/<stored_filename>
+    The zip is written straight to disk, one file at a time (low memory).
+    zip_size = images per zip file; 0 means one zip with everything.
+    """
+    entries = manifest["images"]
+    size = zip_size if zip_size and zip_size > 0 else max(len(entries), 1)
+    parts = [entries[i:i + size] for i in range(0, len(entries), size)] or [[]]
+
+    base = os.path.abspath(out_dir).rstrip("\\/")
+    zip_paths = []
+    for number, part in enumerate(parts, 1):
+        suffix = "" if len(parts) == 1 else f"_part{number}"
+        zip_path = f"{base}{suffix}_dataset.zip"
+
+        part_manifest = dict(manifest)
+        part_manifest["images"] = part
+
+        # images are already compressed (jpg/png), so store them without deflating: much faster
+        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_STORED) as zf:
+            for entry in part:
+                name = entry["stored_filename"]
+                zf.write(os.path.join(out_dir, "images", name), f"images/{name}")
+            zf.writestr("manifest.json", json.dumps(part_manifest, indent=2))
+        zip_paths.append(zip_path)
+        print(f"  zip written: {zip_path}  ({len(part)} images)")
+    return zip_paths
 
 
 # ---------------------------------------------------------------- main
@@ -285,6 +325,8 @@ def main():
         default=os.path.join(REPO_ROOT, "backend", "data", "uploads"),
         help="the uploads folder (default: backend/data/uploads)",
     )
+    parser.add_argument("--zip", action="store_true", help="also make a .zip for the app's Import button")
+    parser.add_argument("--zip-size", type=int, default=0, help="images per zip (0 = one zip with everything)")
     parser.add_argument("--host")
     parser.add_argument("--port")
     parser.add_argument("--db")
@@ -321,7 +363,11 @@ def main():
         sys.exit(1)
 
     print(f"Exporting '{project[1]}' ...")
-    export_project(conn, project, uploads_dir, os.path.abspath(args.out))
+    out_dir = os.path.abspath(args.out)
+    manifest = export_project(conn, project, uploads_dir, out_dir)
+    if manifest is not None and (args.zip or args.zip_size):
+        print("Making zip ...")
+        make_zips(out_dir, manifest, args.zip_size)
 
 
 if __name__ == "__main__":
