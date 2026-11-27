@@ -1105,7 +1105,7 @@ def train_main_model(
         epochs=total_epochs,
         imgsz=imgsz,
         batch=_batch,
-        cache=True,          # preload dataset into RAM — eliminates disk I/O stall with workers=0
+        cache="disk",        # disk cache: RAM cache used up Windows commit memory and crashed training
         amp=True,            # FP16 mixed precision — halves VRAM per tensor, faster tensor cores
         device=_train_device(),  # CUDA 0 when available, else CPU
         lr0=lr0,
@@ -1309,7 +1309,7 @@ def train_seg_model(
         epochs=total_epochs,
         imgsz=imgsz,
         batch=_batch,
-        cache=True,
+        cache="disk",        # disk cache: RAM cache used up Windows commit memory and crashed training
         amp=True,
         device=_train_device(),
         lr0=settings.seed_learning_rate,
