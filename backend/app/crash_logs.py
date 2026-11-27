@@ -84,6 +84,19 @@ def copy_console_to_file(log_dir: Path, file_name: str) -> None:
     sys.stderr = _Tee(sys.stderr, log_file)
 
 
+def copy_logging_to_file(log_dir: Path, file_name: str) -> None:
+    """Also write uvicorn / celery log lines (INFO, errors, "Shutting down",
+    "Reloading") to the console log file. They use the logging module, not
+    print(), so copy_console_to_file alone does not catch them."""
+    import logging
+    handler = logging.FileHandler(log_dir / file_name, encoding="utf-8")
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    logging.getLogger().addHandler(handler)        # root: celery and most libraries
+    uvicorn_logger = logging.getLogger("uvicorn")
+    if not uvicorn_logger.propagate:               # uvicorn does not pass its lines to root
+        uvicorn_logger.addHandler(handler)
+
+
 def enable_crash_logging(log_dir: Path, name: str) -> None:
     """Log native crashes and uncaught Python errors to logs/crash_<name>.log."""
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -242,6 +255,7 @@ def setup(name: str) -> None:
         log_dir = get_log_dir()
         copy_console_to_file(log_dir, f"console_{name}.log")
         enable_crash_logging(log_dir, name)
+        copy_logging_to_file(log_dir, f"console_{name}.log")
         start_resource_monitor(log_dir, log_dir.parent)
         log_line(log_dir, "resources.log", f"{name} process started pid={os.getpid()}")
         print(f"[crash_logs] {name}: logs in {log_dir}")
