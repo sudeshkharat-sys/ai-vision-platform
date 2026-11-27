@@ -43,11 +43,20 @@ def _start_crash_logs(**kwargs):
     from .. import crash_logs
     crash_logs.setup("worker")
 
+    # Remove jobs that already started once and came back after a crash/stop
+    from .stuck_jobs import remove_stuck_jobs
+    removed = remove_stuck_jobs()
+    if removed:
+        print(f"[stuck_jobs] removed {len(removed)} stuck job(s): {removed}")
+        crash_logs.log_training(f"STUCK JOBS REMOVED on worker start: {removed}")
+
 
 @signals.task_prerun.connect
 def _log_task_start(task_id=None, task=None, kwargs=None, **_):
     from .. import crash_logs
     crash_logs.log_training(f"TASK START {task.name} id={task_id} args={kwargs}")
+    from .stuck_jobs import mark_started
+    mark_started(task_id)
 
 
 @signals.task_postrun.connect
