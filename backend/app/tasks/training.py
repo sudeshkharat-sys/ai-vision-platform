@@ -1,6 +1,7 @@
 from .celery_app import celery_app
 from ultralytics import YOLO
 import os
+import sys
 import shutil
 import time
 import random
@@ -881,8 +882,11 @@ def train_seed_model(
     # Default 2: each loader process costs RAM, and a RAM-cached dataset gets copied into
     # every one of them (that ran machines out of memory). With workers the cache goes to
     # disk (.npy next to the images) instead of RAM.
-    _workers = int(os.environ.get("TRAIN_WORKERS", min(2, os.cpu_count() or 1)))
-    _cache = os.environ.get("TRAIN_CACHE") or ("disk" if _workers > 0 else True)
+    # On Windows the default is 0: starting loader processes from the Celery worker
+    # gave "Windows fatal exception: access violation" and the worker died mid-training.
+    _default_workers = 0 if sys.platform == "win32" else min(2, os.cpu_count() or 1)
+    _workers = int(os.environ.get("TRAIN_WORKERS", _default_workers))
+    _cache = os.environ.get("TRAIN_CACHE") or "disk"   # disk, not RAM (RAM cache ran out of memory)
     if _cache in ("0", "false", "False", "none"):
         _cache = False
     # (older note) cache=True so
