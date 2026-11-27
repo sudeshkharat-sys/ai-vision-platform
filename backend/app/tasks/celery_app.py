@@ -1,9 +1,28 @@
 from celery import Celery
-from celery import signals
+from celery import signals, Task
+from celery.exceptions import Ignore
+
+
+class SkipRepeatTask(Task):
+    """Every task uses this. A job that already started once (and was stopped,
+    crashed, or the PC was turned off) is NOT run again when Celery restarts."""
+
+    def __call__(self, *args, **kwargs):
+        from .stuck_jobs import was_started_before, mark_started
+        task_id = self.request.id
+        if task_id and was_started_before(task_id):
+            from .. import crash_logs
+            print(f"[stuck_jobs] skipped {self.name} id={task_id}: it already ran once")
+            crash_logs.log_training(f"TASK SKIPPED (already ran once) {self.name} id={task_id}")
+            raise Ignore()
+        if task_id:
+            mark_started(task_id)
+        return super().__call__(*args, **kwargs)
 from ..config import settings
 
 celery_app = Celery(
     "ai_vision",
+    task_cls=SkipRepeatTask,
     broker=settings.celery_broker_url,
     backend=settings.celery_result_backend,
     include=[
@@ -55,8 +74,6 @@ def _start_crash_logs(**kwargs):
 def _log_task_start(task_id=None, task=None, kwargs=None, **_):
     from .. import crash_logs
     crash_logs.log_training(f"TASK START {task.name} id={task_id} args={kwargs}")
-    from .stuck_jobs import mark_started
-    mark_started(task_id)
 
 
 @signals.task_postrun.connect
