@@ -665,6 +665,8 @@ def _make_epoch_callback(celery_task, total_epochs, epoch_history, epoch_start_t
             pass
 
         epoch = trainer.epoch + 1
+        from .. import crash_logs
+        crash_logs.log_training(f"epoch {epoch}/{total_epochs} done task={getattr(getattr(celery_task, 'request', None), 'id', '?')}")
 
         losses = {}
         try:

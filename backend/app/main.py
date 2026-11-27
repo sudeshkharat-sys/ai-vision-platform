@@ -2,6 +2,9 @@ import os
 import sys
 from pathlib import Path
 
+from . import crash_logs
+crash_logs.setup("backend")  # crash + RAM/GPU logs in logs/
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles

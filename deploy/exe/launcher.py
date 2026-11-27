@@ -192,6 +192,14 @@ def main() -> None:
     celery = CeleryWorker()
     celery.start()
 
+    # Log RAM/GPU/disk + whether postgres/redis/celery are still alive (logs/resources.log)
+    from app import crash_logs
+    crash_logs.start_resource_monitor(
+        crash_logs.get_log_dir(), BASE_DIR / "data",
+        get_processes=lambda: {"redis": redis.process,
+                               "celery": celery.process},
+    )
+
     # ------------------------------------------------------------------
     # All services up
     # ------------------------------------------------------------------
